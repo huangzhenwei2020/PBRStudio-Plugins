@@ -1,0 +1,133 @@
+{
+  "extName": { "message": "PBR 推送到 3ds Max" },
+  "extDescription": { "message": "识别网页中的下载链接，并推送到 3ds Max 的 PBR 下载队列。" },
+  "actionTitle": { "message": "PBR 推送" },
+  "menuPushLink": { "message": "推送到 3ds Max PBR 队列" },
+  "menuPushPageLinks": { "message": "推送本页下载链接到 3ds Max" },
+  "notificationTitle": { "message": "PBR 推送" },
+  "popupTitle": { "message": "PBR 推送 -> 3ds Max" },
+  "checking": { "message": "正在检查..." },
+  "sendPortLabel": { "message": "发送端口" },
+  "save": { "message": "保存" },
+  "check": { "message": "检查" },
+  "portHint": { "message": "这里的端口要和 3ds Max 接收服务一致。建议使用 1025-65535。" },
+  "scanningLinks": { "message": "正在扫描页面链接..." },
+  "noQueuedLinks": { "message": "（没有排队链接）" },
+  "pushPageLinks": { "message": "推送本页链接" },
+  "retryQueue": { "message": "重试队列" },
+  "clearQueue": { "message": "清空队列" },
+  "openAiPanel": { "message": "打开 AI 面板" },
+  "openAiPanelHint": { "message": "AI 面板可以直接对话、发图、插入场景摘要，以及检查 AI 接口。" },
+  "footerReloadHint": { "message": "更新后如果 Chrome 仍显示旧文案，请在扩展页面重新加载此插件。" },
+  "statusOnline": { "message": "3ds Max 接收服务在线" },
+  "statusOffline": { "message": "3ds Max 接收服务离线" },
+  "activePortLabel": { "message": "当前端口：" },
+  "queuedLinksTitle": {
+    "message": "排队链接（$COUNT$）",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "couldNotScanPage": { "message": "无法扫描当前页面，请刷新标签页后重试。" },
+  "foundDownloadLinks": {
+    "message": "识别到下载链接：$COUNT$",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "noDownloadLinksFound": { "message": "没有识别到下载链接" },
+  "pushing": { "message": "推送中..." },
+  "done": { "message": "完成" },
+  "failed": { "message": "失败" },
+  "retrying": { "message": "重试中..." },
+  "confirmClearQueue": { "message": "确认清空排队链接吗？" },
+  "portSaved": { "message": "端口已保存。" },
+  "checkComplete": { "message": "检查完成。" },
+  "portMustBeInteger": { "message": "端口必须是整数。" },
+  "portRangeError": { "message": "端口必须在 1025 到 65535 之间。" },
+  "portReservedError": { "message": "不要使用 80、443、3306 或 3389。" },
+  "noActiveTab": { "message": "当前没有可扫描的活动标签页。" },
+  "noDownloadableLinksOnPage": { "message": "当前页面没有识别到可下载链接。" },
+  "capturedBrowserDownload": { "message": "已捕获浏览器下载链接，已加入队列。" },
+  "capturedBrowserDownloadCount": {
+    "message": "已捕获 $COUNT$ 条浏览器下载链接，已加入队列。",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "portSavedAs": {
+    "message": "端口已保存为 $PORT$。请在 3ds Max 插件里也设置成同一个端口。",
+    "placeholders": { "port": { "content": "$1" } }
+  },
+  "portReachable": {
+    "message": "端口 $PORT$ 可以访问。",
+    "placeholders": { "port": { "content": "$1" } }
+  },
+  "portInvalidResponse": {
+    "message": "端口 $PORT$ 没有返回有效响应。请检查 3ds Max 接收服务。",
+    "placeholders": { "port": { "content": "$1" } }
+  },
+  "portUnreachable": {
+    "message": "端口 $PORT$ 无法访问。",
+    "placeholders": { "port": { "content": "$1" } }
+  },
+  "noUrlsError": { "message": "没有链接" },
+  "pushedLinks": {
+    "message": "已推送 $COUNT$ 条链接。",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "queuedBecauseOffline": { "message": "3ds Max 当前离线，链接已加入待发送队列。" },
+  "inlinePushLabel": { "message": "推到 Max" },
+  "inlinePushTitle": {
+    "message": "推送到 3ds Max（$COUNT$）",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "inlineSending": { "message": "发送中" },
+  "inlineQueued": { "message": "已排队" },
+  "polyhavenFetchFailed": { "message": "Poly Haven 页面资料读取失败。" },
+  "polyhavenAssetsFound": {
+    "message": "Poly Haven 识别到 $COUNT$ 条可下载项。",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "pushAndDownloadQueued": { "message": "已推送给 3ds Max，并尝试立即下载。" },
+  "aiPanelTitle": { "message": "室内场景助手 Web AI" },
+  "aiPanelOpenInMaxHint": { "message": "这是插件内置 AI 页面，通过本地端口和 3ds Max 插件通信。" },
+  "aiPanelProvider": { "message": "方案" },
+  "aiPanelApiType": { "message": "接口类型" },
+  "aiPanelBaseUrl": { "message": "Base URL" },
+  "aiPanelModel": { "message": "模型名" },
+  "aiPanelApiKey": { "message": "API Key" },
+  "aiPanelTemperature": { "message": "温度" },
+  "aiPanelHistory": { "message": "保留轮数" },
+  "aiPanelRobotName": { "message": "助手昵称" },
+  "aiPanelUserName": { "message": "用户昵称" },
+  "aiPanelTemplate": { "message": "提问模板" },
+  "aiPanelSaveConfig": { "message": "保存配置" },
+  "aiPanelTest": { "message": "测试连接" },
+  "aiPanelDiagnose": { "message": "完整诊断" },
+  "aiPanelSceneSummary": { "message": "插入场景摘要" },
+  "aiPanelSyncState": { "message": "同步消息" },
+  "aiPanelStateSynced": { "message": "消息与配置已同步" },
+  "aiPanelRecentLog": { "message": "插入最近日志" },
+  "aiPanelToggleEdit": { "message": "切换图片编辑模式" },
+  "aiPanelClearChat": { "message": "清空对话" },
+  "aiPanelRefresh": { "message": "刷新状态" },
+  "aiPanelSend": { "message": "发送问题" },
+  "aiPanelPromptPlaceholder": { "message": "在这里输入问题。Enter 发送，Shift+Enter 换行。" },
+  "aiPanelNoImages": { "message": "未附加图片" },
+  "aiPanelPendingImages": { "message": "待发送图片：" },
+  "aiPanelConfigSaved": { "message": "配置已保存" },
+  "aiPanelSendDone": { "message": "发送完成" },
+  "aiPanelNeedQuestion": { "message": "问题为空" },
+  "aiPanelServerOffline": { "message": "3ds Max 本地 AI 服务未连接，请先在 Max 插件里启动 Chrome 接收服务。" },
+  "bridgeOnlineDetail": {
+    "message": "本地桥接服务已连接，端口 $PORT$，最近检查 $TIME$。",
+    "placeholders": {
+      "port": { "content": "$1" },
+      "time": { "content": "$2" }
+    }
+  },
+  "bridgeOfflineDetail": {
+    "message": "未连接到 3ds Max。本次已尝试端口：$PORTS$；最近检查 $TIME$。",
+    "placeholders": {
+      "ports": { "content": "$1" },
+      "time": { "content": "$2" }
+    }
+  },
+  "notCheckedYet": { "message": "尚未检查" },
+  "unknownTime": { "message": "未知时间" }
+}

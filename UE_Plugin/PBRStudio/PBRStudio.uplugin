@@ -1,0 +1,24 @@
+{
+  "FileVersion": 3,
+  "Version": 3,
+  "VersionName": "1.1.3",
+  "FriendlyName": "PBR Studio",
+  "Description": "Editor tools for PBR texture sets, resource download libraries, and Unreal Engine texture workflows.",
+  "Category": "Material",
+  "CreatedBy": "PBRStudio Team",
+  "CanContainContent": true,
+  "Installed": false,
+  "Plugins": [
+    {
+      "Name": "EditorScriptingUtilities",
+      "Enabled": true
+    }
+  ],
+  "Modules": [
+    {
+      "Name": "PBRStudio",
+      "Type": "Editor",
+      "LoadingPhase": "PostEngineInit"
+    }
+  ]
+}

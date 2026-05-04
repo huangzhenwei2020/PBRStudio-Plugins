@@ -1,0 +1,44 @@
+# ===== Unreal Engine =====
+Binaries/
+Intermediate/
+Build/
+DerivedDataCache/
+Saved/
+*.sln
+*.xcworkspace
+*.xcodeproj
+*.suo
+*.user
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# ===== IDE / Editor =====
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ===== Claude Code =====
+.claude/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ===== Archive =====
+*.zip
+*.tar
+*.gz
+*.7z
+*.rar

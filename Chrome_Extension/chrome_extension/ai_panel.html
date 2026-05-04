@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title data-i18n="aiPanelTitle">室内场景助手 Web AI</title>
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<style>
+  :root {
+    --bg: #ffffff;
+    --sidebar: #f7f7f8;
+    --panel: #ffffff;
+    --control: #ffffff;
+    --control-hover: #f7f7f8;
+    --line: #e5e5e5;
+    --text: #202123;
+    --muted: #6b7280;
+    --primary: #10a37f;
+    --primary-strong: #0d8f70;
+    --user: #f7f7f8;
+    --assistant: #ffffff;
+    --tool: #f1f5f9;
+    --ok: #15803d;
+    --danger: #c2410c;
+    --shadow: 0 1px 2px rgba(0,0,0,.05);
+    --chrome-accent: var(--primary);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #212121;
+      --sidebar: #171717;
+      --panel: #212121;
+      --control: #2f2f2f;
+      --control-hover: #3a3a3a;
+      --line: #343541;
+      --text: #ececf1;
+      --muted: #b4b4b4;
+      --user: #2f2f2f;
+      --assistant: #212121;
+      --tool: #2a2b32;
+      --shadow: none;
+    }
+  }
+  body[data-theme="dark"] {
+    --bg: #212121;
+    --sidebar: #171717;
+    --panel: #212121;
+    --control: #2f2f2f;
+    --control-hover: #3a3a3a;
+    --line: #343541;
+    --text: #ececf1;
+    --muted: #b4b4b4;
+    --user: #2f2f2f;
+    --assistant: #212121;
+    --tool: #2a2b32;
+    --shadow: none;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    overflow: hidden;
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    background: var(--bg);
+  }
+  .shell {
+    display: grid;
+    grid-template-columns: 320px minmax(0,1fr);
+    height: 100vh;
+    transition: grid-template-columns .22s cubic-bezier(.2,.8,.2,1);
+  }
+  body.sidebar-collapsed .shell { grid-template-columns: 0 minmax(0,1fr); }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow);
+  }
+  .sidebar {
+    background: var(--sidebar);
+    border-width: 0 1px 0 0;
+    box-shadow: none;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: auto;
+    height: 100vh;
+    min-width: 0;
+    transition: transform .22s cubic-bezier(.2,.8,.2,1), opacity .18s ease;
+  }
+  body.sidebar-collapsed .sidebar { padding: 0; border: 0; overflow: hidden; visibility: hidden; opacity: 0; }
+  .titlebox { padding: 4px 2px 10px; }
+  .titlebox h1 { margin: 0; font-size: 18px; font-weight: 700; }
+  .titlebox p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+  .group { padding: 12px; background: var(--control); border: 1px solid var(--line); border-radius: 8px; }
+  .group h2 { margin: 0 0 10px; font-size: 13px; font-weight: 700; color: var(--text); }
+  .group-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 10px; }
+  .group-header h2 { margin: 0; }
+  .collapse-toggle { padding: 4px 8px; border-radius: 999px; font-size: 12px; color: var(--muted); }
+  .collapsible.collapsed { padding-bottom: 10px; }
+  .collapsible.collapsed .collapsible-body { display: none; }
+  .field { margin-bottom: 10px; }
+  .field:last-child { margin-bottom: 0; }
+  label { display: block; margin-bottom: 5px; font-size: 12px; color: var(--muted); font-weight: 600; }
+  input[type=text], input[type=password], input[type=number], select, textarea {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--control);
+    color: var(--text);
+    padding: 9px 10px;
+    outline: none;
+  }
+  input:focus, select:focus, textarea:focus { border-color: #b5b5b5; box-shadow: 0 0 0 2px rgba(16,163,127,.12); }
+  input::placeholder, textarea::placeholder { color: var(--muted); opacity: .9; }
+  textarea { resize: none; min-height: 92px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; }
+  .chip {
+    padding: 5px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--control);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  button {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--control);
+    color: var(--text);
+    padding: 8px 11px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:hover { background: var(--control-hover); }
+  button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+  button.primary:hover { background: var(--primary-strong); border-color: var(--primary-strong); }
+  button.danger { color: #fff; background: var(--danger); border-color: var(--danger); }
+  button:disabled { opacity: .5; cursor: default; }
+  .mode-switch {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 999px;
+    background: var(--tool);
+    border: 1px solid var(--line);
+  }
+  .mode-switch button {
+    border: 0;
+    border-radius: 999px;
+    padding: 7px 10px;
+    background: transparent;
+    color: var(--muted);
+  }
+  .mode-switch button.active {
+    background: var(--control);
+    color: var(--text);
+    box-shadow: var(--shadow);
+  }
+  .main { min-width: 0; height: 100vh; display: flex; flex-direction: column; background: var(--bg); }
+  .toolbar {
+    border-width: 0;
+    box-shadow: none;
+    padding: 10px 18px;
+    display:flex;
+    gap:10px;
+    align-items:center;
+    justify-content:space-between;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .toolbar-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .icon-button {
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    transition: background .16s ease, transform .16s ease;
+  }
+  .icon-button:hover { transform: translateY(-1px); }
+  .toolbar-context { display: none; }
+  .more-wrap { position: relative; }
+  .action-menu {
+    position: absolute;
+    right: 0;
+    top: 44px;
+    width: 240px;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--control);
+    box-shadow: 0 14px 34px rgba(0,0,0,.16);
+    z-index: 20;
+    display: none;
+    transform-origin: top right;
+    animation: menuIn .14s cubic-bezier(.2,.8,.2,1);
+  }
+  .action-menu.open { display: flex; flex-direction: column; gap: 6px; }
+  .action-menu button { width: 100%; text-align: left; justify-content: flex-start; }
+  .toolbar .meta { color: var(--muted); font-size: 12px; }
+  .chat {
+    flex: 1;
+    min-height: 0;
+    min-height: 420px;
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .messages { flex: 1; min-height: 0; overflow: auto; padding: 22px max(18px, calc((100% - 860px) / 2)); }
+  .messages.empty { display: flex; align-items: center; justify-content: center; padding-bottom: 12vh; }
+  .empty-state { text-align: center; color: var(--text); animation: fadeUp .28s ease both; }
+  .empty-state h1 { margin: 0; font-size: clamp(24px, 4vw, 34px); font-weight: 650; letter-spacing: 0; }
+  body.empty-chat .chat { justify-content: center; }
+  body.empty-chat .messages {
+    flex: 0 0 auto;
+    min-height: 0;
+    overflow: visible;
+    padding: 0 max(18px, calc((100% - 860px) / 2)) 18px;
+  }
+  body.empty-chat .messages.empty {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 18px;
+  }
+  body.empty-chat .composer { margin-bottom: 18vh; }
+  .msg { margin-bottom: 18px; display: flex; animation: fadeUp .22s ease both; }
+  .msg.left { justify-content: flex-start; }
+  .msg.right { justify-content: flex-end; }
+  .msg.center { justify-content: center; }
+  .bubble {
+    max-width: min(760px, 86%);
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 0;
+    background: var(--assistant);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .msg.left .bubble { padding-left: 0; }
+  .msg.right .bubble { background: var(--user); }
+  .msg.center .bubble { background: var(--tool); max-width: 72%; color: var(--muted); font-size: 12px; }
+  .name { display:block; margin-bottom: 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
+  .images { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .images img { width: 104px; height: 104px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); background: var(--control); }
+  .image-item { display: inline-flex; flex-direction: column; gap: 6px; align-items: stretch; }
+  .image-reedit { padding: 5px 8px; border-radius: 999px; font-size: 12px; }
+  .image-open { border: 0; padding: 0; background: transparent; border-radius: 8px; cursor: zoom-in; }
+  .bubble p { margin: 0 0 10px; }
+  .bubble p:last-child { margin-bottom: 0; }
+  .bubble ul, .bubble ol { margin: 8px 0 8px 22px; padding: 0; }
+  .bubble li { margin: 4px 0; }
+  .bubble h1, .bubble h2, .bubble h3 { margin: 14px 0 8px; line-height: 1.25; }
+  .bubble h1 { font-size: 20px; }
+  .bubble h2 { font-size: 17px; }
+  .bubble h3 { font-size: 15px; }
+  .bubble code {
+    border-radius: 5px;
+    background: var(--tool);
+    padding: 2px 5px;
+    font-family: Consolas, "SFMono-Regular", Menlo, monospace;
+    font-size: 13px;
+  }
+  .bubble pre {
+    margin: 10px 0;
+    overflow: auto;
+    position: relative;
+    border-radius: 8px;
+    background: #0d1117;
+    color: #e6edf3;
+    padding: 38px 12px 12px;
+  }
+  .bubble pre code { background: transparent; color: inherit; padding: 0; }
+  .copy-code-btn {
+    position: absolute;
+    top: 7px;
+    right: 7px;
+    padding: 4px 8px;
+    border-radius: 7px;
+    border-color: rgba(255,255,255,.14);
+    background: rgba(255,255,255,.08);
+    color: #e6edf3;
+    font-size: 12px;
+  }
+  .copy-code-btn:hover { background: rgba(255,255,255,.14); }
+  .bubble blockquote { margin: 10px 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
+  .bubble a { color: var(--chrome-accent); text-decoration: none; }
+  .bubble a:hover { text-decoration: underline; }
+  .smart-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .smart-actions button { padding: 5px 8px; border-radius: 999px; font-size: 12px; }
+  .math-inline, .math-block {
+    font-family: Cambria Math, STIX Two Math, "Times New Roman", serif;
+    background: transparent;
+    border: 0;
+    color: var(--text);
+  }
+  .katex { color: var(--text); }
+  .katex-display { margin: 12px 0; overflow-x: auto; overflow-y: hidden; }
+  .math-inline { display: inline-flex; align-items: center; gap: 2px; padding: 0 2px; vertical-align: middle; }
+  .math-block { display: flex; align-items: center; justify-content: center; gap: 2px; margin: 12px 0; padding: 12px; border-radius: 8px; overflow-x: auto; text-align: center; background: var(--tool); }
+  .frac { display: inline-flex; flex-direction: column; align-items: center; vertical-align: middle; margin: 0 3px; line-height: 1.05; }
+  .frac-num { border-bottom: 1px solid currentColor; padding: 0 4px 2px; }
+  .frac-den { padding: 2px 4px 0; }
+  .sqrt { display: inline-flex; align-items: stretch; margin: 0 2px; }
+  .sqrt-symbol { font-size: 1.24em; line-height: 1; }
+  .sqrt-body { border-top: 1px solid currentColor; padding: 1px 3px 0; }
+  .math-inline sup, .math-inline sub, .math-block sup, .math-block sub { font-size: .72em; line-height: 0; }
+  .composer {
+    width: min(860px, calc(100% - 36px));
+    margin: 0 auto 16px;
+    padding: 7px;
+    border: 1px solid var(--line);
+    border-radius: 28px;
+    box-shadow: 0 8px 26px rgba(0,0,0,.08);
+    background: var(--control);
+    transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+  }
+  .composer:focus-within {
+    border-color: color-mix(in srgb, var(--text) 24%, var(--line));
+    box-shadow: 0 10px 30px rgba(0,0,0,.12);
+  }
+  .composer-line { display: grid; grid-template-columns: 34px minmax(0, 1fr) 34px; gap: 8px; align-items: end; }
+  .composer textarea {
+    border: 0;
+    box-shadow: none;
+    background: transparent;
+    min-height: 34px;
+    max-height: 132px;
+    padding: 6px 4px;
+    font-size: 15px;
+    line-height: 22px;
+  }
+  .composer textarea:focus { border-color: transparent; box-shadow: none; }
+  .composer-status { display: none; }
+  #file-input { display: none; }
+  .tool-button {
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border-radius: 999px;
+    margin: 0;
+    border: 1px solid var(--line);
+    background: var(--control);
+    color: var(--text);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    cursor: pointer;
+    transition: background .16s ease, transform .16s ease;
+  }
+  .tool-button:hover { background: var(--control-hover); transform: translateY(-1px); }
+  #btn-send {
+    border-radius: 999px;
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    min-height: 34px;
+    padding: 0;
+    font-size: 18px;
+    line-height: 1;
+    transition: background .16s ease, transform .16s ease, opacity .16s ease;
+  }
+  #btn-send:hover:not(:disabled) { transform: translateY(-1px); }
+  .status { min-height: 20px; font-size: 12px; color: var(--muted); }
+  .statusbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .statusbadge {
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    border: 1px solid var(--line);
+    background: var(--control);
+    color: var(--muted);
+  }
+  .statusbadge.busy {
+    background: rgba(255,214,153,.8);
+    color: #7a4c10;
+    border-color: rgba(175,117,28,.32);
+  }
+  .statusbadge.ok {
+    background: rgba(201,239,214,.82);
+    color: #21613a;
+    border-color: rgba(47,125,75,.24);
+  }
+  .statusbadge.error {
+    background: rgba(255,219,214,.82);
+    color: #8f3326;
+    border-color: rgba(185,74,59,.24);
+  }
+  .capability-box {
+    margin-top: 8px;
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--tool);
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  .provider-manager { display: grid; gap: 8px; }
+  .provider-list { display: grid; gap: 4px; }
+  .provider-card {
+    display: grid;
+    grid-template-columns: minmax(84px, 1fr) auto auto auto auto;
+    gap: 5px;
+    align-items: center;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--control);
+    padding: 5px 6px;
+    min-width: 0;
+  }
+  .provider-card strong { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .provider-tag { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .provider-card.editable { border-color: color-mix(in srgb, var(--primary) 42%, var(--line)); }
+  .provider-actions { display: contents; }
+  .provider-actions button { padding: 4px 6px; font-size: 11px; border-radius: 7px; white-space: nowrap; }
+  .provider-add { display: grid; gap: 8px; }
+  .upload-progress {
+    height: 3px;
+    width: 100%;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--tool);
+  }
+  .upload-progress > div {
+    width: 0%;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--primary);
+    transition: width .18s ease;
+  }
+  .statusbar, #action-status { display: none; }
+  .diag { margin: 0 18px 18px; padding: 12px; white-space: pre-wrap; max-height: 220px; overflow: auto; color: var(--text); font-size: 12px; border-radius: 8px; background: var(--tool); border: 1px solid var(--line); }
+  .image-preview {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    background: rgba(0,0,0,.72);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .image-preview img {
+    max-width: min(96vw, 1280px);
+    max-height: 88vh;
+    border-radius: 8px;
+    background: #111;
+  }
+  .image-editor-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    background: rgba(0,0,0,.52);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+  }
+  .image-editor-card {
+    width: min(760px, 96vw);
+    max-height: 92vh;
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: var(--panel);
+    color: var(--text);
+    box-shadow: 0 22px 70px rgba(0,0,0,.28);
+    padding: 16px;
+  }
+  .image-editor-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  .image-editor-head h2 { margin: 0; font-size: 18px; }
+  .image-editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .image-editor-card textarea { min-height: 104px; }
+  .recommend-list { display: grid; gap: 8px; margin: 8px 0 12px; }
+  .recommend-card { display: grid; gap: 4px; text-align: left; border-radius: 10px; padding: 10px; background: var(--control); }
+  .recommend-card strong { font-size: 13px; }
+  .recommend-card span { font-size: 12px; color: var(--muted); font-weight: 500; }
+  .image-editor-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; margin-top: 12px; }
+  @media (max-width: 720px) {
+    .image-editor-grid { grid-template-columns: 1fr; }
+  }
+  .hidden { display: none !important; }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes menuIn {
+    from { opacity: 0; transform: translateY(-4px) scale(.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @media (max-width: 1120px) {
+    .shell { grid-template-columns: 1fr; }
+    .sidebar { position: fixed; inset: 0 auto 0 0; width: min(320px, 88vw); z-index: 30; border-width: 0 1px 0 0; }
+    body.sidebar-collapsed .sidebar { visibility: hidden; transform: translateX(-8px); }
+    body.sidebar-collapsed .shell { grid-template-columns: 1fr; }
+    body:not(.sidebar-collapsed)::after { content: ""; position: fixed; inset: 0; background: rgba(0,0,0,.42); z-index: 25; }
+    .bubble { max-width: 100%; }
+  }
+</style>
+</head>
+<body class="sidebar-collapsed">
+<div class="shell">
+  <aside class="panel sidebar">
+    <div class="titlebox">
+      <h1 data-i18n="aiPanelTitle">室内场景助手 Web AI</h1>
+      <p data-i18n="aiPanelOpenInMaxHint">这是插件内置 AI 页面，通过本地端口和 3ds Max 插件通信。</p>
+    </div>
+    <section class="group">
+      <div class="mode-switch">
+        <button id="mode-max">Max 联动</button>
+        <button id="mode-standalone" class="active">独立 GPT</button>
+      </div>
+    </section>
+    <section class="group max-only">
+      <h2>连接状态</h2>
+      <div class="chips">
+        <div class="chip" id="state-provider">方案</div>
+        <div class="chip" id="state-model">模型</div>
+        <div class="chip" id="state-api">接口</div>
+      </div>
+      <div class="status" id="server-status"></div>
+    </section>
+    <section class="group max-only">
+      <h2>Max 联动配置</h2>
+      <div class="status">Max 联动的 AI 参数只在 3ds Max 插件里修改。网页端只负责聊天、同步状态和常用操作，避免两边配置互相覆盖。</div>
+    </section>
+    <section class="group standalone-only collapsible collapsed" id="standalone-config-section">
+      <div class="group-header">
+        <h2>AI 配置</h2>
+        <button class="collapse-toggle" id="btn-toggle-standalone-config" type="button">展开</button>
+      </div>
+      <div class="collapsible-body">
+      <div class="field"><label data-i18n="aiPanelProvider">方案</label><select id="provider"></select></div>
+      <div class="field"><label data-i18n="aiPanelApiType">接口类型</label><select id="api_type"></select></div>
+      <div class="field"><label data-i18n="aiPanelBaseUrl">Base URL</label><input id="base_url" type="text"></div>
+      <div class="field"><label data-i18n="aiPanelModel">模型名</label><select id="model_select"></select><input id="model" type="text" placeholder="也可以手动输入模型名"></div>
+      <div class="field standalone-only"><label>图片模型名</label><input id="image_model" type="text" placeholder="例如 gpt-image-1"></div>
+      <div class="field standalone-only"><label>图片接口格式</label><select id="image_api_type">
+        <option value="auto">自动判断</option>
+        <option value="openai">OpenAI 图片接口</option>
+        <option value="json">JSON 图片接口</option>
+        <option value="siliconflow">硅基流动图片接口</option>
+      </select></div>
+      <div class="capability-box" id="provider-capabilities"></div>
+      <div class="field"><label data-i18n="aiPanelApiKey">API Key</label><input id="api_key" type="password" placeholder="留空表示不改"></div>
+      <div class="grid2">
+        <div class="field"><label data-i18n="aiPanelTemperature">温度</label><input id="temperature" type="number" min="0" max="2" step="0.1"></div>
+        <div class="field"><label data-i18n="aiPanelHistory">保留轮数</label><input id="history" type="number" min="0" max="20" step="1"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label data-i18n="aiPanelRobotName">助手昵称</label><input id="robot_name" type="text"></div>
+        <div class="field"><label data-i18n="aiPanelUserName">用户昵称</label><input id="user_name" type="text"></div>
+      </div>
+      <div class="field max-only"><label data-i18n="aiPanelTemplate">提问模板</label><select id="template"></select></div>
+      <div class="row">
+        <button id="btn-api-key">获取 API Key</button>
+        <button id="btn-reset-provider">重置当前方案</button>
+        <button id="btn-reset-all-providers">重置所有方案</button>
+        <button class="primary" id="btn-save-config" data-i18n="aiPanelSaveConfig">保存配置</button>
+        <button id="btn-fetch-models">获取模型</button>
+        <button id="btn-test" data-i18n="aiPanelTest">测试连接</button>
+        <button id="btn-diagnose" data-i18n="aiPanelDiagnose">完整诊断</button>
+        <button id="btn-toggle-diag">诊断日志</button>
+      </div>
+      <div class="status action-feedback" id="sidebar-action-status"></div>
+      </div>
+    </section>
+    <section class="group standalone-only">
+      <h2>AI 平台管理</h2>
+      <div class="provider-manager">
+        <div class="provider-list" id="provider-list"></div>
+        <div class="provider-add hidden" id="provider-add-inline">
+          <div class="grid2">
+            <div class="field"><label>平台名称</label><input id="custom-provider-name" type="text" placeholder="例如 第三方改图平台"></div>
+            <div class="field"><label>图片编辑</label><select id="custom-provider-image-edit">
+              <option value="true">支持</option>
+              <option value="false">不支持</option>
+              <option value="unknown">取决于模型/接口</option>
+            </select></div>
+          </div>
+          <div class="field"><label>网站 URL</label><input id="custom-provider-site-url" type="text" placeholder="https://example.com/"></div>
+          <div class="field"><label>API Base URL</label><input id="custom-provider-base-url" type="text" placeholder="https://example.com/v1"></div>
+          <div class="grid2">
+            <div class="field"><label>聊天模型</label><input id="custom-provider-model" type="text" placeholder="model-name"></div>
+            <div class="field"><label>图片模型</label><input id="custom-provider-image-model" type="text" placeholder="image-model-name"></div>
+          </div>
+          <button id="btn-add-provider">添加平台</button>
+        </div>
+        <button id="btn-open-provider-add">添加平台</button>
+      </div>
+    </section>
+  </aside>
+  <main class="main">
+    <section class="panel toolbar">
+      <div class="toolbar-left">
+        <button class="icon-button" id="btn-sidebar-toggle" title="收起/展开边栏">☰</button>
+        <div class="toolbar-context">
+        <div class="chips">
+          <div class="chip hidden" id="chat-font-chip">聊天字号</div>
+          <div class="chip hidden" id="edit-mode-chip">图片编辑模式</div>
+          <div class="chip" id="port-chip">端口</div>
+        </div>
+        <div class="meta" id="scene-meta"></div>
+        </div>
+      </div>
+      <div class="more-wrap">
+        <button class="icon-button" id="btn-more-actions" title="更多操作">⋯</button>
+        <div class="action-menu" id="action-menu">
+          <button class="standalone-only" id="btn-open-image-editor">图片编辑</button>
+          <button class="max-only" id="btn-refresh" data-i18n="aiPanelRefresh">刷新状态</button>
+          <button class="max-only" id="btn-sync-state" data-i18n="aiPanelSyncState">同步消息</button>
+          <button class="max-only" id="btn-scene-summary" data-i18n="aiPanelSceneSummary">插入场景摘要</button>
+          <button class="max-only" id="btn-recent-log" data-i18n="aiPanelRecentLog">插入最近日志</button>
+          <button class="danger" id="btn-clear-chat" data-i18n="aiPanelClearChat">清空对话</button>
+        </div>
+      </div>
+    </section>
+    <section class="panel chat">
+      <div class="messages" id="messages"></div>
+      <div class="composer">
+        <div class="upload-progress hidden" id="upload-progress"><div id="upload-progress-bar"></div></div>
+        <div class="composer-line">
+          <label class="tool-button" for="file-input" title="添加图片">＋</label>
+          <input id="file-input" type="file" multiple accept=".png,.jpg,.jpeg,.bmp,.tif,.tiff,.webp,.gif,.exr,.hdr,image/*">
+          <textarea id="prompt" data-i18n-placeholder="aiPanelPromptPlaceholder"></textarea>
+          <button class="primary" id="btn-send" title="发送">↑</button>
+        </div>
+        <div class="status composer-status" id="image-status"></div>
+        <div class="statusbar">
+          <div class="statusbadge" id="send-badge">空闲</div>
+          <div class="status" id="sync-time"></div>
+        </div>
+        <div class="status" id="action-status"></div>
+      </div>
+    </section>
+    <section class="panel diag hidden" id="diag-box"></section>
+  </main>
+</div>
+<div class="image-editor-modal hidden" id="image-editor-modal">
+  <div class="image-editor-card">
+    <div class="image-editor-head">
+      <h2>图片编辑</h2>
+      <button class="icon-button" id="btn-close-image-editor" title="关闭">×</button>
+    </div>
+    <div class="capability-box">推荐优先用 OpenAI gpt-image-1 做真正改图；硅基流动 Kolors 更适合生图/参考图生成，是否支持精确改图取决于平台接口。</div>
+    <div class="recommend-list">
+      <button class="recommend-card" data-image-preset="openai">
+        <strong>OpenAI 图片编辑 推荐</strong>
+        <span>Base URL: https://api.openai.com/v1；图片模型: gpt-image-1；接口: OpenAI 图片接口</span>
+      </button>
+      <button class="recommend-card" data-image-preset="siliconflow">
+        <strong>硅基流动 Kolors 参考图/生图</strong>
+        <span>Base URL: https://api.siliconflow.cn/v1；图片模型: Kwai-Kolors/Kolors；接口: 硅基流动图片接口</span>
+      </button>
+    </div>
+    <div class="image-editor-grid">
+      <div class="field">
+        <label>选择图片</label>
+        <input id="image-editor-file" type="file" multiple accept=".png,.jpg,.jpeg,.webp,.gif,image/*">
+      </div>
+      <div class="field">
+        <label>当前图片方案</label>
+        <input id="image-editor-current" type="text" readonly>
+      </div>
+    </div>
+    <div class="field">
+      <label>修改要求</label>
+      <textarea id="image-editor-prompt" placeholder="例如：保留主体结构，把风格改成现代极简，提升采光和材质质感。"></textarea>
+    </div>
+    <div class="status" id="image-editor-status"></div>
+    <div class="image-editor-actions">
+      <button id="btn-image-editor-use-chat">使用聊天输入里的图片</button>
+      <button class="primary" id="btn-run-image-editor">生成修改图</button>
+    </div>
+  </div>
+</div>
+<div class="image-editor-modal hidden" id="provider-add-modal">
+  <div class="image-editor-card">
+    <div class="image-editor-head">
+      <h2>添加 AI 网站</h2>
+      <button class="icon-button" id="btn-close-provider-add" title="关闭">×</button>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>平台名称</label><input id="custom-provider-name-modal" type="text" placeholder="例如 新的改图网站"></div>
+      <div class="field"><label>图片编辑</label><select id="custom-provider-image-edit-modal">
+        <option value="true">支持</option>
+        <option value="false">不支持</option>
+        <option value="unknown">取决于网页/接口</option>
+      </select></div>
+    </div>
+    <div class="field"><label>网站 URL</label><input id="custom-provider-site-url-modal" type="text" placeholder="https://example.com/"></div>
+    <div class="field"><label>API Base URL</label><input id="custom-provider-base-url-modal" type="text" placeholder="可选，例如 https://example.com/v1"></div>
+    <div class="grid2">
+      <div class="field"><label>聊天模型</label><input id="custom-provider-model-modal" type="text" placeholder="可选"></div>
+      <div class="field"><label>图片模型</label><input id="custom-provider-image-model-modal" type="text" placeholder="可选"></div>
+    </div>
+    <div class="image-editor-actions">
+      <button class="primary" id="btn-add-provider-modal">保存平台</button>
+    </div>
+  </div>
+</div>
+<div class="image-preview hidden" id="image-preview"><img id="image-preview-img" alt=""></div>
+<script src="vendor/katex/katex.min.js"></script>
+<script src="ai_panel.js"></script>
+</body>
+</html>

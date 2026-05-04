@@ -1,0 +1,183 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>PBRStudio 三端插件使用说明</title>
+<style>
+body{font-family:'Microsoft YaHei UI','Segoe UI',Arial,sans-serif;line-height:1.65;color:#1f252c;margin:36px;max-width:980px}h1{font-size:28px;border-bottom:2px solid #2563eb;padding-bottom:10px}h2{font-size:20px;margin-top:28px;color:#17406a}h3{font-size:16px;margin-top:20px}code{background:#f1f5f9;padding:2px 5px;border-radius:4px}pre{background:#f8fafc;border:1px solid #d8e0e8;border-radius:8px;padding:12px;white-space:pre-wrap}ul,ol{padding-left:24px}p{margin:8px 0}.doc{white-space:normal}
+</style>
+</head>
+<body><div class="doc"># PBRStudio 三端插件使用说明<br>
+<br>
+版本日期：2026-05-03<br>
+<br>
+本包包含三部分：<br>
+<br>
+- UE 插件：`UE_Plugin/PBRStudio`<br>
+- Chrome 浏览器插件：`Chrome_Extension/chrome_extension`<br>
+- 3ds Max 脚本：`3dsMax_Script/InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py`<br>
+<br>
+## 1. UE 插件安装<br>
+<br>
+### 项目级安装<br>
+<br>
+1. 关闭 Unreal Editor。<br>
+2. 打开你的 UE 项目目录。<br>
+3. 如果项目里没有 `Plugins` 文件夹，手动创建一个。<br>
+4. 把 `UE_Plugin/PBRStudio` 整个文件夹复制到：<br>
+<br>
+   `你的项目/Plugins/PBRStudio`<br>
+<br>
+5. 打开项目。<br>
+6. 如果 UE 提示插件需要编译，点确认。<br>
+7. 在 UE 菜单里打开 PBRStudio 工具窗口。<br>
+<br>
+### 非 C++ 项目是否能用<br>
+<br>
+可以用。这个发布包已经带有 Win64 编译好的 UE 编辑器插件二进制文件，适合相同或兼容 UE 版本直接加载。<br>
+<br>
+如果你的 UE 版本、引擎路径或编译环境不同，UE 可能仍会要求重新编译。遇到这种情况需要安装 Visual Studio C++ 编译工具，或把项目临时转成 C++ 项目后编译一次。<br>
+<br>
+## 2. Chrome 插件安装<br>
+<br>
+1. 打开 Chrome。<br>
+2. 进入：`chrome://extensions/`<br>
+3. 打开右上角“开发者模式”。<br>
+4. 点击“加载已解压的扩展程序”。<br>
+5. 选择：<br>
+<br>
+   `Chrome_Extension/chrome_extension`<br>
+<br>
+6. 修改插件文件后，需要在扩展管理页点“重新加载”。<br>
+<br>
+### Chrome 推送端口<br>
+<br>
+- 推送到 3ds Max：默认端口 `19527`<br>
+- 推送到 UE：默认端口 `19528`<br>
+<br>
+两个端口必须分开，不能混用。<br>
+<br>
+Chrome 插件现在不会自动一直检测端口。需要检测时，在弹窗里选择 Max 或 UE，然后点“手动检测”。<br>
+<br>
+网页里识别到下载链接后，会出现两个短按钮：<br>
+<br>
+- `Max`：推送到 3ds Max<br>
+- `UE`：推送到 Unreal Engine<br>
+<br>
+## 3. 3ds Max 脚本使用<br>
+<br>
+1. 打开 3ds Max。<br>
+2. 运行脚本：<br>
+<br>
+   `3dsMax_Script/InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py`<br>
+<br>
+3. Max 端主要负责现有 InteriorSceneStudioPro 功能、PBR 下载库、PBR 贴图套装等流程。<br>
+4. Chrome 推送到 Max 时使用 Max 端口，默认 `19527`。<br>
+<br>
+## 4. UE 端工作流程<br>
+<br>
+UE 端主要负责：<br>
+<br>
+- PBR 贴图套件扫描<br>
+- 根据贴图创建材质实例<br>
+- 创建分类母材质<br>
+- 特殊材质母材质<br>
+- 下载库整理材质包<br>
+- 从 Chrome 接收下载链接<br>
+<br>
+### 下载库<br>
+<br>
+下载库只负责：<br>
+<br>
+- 下载文件<br>
+- 整理材质库文件夹<br>
+- 解压压缩包<br>
+- 把材质库路径交给贴图套件<br>
+<br>
+下载库不负责导入 UE，不负责创建 UE 资产。导入和创建材质由“贴图套件”页完成。<br>
+<br>
+下载库里的“材质库”路径会和贴图套件共用保存记录。重开插件后会自动恢复上次选择的路径。<br>
+<br>
+“打开”按钮会用 Windows 资源管理器打开材质库文件夹。<br>
+<br>
+### 压缩包处理<br>
+<br>
+支持拖入和下载：<br>
+<br>
+- `.zip`<br>
+- `.rar`<br>
+- `.7z`<br>
+<br>
+ZIP 使用系统 PowerShell 解压。RAR 和 7Z 会优先调用本机 7-Zip 或 WinRAR。<br>
+<br>
+解压成功后，原压缩包会自动删除，只保留解压后的贴图文件。<br>
+<br>
+### 文件命名<br>
+<br>
+下载文件名优先级：<br>
+<br>
+1. HTTP `Content-Disposition` 文件名<br>
+2. URL 参数里的 `file`、`filename`、`name`、`download`、`dl`、`path`<br>
+3. URL 路径文件名<br>
+4. `download`<br>
+<br>
+所以 `get?file=xxx.zip` 这类链接会按 `xxx.zip` 保存，不会再保存成 `get`。<br>
+<br>
+## 5. 贴图套件<br>
+<br>
+贴图套件负责：<br>
+<br>
+- 扫描材质库文件夹<br>
+- 识别 BaseColor、Roughness、Metallic、Normal、AO、Height 等通道<br>
+- 选择材质类型<br>
+- 创建母材质和材质实例<br>
+- 应用材质到场景对象<br>
+<br>
+贴图套件文件夹也会保存记录，并有“打开”按钮，可直接用资源管理器打开当前文件夹。<br>
+<br>
+## 6. 推荐使用顺序<br>
+<br>
+1. UE 打开 PBRStudio 下载库。<br>
+2. 启动 Chrome 推送到 UE 服务，端口默认 `19528`。<br>
+3. Chrome 插件选择 UE，点“手动检测”。<br>
+4. 在素材网站页面点击 `UE` 按钮推送链接。<br>
+5. UE 下载库下载并解压。<br>
+6. 切到贴图套件，扫描材质库。<br>
+7. 选择材质类型、法线模式，创建材质实例。<br>
+8. 把列表里的材质拖到场景对象，或应用到选中对象。<br>
+<br>
+## 7. 常见问题<br>
+<br>
+### Chrome 推送失败<br>
+<br>
+检查 UE 下载库里的 Chrome 推送服务是否启动，端口是否为 `19528`。<br>
+<br>
+### 非 C++ 项目打开失败<br>
+<br>
+如果 UE 提示必须编译插件，说明当前环境和打包时的二进制不兼容。安装 Visual Studio C++ 编译工具后重新打开项目编译一次。<br>
+<br>
+### RAR/7Z 无法自动解压<br>
+<br>
+安装 7-Zip 或 WinRAR 后重试。<br>
+<br>
+### 新增下载站点没有出现<br>
+<br>
+插件会自动合并内置站点。如果仍没出现，可以删除项目 Saved/PBRStudio 下的 `PBRDownloadSites.json` 后重开 UE，让插件重新生成默认列表。<br>
+<br>
+## 8. 文件夹结构<br>
+<br>
+```text<br>
+PBRStudio_ThreeSide_Plugins_2026-05-03/<br>
+  UE_Plugin/<br>
+    PBRStudio/<br>
+  Chrome_Extension/<br>
+    chrome_extension/<br>
+  3dsMax_Script/<br>
+    InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py<br>
+  Docs/<br>
+    PBRStudio_三端插件使用说明.md<br>
+    PBRStudio_三端插件使用说明.html<br>
+    PBRStudio_三端插件使用说明.pdf<br>
+```<br>
+</div></body>
+</html>
