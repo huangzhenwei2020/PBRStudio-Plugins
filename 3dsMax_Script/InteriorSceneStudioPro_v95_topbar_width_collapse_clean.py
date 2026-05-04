@@ -92,8 +92,6 @@ except Exception:
 
 rt = pymxs.runtime
 
-from _pbr_clean_utils import safe_str, clean_name_part, status_text_for_exception
-
 
 # ============================================================
 # Qt 兼容
@@ -130,8 +128,31 @@ except Exception:
 
 
 # ============================================================
-# 基础工具 (safe_str, clean_name_part, status_text_for_exception → _pbr_clean_utils.py)
+# 基础工具
 # ============================================================
+
+def safe_str(value, default=""):
+    try:
+        if value is None:
+            return default
+        s = str(value)
+        if s.lower() in ("undefined", "none"):
+            return default
+        return s
+    except Exception:
+        return default
+
+
+def clean_name_part(text, default="None"):
+    s = safe_str(text, default).strip()
+    if not s:
+        s = default
+    s = re.sub(r'[\[\]\{\}\(\)<>\:"/\\|?*\n\r\t]+', "_", s)
+    s = re.sub(r"\s+", "_", s)
+    s = re.sub(r"_+", "_", s)
+    s = s.strip("_")
+    return s or default
+
 
 def get_anim_handle(obj):
     try:
@@ -169,6 +190,13 @@ def get_super_class_name(obj):
         return clean_name_part(str(rt.superClassOf(obj)), "Unknown")
     except Exception:
         return "Unknown"
+
+
+def status_text_for_exception(prefix):
+    try:
+        return "{}：{}".format(prefix, traceback.format_exc().splitlines()[-1])
+    except Exception:
+        return prefix
 
 
 def color_to_rgba_css(color_value, alpha=0.6):
