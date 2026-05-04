@@ -1,0 +1,133 @@
+{
+  "extName": { "message": "PBR Studio — Push to Max / UE" },
+  "extDescription": { "message": "Detects PBR material download links on web pages and pushes them to 3ds Max or Unreal Engine PBR workflow." },
+  "actionTitle": { "message": "PBR Push to Max / UE" },
+  "menuPushLink": { "message": "Push to PBR Download Queue" },
+  "menuPushPageLinks": { "message": "Push Page Download Links" },
+  "notificationTitle": { "message": "PBR Studio" },
+  "popupTitle": { "message": "PBR Push — Max / UE" },
+  "checking": { "message": "Checking..." },
+  "sendPortLabel": { "message": "Port" },
+  "save": { "message": "Save" },
+  "check": { "message": "Check" },
+  "portHint": { "message": "Max default 19527, UE default 19528." },
+  "scanningLinks": { "message": "Scanning page links..." },
+  "noQueuedLinks": { "message": "(No queued links)" },
+  "pushPageLinks": { "message": "Push Page Links" },
+  "retryQueue": { "message": "Retry Queue" },
+  "clearQueue": { "message": "Clear Queue" },
+  "openAiPanel": { "message": "Open AI Panel" },
+  "openAiPanelHint": { "message": "AI panel supports chat, image upload, scene summary, and API diagnostics." },
+  "footerReloadHint": { "message": "After updating, reload the extension in chrome://extensions." },
+  "statusOnline": { "message": "Receiver online" },
+  "statusOffline": { "message": "Receiver offline" },
+  "activePortLabel": { "message": "Current port: " },
+  "queuedLinksTitle": {
+    "message": "Queued Links ($COUNT$)",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "couldNotScanPage": { "message": "Could not scan current page. Please refresh and try again." },
+  "foundDownloadLinks": {
+    "message": "Found download links: $COUNT$",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "noDownloadLinksFound": { "message": "No download links found" },
+  "pushing": { "message": "Pushing..." },
+  "done": { "message": "Done" },
+  "failed": { "message": "Failed" },
+  "retrying": { "message": "Retrying..." },
+  "confirmClearQueue": { "message": "Clear all queued links?" },
+  "portSaved": { "message": "Port saved." },
+  "checkComplete": { "message": "Check complete." },
+  "portMustBeInteger": { "message": "Port must be an integer." },
+  "portRangeError": { "message": "Port must be between 1025 and 65535." },
+  "portReservedError": { "message": "Do not use port 80, 443, 3306, or 3389." },
+  "noActiveTab": { "message": "No active tab to scan." },
+  "noDownloadableLinksOnPage": { "message": "No downloadable links found on this page." },
+  "capturedBrowserDownload": { "message": "Captured browser download link added to queue." },
+  "capturedBrowserDownloadCount": {
+    "message": "Captured $COUNT$ browser download links added to queue.",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "portSavedAs": {
+    "message": "Port saved as $PORT$. Set the same port in your Max/UE plugin.",
+    "placeholders": { "port": { "content": "$1" } }
+  },
+  "portReachable": {
+    "message": "Port $PORT$ is reachable.",
+    "placeholders": { "port": { "content": "$1" } }
+  },
+  "portInvalidResponse": {
+    "message": "Port $PORT$ returned invalid response. Check your receiver service.",
+    "placeholders": { "port": { "content": "$1" } }
+  },
+  "portUnreachable": {
+    "message": "Port $PORT$ is unreachable.",
+    "placeholders": { "port": { "content": "$1" } }
+  },
+  "noUrlsError": { "message": "No URLs" },
+  "pushedLinks": {
+    "message": "Pushed $COUNT$ links.",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "queuedBecauseOffline": { "message": "Receiver offline. Links added to pending queue." },
+  "inlinePushLabel": { "message": "Push to Max" },
+  "inlinePushTitle": {
+    "message": "Push to Target ($COUNT$)",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "inlineSending": { "message": "Sending" },
+  "inlineQueued": { "message": "Queued" },
+  "polyhavenFetchFailed": { "message": "Failed to fetch Poly Haven page data." },
+  "polyhavenAssetsFound": {
+    "message": "Poly Haven found $COUNT$ downloadable items.",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "pushAndDownloadQueued": { "message": "Pushed to receiver and attempting download." },
+  "aiPanelTitle": { "message": "Interior Scene AI Assistant" },
+  "aiPanelOpenInMaxHint": { "message": "Built-in AI page, communicates with Max/UE plugin via local port." },
+  "aiPanelProvider": { "message": "Provider" },
+  "aiPanelApiType": { "message": "API Type" },
+  "aiPanelBaseUrl": { "message": "Base URL" },
+  "aiPanelModel": { "message": "Model" },
+  "aiPanelApiKey": { "message": "API Key" },
+  "aiPanelTemperature": { "message": "Temperature" },
+  "aiPanelHistory": { "message": "History Rounds" },
+  "aiPanelRobotName": { "message": "Assistant Name" },
+  "aiPanelUserName": { "message": "User Name" },
+  "aiPanelTemplate": { "message": "Prompt Template" },
+  "aiPanelSaveConfig": { "message": "Save Config" },
+  "aiPanelTest": { "message": "Test Connection" },
+  "aiPanelDiagnose": { "message": "Full Diagnostics" },
+  "aiPanelSceneSummary": { "message": "Insert Scene Summary" },
+  "aiPanelSyncState": { "message": "Sync Messages" },
+  "aiPanelStateSynced": { "message": "Messages & config synced" },
+  "aiPanelRecentLog": { "message": "Insert Recent Log" },
+  "aiPanelToggleEdit": { "message": "Toggle Image Edit Mode" },
+  "aiPanelClearChat": { "message": "Clear Chat" },
+  "aiPanelRefresh": { "message": "Refresh Status" },
+  "aiPanelSend": { "message": "Send" },
+  "aiPanelPromptPlaceholder": { "message": "Type your question. Enter to send, Shift+Enter for new line." },
+  "aiPanelNoImages": { "message": "No images attached" },
+  "aiPanelPendingImages": { "message": "Pending images: " },
+  "aiPanelConfigSaved": { "message": "Config saved" },
+  "aiPanelSendDone": { "message": "Send complete" },
+  "aiPanelNeedQuestion": { "message": "Question is empty" },
+  "aiPanelServerOffline": { "message": "Local AI service not connected. Please start Chrome receiver service in Max/UE plugin first." },
+  "bridgeOnlineDetail": {
+    "message": "Bridge service connected, port $PORT$, last check $TIME$.",
+    "placeholders": {
+      "port": { "content": "$1" },
+      "time": { "content": "$2" }
+    }
+  },
+  "bridgeOfflineDetail": {
+    "message": "Not connected. Tried ports: $PORTS$; last check $TIME$.",
+    "placeholders": {
+      "ports": { "content": "$1" },
+      "time": { "content": "$2" }
+    }
+  },
+  "notCheckedYet": { "message": "Not checked yet" },
+  "unknownTime": { "message": "Unknown time" }
+}
