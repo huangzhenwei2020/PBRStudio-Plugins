@@ -227,6 +227,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ urls: window.__pbrPageUrls || [] });
     return true;
   }
+  if (msg.action === "recheckOnline") {
+    scanAndInjectButtons();
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg.action === "getPageUrlCount") {
     sendResponse({ count: (window.__pbrPageUrls || []).length });
     return true;

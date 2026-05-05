@@ -162,7 +162,10 @@ chrome.downloads.onCreated.addListener(async (item) => {
     if (!url) return;
     if (isEphemeralPolyhavenDownload(url)) return;
     const settings = await getSettings();
-    const result = await pushUrls([url], { target: settings.pushTarget || "max" });
+    const target = settings.pushTarget || "max";
+    const isOnline = target === "ue" ? settings.ueServerOnline : settings.serverOnline;
+    if (!isOnline) return;
+    const result = await pushUrls([url], { target });
     if (result && result.ok) {
       showNotification(t("capturedBrowserDownload"));
     }
@@ -259,6 +262,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         [triedPortsKey(target)]: [Number(msg.port)],
         pushTarget: target
       });
+      if (ok) {
+        try {
+          const tabs = await chrome.tabs.query({});
+          for (const tab of tabs) {
+            if (tab.id) {
+              chrome.tabs.sendMessage(tab.id, { action: "recheckOnline" }).catch(() => {});
+            }
+          }
+        } catch (_) {}
+      }
       sendResponse({
         ok,
         message: ok
@@ -321,6 +334,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.action === "independentAiTest") {
     independentAiTest(msg.config || {}).then(sendResponse);
+    return true;
+  }
+  if (msg.action === "webSearch") {
+    webSearch(msg.query || "", msg.config || {}).then(sendResponse);
     return true;
   }
 });
@@ -477,6 +494,9 @@ async function independentAiChat(config, messages) {
         temperature: Number(config.temperature ?? 0.3),
         messages: buildChatMessages(config, messages)
       };
+      if (/deepseek/i.test(model) || /deepseek/i.test(baseUrl)) {
+        body.thinking = { type: "enabled" };
+      }
     }
     const headers = { "Content-Type": "application/json" };
     if (apiKey) headers.Authorization = "Bearer " + apiKey;
@@ -504,11 +524,20 @@ async function independentAiChat(config, messages) {
       const detail = data.error && data.error.message ? data.error.message : ("HTTP " + resp.status);
       throw new Error(detail + " | chat_url=" + (resp.url || url) + " | model=" + model + " | api_type=" + apiType);
     }
-    const rawText = /ollama/i.test(apiType)
-      ? String((data.message && data.message.content) || data.response || "")
-      : String((data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "");
+    let rawText, thinking = "";
+    if (/ollama/i.test(apiType)) {
+      rawText = String((data.message && data.message.content) || data.response || "");
+      thinking = String((data.message && data.message.reasoning_content) || (data.message && data.message.thinking) || "");
+    } else {
+      const msg = (data.choices && data.choices[0] && data.choices[0].message) || {};
+      rawText = String(msg.content || "");
+      thinking = String(msg.reasoning_content || msg.thinking || msg.reasoning || "");
+      if (!thinking && data.choices && data.choices[0] && data.choices[0].thinking) {
+        thinking = String(data.choices[0].thinking || "");
+      }
+    }
     const extracted = extractImagesFromText(rawText);
-    return { ok: true, text: extracted.text || (extracted.images.length ? "已收到图片。" : "AI没有返回内容"), images: extracted.images };
+    return { ok: true, text: extracted.text || (extracted.images.length ? "已收到图片。" : "AI没有返回内容"), images: extracted.images, thinking };
   } catch (e) {
     return { ok: false, error: String(e && e.name === "AbortError" ? "独立 GPT 请求超时。" : e) };
   }
@@ -610,6 +639,149 @@ async function independentAiModels(config) {
   }
 }
 
+async function webSearch(query, config) {
+  const searchUrl = String(config.search_api_url || "").trim();
+  const apiKey = String(config.search_api_key || "").trim();
+  const q = String(query || "").trim();
+  if (!q) return { ok: false, error: "搜索关键词为空" };
+
+  try {
+    let resultsText = "";
+    if (searchUrl) {
+      const url = searchUrl.replace(/\{query\}/g, encodeURIComponent(q));
+      const headers = { "Content-Type": "application/json" };
+      if (apiKey) headers.Authorization = "Bearer " + apiKey;
+      const resp = await fetchWithTimeout(url, { method: "GET", headers }, 15000);
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      resultsText = extractSearchResults(data);
+    } else {
+      resultsText = await searchWithFallbacks(q);
+    }
+    if (!resultsText.trim()) return { ok: false, error: "未搜索到相关内容" };
+    return { ok: true, results: resultsText, query: q };
+  } catch (e) {
+    return { ok: false, error: "搜索失败: " + (e && e.message ? e.message : String(e)) };
+  }
+}
+
+async function searchWithFallbacks(q) {
+  const backends = [
+    { name: "Google", fn: () => searchGoogle(q) },
+    { name: "DuckDuckGo", fn: () => searchDuckDuckGoAPI(q) },
+    { name: "DuckDuckGo_HTML", fn: () => searchDuckDuckGoHTML(q) },
+    { name: "Bing", fn: () => searchBing(q) }
+  ];
+  for (const backend of backends) {
+    try {
+      const text = await backend.fn();
+      if (text && text.trim()) return text;
+    } catch (_e) { /* try next */ }
+  }
+  return "";
+}
+
+async function searchDuckDuckGoAPI(q) {
+  const url = "https://api.duckduckgo.com/?q=" + encodeURIComponent(q) + "&format=json&no_html=1&skip_disambig=1";
+  const resp = await fetchWithTimeout(url, { method: "GET" }, 8000);
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  const data = await resp.json().catch(() => null);
+  return extractDuckDuckGoResults(data);
+}
+
+async function searchDuckDuckGoHTML(q) {
+  const url = "https://html.duckduckgo.com/html/?q=" + encodeURIComponent(q);
+  const resp = await fetchWithTimeout(url, { method: "GET" }, 8000);
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  const html = await resp.text();
+  return extractHTMLResults(html, /<a[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi, 2);
+}
+
+async function searchGoogle(q) {
+  const url = "https://www.google.com/search?q=" + encodeURIComponent(q) + "&hl=zh-CN";
+  const resp = await fetchWithTimeout(url, {
+    method: "GET",
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept-Language": "zh-CN,zh;q=0.9"
+    }
+  }, 10000);
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  const html = await resp.text();
+  const parts = [];
+  const blockRe = /<div class="g"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/gi;
+  let m;
+  while ((m = blockRe.exec(html))) {
+    const block = m[1];
+    const title = (block.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i) || [])[1] || "";
+    const snippet = (block.match(/<span[^>]*class="[^"]*\baCOpRe\b[^"]*"[^>]*>([\s\S]*?)<\/span>/i) || [])[1]
+      || (block.match(/<div[^>]*class="[^"]*\bVwiC3b\b[^"]*"[^>]*>([\s\S]*?)<\/div>/i) || [])[1]
+      || (block.match(/<span[^>]*>([\s\S]*?)<\/span>/i) || [])[1] || "";
+    const text = (title + " " + snippet).replace(/<[^>]+>/g, "").replace(/&[a-z]+;/gi, " ").replace(/\s+/g, " ").trim();
+    if (text.length > 20) parts.push(text);
+  }
+  return parts.slice(0, 10).join("\n");
+}
+
+async function searchBing(q) {
+  const url = "https://www.bing.com/search?q=" + encodeURIComponent(q) + "&setlang=zh-Hans";
+  const resp = await fetchWithTimeout(url, {
+    method: "GET",
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept-Language": "zh-CN,zh;q=0.9"
+    }
+  }, 10000);
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  const html = await resp.text();
+  const parts = [];
+  const snippetRe = /<li class="b_algo"[^>]*>([\s\S]*?)<\/li>/gi;
+  let m;
+  while ((m = snippetRe.exec(html))) {
+    const block = m[1];
+    const title = (block.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i) || [])[1] || "";
+    const body = (block.match(/<p[^>]*>([\s\S]*?)<\/p>/i) || [])[1] || (block.match(/<div class="b_caption"[^>]*>([\s\S]*?)<\/div>/i) || [])[1] || "";
+    const text = (title + " " + body).replace(/<[^>]+>/g, "").replace(/&[a-z]+;/gi, " ").replace(/\s+/g, " ").trim();
+    if (text.length > 20) parts.push(text);
+  }
+  return parts.slice(0, 10).join("\n");
+}
+
+function extractHTMLResults(html, regex, snippetGroup) {
+  const parts = [];
+  let m;
+  while ((m = regex.exec(html))) {
+    const text = (m[snippetGroup] || m[1] || "").replace(/<[^>]+>/g, "").replace(/&[a-z]+;/gi, " ").replace(/\s+/g, " ").trim();
+    if (text.length > 15) parts.push(text);
+  }
+  return parts.slice(0, 10).join("\n");
+}
+
+function extractDuckDuckGoResults(data) {
+  if (!data) return "";
+  const parts = [];
+  if (data.AbstractText && data.AbstractText.trim()) {
+    parts.push(data.AbstractText.trim());
+    if (data.AbstractURL) parts.push("来源: " + data.AbstractURL);
+  }
+  const topics = Array.isArray(data.RelatedTopics) ? data.RelatedTopics : [];
+  for (const t of topics) {
+    if (t && t.Text && t.Text.trim()) {
+      parts.push(t.Text.trim());
+      if (t.FirstURL) parts.push("来源: " + t.FirstURL);
+    }
+  }
+  return parts.filter(Boolean).slice(0, 12).join("\n");
+}
+
+function extractSearchResults(data) {
+  if (!data) return "";
+  if (typeof data === "string") return data;
+  const text = JSON.stringify(data, null, 2);
+  if (text.length < 3000) return text;
+  return text.slice(0, 3000) + "\n...[truncated]";
+}
+
 async function independentAiTest(config) {
   const models = await independentAiModels(config);
   if (models.ok) return { ok: true, message: "连接成功，获取到 " + String((models.models || []).length) + " 个模型。" };
@@ -626,6 +798,12 @@ async function pushUrls(urls, options = {}) {
   const port = targetPort(settings, target);
   const queueKey = pendingKey(target);
   const pushEndpoint = serverUrl(port) + "/push";
+
+  const isOnline = target === "ue" ? settings.ueServerOnline : settings.serverOnline;
+  if (!isOnline) {
+    return { ok: false, offline: true, error: targetName(target) + " 未连接" };
+  }
+
   try {
     const resp = await fetch(pushEndpoint, {
       method: "POST",

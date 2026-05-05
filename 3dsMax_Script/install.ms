@@ -1,7 +1,7 @@
 /*
 ================================================================================
   PBRStudio / InteriorSceneStudioPro — 3ds Max 一键安装脚本
-  版本: v1.1.3 | 日期: 2026-05-03
+  版本: v1.1.4 | 日期: 2026-05-05
 
   用法: 将此 .mzp 文件拖入 3ds Max 视口，自动完成安装。
         安装后在菜单栏 "PBR Studio" 中或自定义工具栏可找到按钮。
@@ -77,14 +77,16 @@ fn installPBRStudioFiles =
     local dstMain = pathConfig.appendPath userScriptsDir "InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py"
     local dstUtils = pathConfig.appendPath userScriptsDir "_pbr_clean_utils.py"
 
-    -- 复制文件
+    -- 复制文件（先删除目标再复制，确保覆盖旧版本）
     local copiedCount = 0
     if doesFileExist srcMain then
     (
+        if doesFileExist dstMain then deleteFile dstMain
         if (copyFile srcMain dstMain) then copiedCount += 1
     )
     if doesFileExist srcUtils then
     (
+        if doesFileExist dstUtils then deleteFile dstUtils
         if (copyFile srcUtils dstUtils) then copiedCount += 1
     )
 

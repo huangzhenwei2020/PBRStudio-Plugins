@@ -36,12 +36,14 @@ venv/
 Thumbs.db
 Desktop.ini
 
-# ===== Releases =====
-Releases/
+# ===== Releases (keep packages, unfiltered) =====
 
-# ===== Archive =====
+# ===== Archive (ignore loose archives, keep Releases zips) =====
+# Only ignore archives outside Releases/
 *.zip
 *.tar
 *.gz
 *.7z
 *.rar
+!Releases/*.zip
+!Releases/*.mzp

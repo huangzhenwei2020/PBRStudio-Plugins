@@ -92,6 +92,15 @@ except Exception:
 
 rt = pymxs.runtime
 
+# Ensure user scripts dir is in sys.path for _pbr_clean_utils import.
+# python.ExecuteFile does not add the executed file's directory to sys.path.
+try:
+    _user_scripts = str(rt.getDir(rt.Name("userScripts")))
+    if _user_scripts and os.path.isdir(_user_scripts) and _user_scripts not in sys.path:
+        sys.path.insert(0, _user_scripts)
+except Exception:
+    pass
+
 from _pbr_clean_utils import safe_str, clean_name_part, status_text_for_exception
 
 
@@ -20395,6 +20404,14 @@ def run():
     except Exception:
         pass
     _ui_instance.show()
+    # Persist reference in __main__ so the window survives the temporary
+    # namespace cleanup that happens after python.ExecuteFile returns.
+    try:
+        _main = sys.modules.get("__main__")
+        if _main is not None:
+            _main._pbr_studio_window = _ui_instance
+    except Exception:
+        pass
     return _ui_instance
 
 ui = run()

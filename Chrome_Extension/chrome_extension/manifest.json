@@ -16,7 +16,11 @@
     "host_permissions": [
         "http://localhost:*/*",
         "http://127.0.0.1:*/*",
-        "https://api.polyhaven.com/*"
+        "https://api.polyhaven.com/*",
+        "https://api.duckduckgo.com/*",
+        "https://html.duckduckgo.com/*",
+        "https://www.google.com/*",
+        "https://www.bing.com/*"
     ],
   "background": {
     "service_worker": "background.js"

@@ -297,6 +297,39 @@
   .bubble blockquote { margin: 10px 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
   .bubble a { color: var(--chrome-accent); text-decoration: none; }
   .bubble a:hover { text-decoration: underline; }
+  .thinking-block {
+    margin: 8px 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .thinking-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background: var(--tool);
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+    border: 0;
+    width: 100%;
+    text-align: left;
+    font-family: inherit;
+  }
+  .thinking-header:hover { background: var(--control-hover); }
+  .thinking-body {
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--muted);
+    border-top: 1px solid var(--line);
+    white-space: pre-wrap;
+    line-height: 1.6;
+    max-height: 320px;
+    overflow: auto;
+  }
+  .thinking-block.collapsed .thinking-body { display: none; }
   .smart-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
   .smart-actions button { padding: 5px 8px; border-radius: 999px; font-size: 12px; }
   .math-inline, .math-block {
@@ -330,7 +363,7 @@
     border-color: color-mix(in srgb, var(--text) 24%, var(--line));
     box-shadow: 0 10px 30px rgba(0,0,0,.12);
   }
-  .composer-line { display: grid; grid-template-columns: 34px minmax(0, 1fr) 34px; gap: 8px; align-items: end; }
+  .composer-line { display: grid; grid-template-columns: 34px minmax(0, 1fr) 34px 34px; gap: 8px; align-items: end; }
   .composer textarea {
     border: 0;
     box-shadow: none;
@@ -361,6 +394,7 @@
     transition: background .16s ease, transform .16s ease;
   }
   .tool-button:hover { background: var(--control-hover); transform: translateY(-1px); }
+  .tool-button.web-search-active { background: var(--primary); color: #fff; border-color: var(--primary); }
   #btn-send {
     border-radius: 999px;
     width: 34px;
@@ -563,6 +597,8 @@
         <option value="json">JSON 图片接口</option>
         <option value="siliconflow">硅基流动图片接口</option>
       </select></div>
+      <div class="field standalone-only"><label>搜索 API URL (留空= DuckDuckGo)</label><input id="search_api_url" type="text" placeholder="自定义搜索接口，{query} 替换关键词"></div>
+      <div class="field standalone-only"><label>搜索 API Key (可选)</label><input id="search_api_key" type="password" placeholder="留空则不鉴权"></div>
       <div class="capability-box" id="provider-capabilities"></div>
       <div class="field"><label data-i18n="aiPanelApiKey">API Key</label><input id="api_key" type="password" placeholder="留空表示不改"></div>
       <div class="grid2">
@@ -645,6 +681,7 @@
           <label class="tool-button" for="file-input" title="添加图片">＋</label>
           <input id="file-input" type="file" multiple accept=".png,.jpg,.jpeg,.bmp,.tif,.tiff,.webp,.gif,.exr,.hdr,image/*">
           <textarea id="prompt" data-i18n-placeholder="aiPanelPromptPlaceholder"></textarea>
+          <button class="tool-button standalone-only" id="btn-web-search" title="联网搜索" style="font-size:14px;">🌐</button>
           <button class="primary" id="btn-send" title="发送">↑</button>
         </div>
         <div class="status composer-status" id="image-status"></div>

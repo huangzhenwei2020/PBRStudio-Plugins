@@ -62,7 +62,13 @@ function refresh() {
     }
 
     dot.className = "dot " + (online ? "online" : "offline");
-    statusText.textContent = targetLabel() + (online ? " 在线" : " 离线或未检测") + " | 端口 " + port + " | " + formatCheckTime(checkedAt);
+    statusText.textContent = online
+      ? targetLabel() + " 已连接 | 端口 " + port + " | " + formatCheckTime(checkedAt)
+      : targetLabel() + " 未连接，请点击「连接」按钮 | 端口 " + port;
+
+    btnPushPage.disabled = !online || pageUrls.length === 0;
+    btnPushPageUE.disabled = !online || pageUrls.length === 0;
+    btnRetry.disabled = !online;
 
     if (pending.length === 0) {
       pendingBox.textContent = "没有待发送链接";
@@ -162,10 +168,10 @@ btnCheckPort.addEventListener("click", () => {
     return;
   }
   btnCheckPort.disabled = true;
-  btnCheckPort.textContent = "检测中...";
+  btnCheckPort.textContent = "连接中...";
   chrome.runtime.sendMessage({ action: "checkPort", target, port: Number(portInput.value) }, (resp) => {
     btnCheckPort.disabled = false;
-    btnCheckPort.textContent = "手动检测";
+    btnCheckPort.textContent = "连接";
     portHint.textContent = (resp && resp.message) || "检测完成";
     refresh();
   });

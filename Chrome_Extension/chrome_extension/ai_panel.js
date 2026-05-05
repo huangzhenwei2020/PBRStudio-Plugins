@@ -80,7 +80,10 @@ const els = {
   customProviderImageModelModal: document.getElementById("custom-provider-image-model-modal"),
   customProviderImageEditModal: document.getElementById("custom-provider-image-edit-modal"),
   modeMax: document.getElementById("mode-max"),
-  modeStandalone: document.getElementById("mode-standalone")
+  modeStandalone: document.getElementById("mode-standalone"),
+  searchApiUrl: document.getElementById("search_api_url"),
+  searchApiKey: document.getElementById("search_api_key"),
+  btnWebSearch: document.getElementById("btn-web-search")
 };
 
 let state = null;
@@ -89,6 +92,7 @@ let standaloneMessages = [];
 let currentPort = 19527;
 let sendPollTimer = null;
 let autoRefreshTimer = null;
+let searchEnabled = false;
 let lastSyncAt = null;
 let lastStandaloneProvider = "";
 let diagVisible = false;
@@ -556,6 +560,7 @@ function renderMessages() {
   const sig = appMode + ":" + JSON.stringify(arr.map((m) => ({
     role: m.role,
     content: m.content,
+    thinking: m.thinking || "",
     images: (m.images || []).map((it) => it.path || it.url || it.data_url || it.name || "")
   })));
   if (sig === lastMessageSignature) return;
@@ -570,7 +575,10 @@ function renderMessages() {
   els.messages.classList.remove("empty");
   els.messages.innerHTML = arr.map((msg) => {
     const imgs = Array.isArray(msg.images) ? msg.images : [];
-    return `<div class="msg ${roleAlign(msg.role)}"><div class="bubble"><span class="name">${escapeHtml(roleName(msg, cfg))}</span>${renderMarkdown(msg.content || "")}${renderSmartActions(msg.content || "")}${imgs.length ? `<div class="images">${imgs.map((it) => {
+    const thinkingHtml = (msg.thinking && msg.thinking.trim())
+      ? `<div class="thinking-block collapsed" onclick="this.classList.toggle('collapsed')"><div class="thinking-header">💭 思考过程 <span style="font-size:10px;opacity:.6">（点击展开）</span></div><div class="thinking-body">${escapeHtml(msg.thinking.trim())}</div></div>`
+      : "";
+    return `<div class="msg ${roleAlign(msg.role)}"><div class="bubble"><span class="name">${escapeHtml(roleName(msg, cfg))}</span>${thinkingHtml}${renderMarkdown(msg.content || "")}${renderSmartActions(msg.content || "")}${imgs.length ? `<div class="images">${imgs.map((it) => {
       const src = it.thumb || it.url || it.data_url || "";
       const href = it.url || it.data_url || "#";
       return `<button class="image-open" data-src="${escapeHtml(href)}" title="预览图片"><img src="${escapeHtml(src)}"></button>`;
@@ -1073,6 +1081,8 @@ function enterStandaloneConfig(savedConfig) {
   if (els.imageModel && "image_model" in cfg) els.imageModel.value = cfg.image_model || "";
   syncImageModelForCurrentModel(false);
   if (els.imageApiType && "image_api_type" in cfg) els.imageApiType.value = cfg.image_api_type || "auto";
+  if (els.searchApiUrl && "search_api_url" in cfg) els.searchApiUrl.value = cfg.search_api_url || "";
+  if (els.searchApiKey && "search_api_key" in cfg) els.searchApiKey.value = cfg.search_api_key || "";
   if ("temperature" in cfg) els.temperature.value = cfg.temperature ?? 0.3;
   if ("history" in cfg) els.history.value = cfg.history ?? 8;
   if ("robot_name" in cfg) els.robotName.value = cfg.robot_name || "AI小助手";
@@ -1116,6 +1126,8 @@ function loadStandaloneProviderConfig(providerName, options = {}) {
   syncImageModelForCurrentModel(false);
   if (els.imageApiType) els.imageApiType.value = options.resetToPreset ? (preset.imageApiType || "auto") : (saved.image_api_type ?? preset.imageApiType ?? "auto");
   els.apiKey.value = options.resetToPreset ? "" : (saved.api_key || "");
+  if (els.searchApiUrl) els.searchApiUrl.value = options.resetToPreset ? "" : (saved.search_api_url ?? "");
+  if (els.searchApiKey) els.searchApiKey.value = options.resetToPreset ? "" : (saved.search_api_key ?? "");
   els.temperature.value = saved.temperature ?? 0.3;
   els.history.value = saved.history ?? 8;
   els.robotName.value = saved.robot_name || "AI小助手";
@@ -1338,7 +1350,9 @@ function collectConfigPatch() {
     history: Number(els.history.value || 8),
     robot_name: els.robotName.value.trim(),
     user_name: els.userName.value.trim(),
-    template: els.template.value.trim()
+    template: els.template.value.trim(),
+    search_api_url: els.searchApiUrl ? els.searchApiUrl.value.trim() : "",
+    search_api_key: els.searchApiKey ? els.searchApiKey.value : ""
   };
 }
 
@@ -1397,13 +1411,40 @@ async function sendMessage() {
     }
     standaloneMessages.push({ role: "user", content: text, images });
     const pendingId = "pending_" + Date.now();
-    standaloneMessages.push({ id: pendingId, role: "assistant", content: useImageApi ? "正在生成图片…" : (images.length ? "正在理解图片…" : "正在思考…") });
+
+    let searchContext = "";
+    if (searchEnabled && !useImageApi) {
+      standaloneMessages.push({ id: pendingId, role: "assistant", content: "🔍 正在搜索网络…" });
+      renderMessages();
+      const searchCfg = collectConfigPatch();
+      setUploadProgress(0, "正在搜索: " + text.slice(0, 40) + "...");
+      const searchResp = await sendRuntimeMessage({ action: "webSearch", query: text, config: searchCfg }, 15000);
+      if (searchResp && searchResp.ok && searchResp.results) {
+        searchContext = "\n\n以下是与用户问题相关的网络搜索结果，请基于这些信息回答：\n\n" + searchResp.results + "\n\n请根据以上搜索结果回答用户的问题。如果搜索结果不足以回答问题，请如实告知。";
+        standaloneMessages[standaloneMessages.length - 1] = { id: pendingId, role: "assistant", content: "🔍 已搜索网络，找到以下参考信息：\n\n" + searchResp.results };
+      } else {
+        standaloneMessages[standaloneMessages.length - 1] = { id: pendingId, role: "system", content: "🔍 搜索完成，未找到相关结果。" };
+      }
+      renderMessages();
+      setUploadProgress(0, searchContext ? "搜索完成，正在请求 AI…" : "搜索无结果，正在请求 AI…");
+    }
+
+    standaloneMessages.push({ id: pendingId + "_think", role: "assistant", content: useImageApi ? "正在生成图片…" : (images.length ? "正在理解图片…" : "正在思考…") });
     els.prompt.value = "";
     resizePrompt();
     els.fileInput.value = "";
     renderMessages();
     const action = useImageApi ? "independentAiImage" : "independentAiChat";
     setUploadProgress(images.length ? 70 : 0, useImageApi ? "正在请求图片接口…" : "正在请求 AI…");
+
+    const chatMessages = standaloneMessages.filter((m) => !m.id && m.role !== "system").slice(-Math.max(1, Number(cfg.history || 8)) * 2);
+    if (searchContext && chatMessages.length > 0) {
+      chatMessages[chatMessages.length - 1] = {
+        role: chatMessages[chatMessages.length - 1].role,
+        content: (chatMessages[chatMessages.length - 1].content || "") + searchContext
+      };
+    }
+
     const resp = await sendRuntimeMessage(useImageApi ? {
       action,
       config: cfg,
@@ -1412,7 +1453,7 @@ async function sendMessage() {
     } : {
       action,
       config: cfg,
-      messages: standaloneMessages.filter((m) => !m.id && m.role !== "system").slice(-Math.max(1, Number(cfg.history || 8)) * 2)
+      messages: chatMessages
     }, useImageApi ? 90000 : 65000);
     if (!resp || resp.ok === false) {
       const errText = (resp && resp.error) || "未知错误";
@@ -1420,24 +1461,24 @@ async function sendMessage() {
         const fallback = await sendRuntimeMessage({
           action: "independentAiChat",
           config: cfg,
-          messages: standaloneMessages.filter((m) => !m.id && m.role !== "system").slice(-Math.max(1, Number(cfg.history || 8)) * 2)
+          messages: chatMessages
         }, 65000);
         if (fallback && fallback.ok) {
-          replaceMessageById(pendingId, { content: "图片接口不可用，已自动改用聊天/看图接口。\n\n" + (fallback.text || ""), images: fallback.images || [] });
+          replaceMessageById(pendingId + "_think", { content: "图片接口不可用，已自动改用聊天/看图接口。\n\n" + (fallback.text || ""), images: fallback.images || [] });
           updateSendBadge("ok", "空闲");
         } else {
-          replaceMessageById(pendingId, { role: "system", content: "独立图片请求失败：\n" + errText + "\n\n回退聊天接口也失败：\n" + ((fallback && fallback.error) || "未知错误") });
+          replaceMessageById(pendingId + "_think", { role: "system", content: "独立图片请求失败：\n" + errText + "\n\n回退聊天接口也失败：\n" + ((fallback && fallback.error) || "未知错误") });
           updateSendBadge("error", "请求失败");
         }
       } else if (useImageApi && /HTTP 404/i.test(errText) && !caps.vision) {
-        replaceMessageById(pendingId, { role: "system", content: "独立图片请求失败：\n" + errText + "\n\n当前聊天模型不是看图模型，所以不再回退到聊天接口。请检查“图片模型名”和“图片接口格式”：OpenAI 通常用 gpt-image-1 + OpenAI 图片接口；硅基流动通常用 Kwai-Kolors/Kolors + 硅基流动图片接口。" });
+        replaceMessageById(pendingId + "_think", { role: "system", content: "独立图片请求失败：\n" + errText + "\n\n当前聊天模型不是看图模型，所以不再回退到聊天接口。请检查「图片模型名」和「图片接口格式」：OpenAI 通常用 gpt-image-1 + OpenAI 图片接口；硅基流动通常用 Kwai-Kolors/Kolors + 硅基流动图片接口。" });
         updateSendBadge("error", "图片接口不可用");
       } else {
-        replaceMessageById(pendingId, { role: "system", content: (useImageApi ? "独立图片请求失败：\n" : "独立 GPT 请求失败：\n") + errText });
+        replaceMessageById(pendingId + "_think", { role: "system", content: (useImageApi ? "独立图片请求失败：\n" : "独立 GPT 请求失败：\n") + errText });
         updateSendBadge("error", "请求失败");
       }
     } else {
-      replaceMessageById(pendingId, { content: resp.text || "AI没有返回内容", images: resp.images || [] });
+      replaceMessageById(pendingId + "_think", { content: resp.text || "AI没有返回内容", images: resp.images || [], thinking: resp.thinking || "" });
       updateSendBadge("ok", "空闲");
     }
     saveStandaloneState();
@@ -1563,6 +1604,13 @@ els.providerList.addEventListener("click", (e) => {
   saveStandaloneState({ saveProviderConfig: true });
   updateImageEditorSummary();
 });
+els.btnWebSearch.addEventListener("click", () => {
+  searchEnabled = !searchEnabled;
+  els.btnWebSearch.classList.toggle("web-search-active", searchEnabled);
+  els.btnWebSearch.title = searchEnabled ? "联网搜索已开启" : "联网搜索已关闭";
+  setActionStatus(searchEnabled ? "联网搜索已开启" : "联网搜索已关闭", "ok");
+});
+
 document.getElementById("btn-send").addEventListener("click", () => sendMessage().catch((e) => {
   setUploadProgress(100, "");
   setActionStatus(String(e), "error");
@@ -1621,7 +1669,7 @@ els.modeStandalone.addEventListener("click", () => {
   syncForm();
 });
 
-[els.apiType, els.baseUrl, els.model, els.imageModel, els.imageApiType, els.apiKey, els.temperature, els.history, els.robotName, els.userName, els.template].forEach((el) => {
+[els.apiType, els.baseUrl, els.model, els.imageModel, els.imageApiType, els.apiKey, els.temperature, els.history, els.robotName, els.userName, els.template, els.searchApiUrl, els.searchApiKey].filter(Boolean).forEach((el) => {
   if (!el) return;
   el.addEventListener("focus", () => { isEditingConfig = true; });
   el.addEventListener("blur", () => { setTimeout(() => { isEditingConfig = false; }, 200); });
