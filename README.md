@@ -43,10 +43,9 @@
 
 ```
 PBRStudio-Plugins/
-├── 3dsMax_Script/                # 3ds Max Python 脚本（源文件）
-│   ├── install.ms                # MZP 安装入口脚本
-│   ├── InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py  # 主脚本（约 20,000 行）
-│   └── _pbr_clean_utils.py       # 独立工具函数模块
+├── install.ms                    # 3ds Max MZP 安装入口脚本
+├── InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py  # 3ds Max 主脚本（约 20,000 行）
+├── _pbr_clean_utils.py           # 3ds Max 独立工具函数模块
 │
 ├── Chrome_Extension/chrome_extension/  # Chrome 浏览器扩展
 │   ├── popup.html / popup.js     # 弹出窗口（推送控制面板）
@@ -113,7 +112,7 @@ PBRStudio-Plugins/
 
 1. 打开 3ds Max
 2. 菜单栏: **脚本** → **运行脚本**
-3. 选择 `3dsMax_Script/InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py`
+3. 选择 `InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py`（确保 `install.ms` 和 `_pbr_clean_utils.py` 在同目录下）
 4. 确保 `_pbr_clean_utils.py` 在同一目录下
 
 ### Max 功能详解
