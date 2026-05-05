@@ -59,6 +59,7 @@ fn installPBRStudioFiles =
     -- 源文件路径 (MZP 解压后的临时目录)
     local srcMain = pathConfig.appendPath extractDir "InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py"
     local srcUtils = pathConfig.appendPath extractDir "_pbr_clean_utils.py"
+    local srcIcon = pathConfig.appendPath extractDir "PBRStudio.bmp"
 
     -- 如果解压目录找不到源文件，尝试从当前脚本目录查找
     if not (doesFileExist srcMain) then
@@ -69,6 +70,7 @@ fn installPBRStudioFiles =
             local scriptDir = pathConfig.removePathLeaf scriptPath
             srcMain = pathConfig.appendPath scriptDir "InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py"
             srcUtils = pathConfig.appendPath scriptDir "_pbr_clean_utils.py"
+            srcIcon = pathConfig.appendPath scriptDir "PBRStudio.bmp"
         )
     )
 
@@ -76,6 +78,8 @@ fn installPBRStudioFiles =
     local userScriptsDir = pathConfig.appendPath (getDir #userScripts) ""
     local dstMain = pathConfig.appendPath userScriptsDir "InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py"
     local dstUtils = pathConfig.appendPath userScriptsDir "_pbr_clean_utils.py"
+    local userIconsDir = pathConfig.appendPath (getDir #userIcons) ""
+    local dstIcon = pathConfig.appendPath userIconsDir "PBRStudio.bmp"
 
     -- 复制文件（先删除目标再复制，确保覆盖旧版本）
     local copiedCount = 0
@@ -88,6 +92,11 @@ fn installPBRStudioFiles =
     (
         if doesFileExist dstUtils then deleteFile dstUtils
         if (copyFile srcUtils dstUtils) then copiedCount += 1
+    )
+    if doesFileExist srcIcon then
+    (
+        if doesFileExist dstIcon then deleteFile dstIcon
+        if (copyFile srcIcon dstIcon) then copiedCount += 1
     )
 
     -- 注册宏脚本文件
@@ -118,6 +127,7 @@ fn installPBRStudioFiles =
     msg += "已安装文件:\n"
     msg += "  • " + dstMain + "\n"
     msg += "  • " + dstUtils + "\n"
+    msg += "  • " + dstIcon + "\n"
     msg += "  • " + macroFile + "\n\n"
     msg += "请重启 3ds Max 或使用 \"自定义 → 自定义用户界面\"\n"
     msg += "在类别 \"PBR Studio\" 中找到按钮，拖入工具栏即可使用。"
