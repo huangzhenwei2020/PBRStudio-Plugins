@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Materials/MaterialInterface.h"
 #include "PBRMaterialSet.generated.h"
 
 USTRUCT(BlueprintType)

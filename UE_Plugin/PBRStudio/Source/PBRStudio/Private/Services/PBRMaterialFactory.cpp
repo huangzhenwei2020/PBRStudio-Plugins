@@ -282,28 +282,14 @@ static EPBRMaterialType ResolveMaterialType(const FPBRMaterialSet& Set, const FS
 	return IsAutoMaterialTypeMode(Mode) ? DetectMaterialTypeFromSet(Set) : ParseMaterialTypeMode(Mode);
 }
 
+static bool HasOpacityChannel(const FPBRMaterialSet& Set)
+{
+	return Set.Channels.Contains(FPBRChannels::Opacity.ToString());
+}
+
 EPBRMaterialType FPBRMaterialFactory::ResolveMaterialTypeForSet(const FPBRMaterialSet& Set, const FString& MaterialTypeMode)
 {
 	return ResolveMaterialType(Set, MaterialTypeMode);
-}
-
-FString FPBRMaterialFactory::MaterialTypeToDisplayName(EPBRMaterialType Type)
-{
-	switch (Type)
-	{
-	case EPBRMaterialType::Wood:			return TEXT("木材");
-	case EPBRMaterialType::Stone:			return TEXT("石材");
-	case EPBRMaterialType::Tile:			return TEXT("瓷砖");
-	case EPBRMaterialType::Fabric:			return TEXT("布艺");
-	case EPBRMaterialType::Leather:			return TEXT("皮革");
-	case EPBRMaterialType::Plastic:			return TEXT("塑料");
-	case EPBRMaterialType::Metal:			return TEXT("金属");
-	case EPBRMaterialType::Transparent:		return TEXT("半透明");
-	case EPBRMaterialType::Glass:			return TEXT("玻璃");
-	case EPBRMaterialType::Water:			return TEXT("水");
-	case EPBRMaterialType::Emissive:		return TEXT("自发光");
-	default:								return TEXT("标准");
-	}
 }
 
 static bool MaterialTypeUsesChannel(EPBRMaterialType MaterialType, const FString& Channel)
@@ -333,8 +319,7 @@ static bool MaterialTypeUsesChannel(EPBRMaterialType MaterialType, const FString
 	}
 	if (Channel == FPBRChannels::Opacity.ToString())
 	{
-		return MaterialType == EPBRMaterialType::Standard ||
-			MaterialType == EPBRMaterialType::Transparent ||
+		return MaterialType == EPBRMaterialType::Transparent ||
 			MaterialType == EPBRMaterialType::Glass ||
 			MaterialType == EPBRMaterialType::Water;
 	}
@@ -556,9 +541,16 @@ UMaterialInterface* FPBRMaterialFactory::CreateMaterialFromPBRSet(
 	Options.MaterialType = ResolveMaterialType(Set, Settings.MaterialTypeMode);
 	if (Settings.MaterialTypeMode.Equals(TEXT("Standard"), ESearchCase::IgnoreCase) ||
 		Settings.MaterialTypeMode.Contains(TEXT("标准")) ||
-		Settings.MaterialTypeMode.Contains(TEXT("标准")))
+		Settings.MaterialTypeMode.Contains(TEXT("鏍囧噯")))
 	{
 		Options.MaterialType = EPBRMaterialType::Standard;
+	}
+	if (Options.bForceTransparentWhenOpacityExists &&
+		HasOpacityChannel(Set) &&
+		Options.MaterialType != EPBRMaterialType::Glass &&
+		Options.MaterialType != EPBRMaterialType::Water)
+	{
+		Options.MaterialType = EPBRMaterialType::Transparent;
 	}
 	Options.bImportTextures = true;
 	Options.bCreateIsolatedMaterialFolder = true;
@@ -573,4 +565,132 @@ UMaterialInterface* FPBRMaterialFactory::CreateMaterialFromPBRSet(
 
 	OutNotes = Result.Message.IsEmpty() ? TEXT("创建材质实例失败") : Result.Message;
 	return nullptr;
+
+	FString AssetName = Settings.MaterialPrefix + SanitizeAssetName(Set.Name);
+	FString FullPackagePath = Settings.PackagePath + AssetName;
+
+	// Check for existing material
+	if (UObject* Existing = UEditorAssetLibrary::LoadAsset(FullPackagePath))
+	{
+		if (UMaterialInterface* ExistingMat = Cast<UMaterialInterface>(Existing))
+		{
+			OutNotes = TEXT("材质已存在");
+			return ExistingMat;
+		}
+	}
+
+	// Create package
+	UPackage* Package = CreatePackage(*FullPackagePath);
+	if (!Package)
+	{
+		OutNotes = TEXT("创建包失败");
+		return nullptr;
+	}
+
+	// Create material
+	UMaterial* Material = NewObject<UMaterial>(Package, FName(*AssetName), RF_Public | RF_Standalone);
+	if (!Material)
+	{
+		OutNotes = TEXT("创建 UMaterial 失败");
+		return nullptr;
+	}
+
+	// Set shading model to DefaultLit (PBR)
+	Material->SetShadingModel(EMaterialShadingModel::MSM_DefaultLit);
+
+	TArray<FString> Notes;
+
+	// Import textures and connect them
+	for (const auto& ChannelPair : Set.Channels)
+	{
+		const FString& Channel = ChannelPair.Key;
+		const FString& FilePath = ChannelPair.Value;
+
+		if (Channel == TEXT("Preview") || Channel == TEXT("Unknown")) continue;
+
+		FString TexAssetName = TEXT("T_") + SanitizeAssetName(Set.Name) + TEXT("_") + Channel;
+		FString TexPkgPath = Settings.PackagePath + TexAssetName;
+
+		UTexture2D* Tex = ImportTextureToAsset(FilePath, Settings.PackagePath, TexAssetName);
+		if (!Tex)
+		{
+			Notes.Add(FString::Printf(TEXT("%s: 贴图导入失败"), *Channel));
+			continue;
+		}
+
+		UMaterialExpressionTextureSample* Sample = CreateTextureSampleNode(Material, Tex, Channel);
+		if (!Sample)
+		{
+			Notes.Add(FString::Printf(TEXT("%s: 节点创建失败"), *Channel));
+			continue;
+		}
+
+		if (ConnectToMaterialInput(Material, Sample, Channel, Settings.TargetMode))
+		{
+			Notes.Add(FString::Printf(TEXT("%s: 已连接"), *Channel));
+		}
+		else
+		{
+			Notes.Add(FString::Printf(TEXT("%s: 连接失败"), *Channel));
+		}
+	}
+
+	// Handle ORM packed texture
+	for (const auto& ChannelPair : Set.Channels)
+	{
+		if (ChannelPair.Key == TEXT("ORM"))
+		{
+			FString TexAssetName = TEXT("T_") + SanitizeAssetName(Set.Name) + TEXT("_ORM");
+			UTexture2D* ORMTex = ImportTextureToAsset(ChannelPair.Value, Settings.PackagePath, TexAssetName);
+			if (ORMTex)
+			{
+				SplitORMChannels(Material, ORMTex, const_cast<FPBRMaterialSet&>(Set), Settings.NormalPreference, Notes);
+			}
+		}
+	}
+
+	// Handle Glossiness → Roughness inversion
+	if (!Set.Channels.Contains(TEXT("Roughness")) && Set.Channels.Contains(TEXT("Glossiness")))
+	{
+		const FString& GlossPath = Set.Channels[TEXT("Glossiness")];
+		FString TexAssetName = TEXT("T_") + SanitizeAssetName(Set.Name) + TEXT("_Roughness");
+		UTexture2D* GlossTex = ImportTextureToAsset(GlossPath, Settings.PackagePath, TexAssetName);
+		if (GlossTex && Settings.GlossMode == TEXT("InvertToRoughness"))
+		{
+			UMaterialExpressionTextureSample* Sample = CreateTextureSampleNode(Material, GlossTex, TEXT("Roughness"));
+			if (Sample)
+			{
+				// Add OneMinus node to invert glossiness to roughness
+				UMaterialExpressionOneMinus* OneMinus = NewObject<UMaterialExpressionOneMinus>(Material);
+				OneMinus->Input.Connect(0, Sample);
+				Material->GetExpressionCollection().AddExpression(OneMinus);
+				ConnectToMaterialInput(Material, OneMinus, TEXT("Roughness"), Settings.TargetMode);
+				Notes.Add(TEXT("Glossiness inverted to Roughness"));
+			}
+		}
+		else if (GlossTex && Settings.GlossMode == TEXT("UseDirectly"))
+		{
+			UMaterialExpressionTextureSample* Sample = CreateTextureSampleNode(Material, GlossTex, TEXT("Roughness"));
+			if (Sample)
+			{
+				ConnectToMaterialInput(Material, Sample, TEXT("Roughness"), Settings.TargetMode);
+				Notes.Add(TEXT("Glossiness used directly as Roughness (no inversion)"));
+			}
+		}
+	}
+
+	// Material layout
+	Material->PreEditChange(nullptr);
+	Material->PostEditChange();
+
+	// Register and save
+	FAssetRegistryModule::AssetCreated(Material);
+	Package->SetDirtyFlag(true);
+
+	// Save package
+	TArray<UPackage*> PackagesToSave = { Package };
+	UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, true);
+
+	OutNotes = FString::Join(Notes, TEXT("; "));
+	return Material;
 }

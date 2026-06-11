@@ -39,6 +39,11 @@ FString FPBRDownloadManager::GetMaterialLibraryDir() const
 	return MaterialLibraryDir;
 }
 
+void FPBRDownloadManager::SetDeleteNonImageFilesAfterExtract(bool bInDelete)
+{
+	bDeleteNonImageFilesAfterExtract = bInDelete;
+}
+
 int32 FPBRDownloadManager::AddToQueue(const FString& URL, const FString& Name, const FString& Source)
 {
 	for (const FPBRDownloadEntry& E : Queue)
@@ -78,6 +83,57 @@ void FPBRDownloadManager::RemoveFromQueue(int32 Index)
 		Queue.RemoveAt(Index);
 		OnQueueChanged.ExecuteIfBound();
 	}
+}
+
+bool FPBRDownloadManager::RenameQueueEntry(int32 Index, const FString& NewName, FString& OutMessage)
+{
+	if (Index < 0 || Index >= Queue.Num())
+	{
+		OutMessage = TEXT("没有选中下载项");
+		return false;
+	}
+
+	FString CleanName = NewName.TrimStartAndEnd();
+	const TCHAR* InvalidChars = TEXT("\\/:*?\"<>|");
+	for (int32 i = 0; InvalidChars[i] != 0; ++i)
+	{
+		CleanName.ReplaceCharInline(InvalidChars[i], TEXT('_'));
+	}
+	if (CleanName.IsEmpty())
+	{
+		OutMessage = TEXT("名称不能为空");
+		return false;
+	}
+
+	FPBRDownloadEntry& Entry = Queue[Index];
+	const FString OldDirectory = Entry.TargetDirectory;
+	Entry.Name = CleanName;
+
+	if (!OldDirectory.IsEmpty() && FPaths::DirectoryExists(OldDirectory) && FPaths::IsUnderDirectory(OldDirectory, MaterialLibraryDir))
+	{
+		const FString NewDirectory = MakeMaterialFolderFromName(CleanName);
+		if (!NewDirectory.Equals(OldDirectory, ESearchCase::IgnoreCase))
+		{
+			if (IFileManager::Get().Move(*NewDirectory, *OldDirectory, false, true))
+			{
+				Entry.TargetDirectory = NewDirectory;
+				if (!Entry.DownloadedFile.IsEmpty() && FPaths::IsUnderDirectory(Entry.DownloadedFile, OldDirectory))
+				{
+					Entry.DownloadedFile = Entry.DownloadedFile.Replace(*OldDirectory, *NewDirectory, ESearchCase::IgnoreCase);
+				}
+			}
+			else
+			{
+				OutMessage = TEXT("重命名文件夹失败，已只更新队列名称");
+				OnQueueChanged.ExecuteIfBound();
+				return false;
+			}
+		}
+	}
+
+	OutMessage = TEXT("已重命名");
+	OnQueueChanged.ExecuteIfBound();
+	return true;
 }
 
 void FPBRDownloadManager::ClearQueue()
@@ -349,20 +405,13 @@ void FPBRDownloadManager::ExtractZipIfNeeded(int32 Index)
 	if (bExtracted)
 	{
 		NormalizeExtractedMaterialFolder(Entry.TargetDirectory, Message);
-		Entry.Name = FPaths::GetCleanFilename(Entry.TargetDirectory);
+		CleanupExtractedMaterialFolder(Entry.TargetDirectory, Message);
 		Entry.Status = TEXT("已解压");
 		Entry.DetailStatus = Message;
 		if (FPaths::FileExists(Entry.DownloadedFile))
 		{
 			IFileManager::Get().Delete(*Entry.DownloadedFile, false, true);
 			Entry.DownloadedFile.Empty();
-		}
-		RemoveSourceFolder(Index);
-		if (bCleanNonImage)
-		{
-			CleanNonImageContent(Entry.TargetDirectory);
-			Message += TEXT(" | 已清理非图片文件");
-			Entry.DetailStatus = Message;
 		}
 	}
 	else
@@ -512,6 +561,15 @@ static void DeleteKnownJunkExtractFiles(const FString& Folder)
 	}
 }
 
+static bool IsPBRImageFile(const FString& FilePath)
+{
+	const FString Ext = FPaths::GetExtension(FilePath, true).ToLower();
+	return Ext == TEXT(".png") || Ext == TEXT(".jpg") || Ext == TEXT(".jpeg") ||
+		Ext == TEXT(".tga") || Ext == TEXT(".exr") || Ext == TEXT(".hdr") ||
+		Ext == TEXT(".tif") || Ext == TEXT(".tiff") || Ext == TEXT(".bmp") ||
+		Ext == TEXT(".webp");
+}
+
 void FPBRDownloadManager::NormalizeExtractedMaterialFolder(const FString& Folder, FString& InOutMessage) const
 {
 	if (!FPaths::DirectoryExists(Folder))
@@ -578,6 +636,45 @@ void FPBRDownloadManager::NormalizeExtractedMaterialFolder(const FString& Folder
 	if (bFlattened)
 	{
 		InOutMessage += TEXT(" | Normalized nested folders");
+	}
+}
+
+void FPBRDownloadManager::CleanupExtractedMaterialFolder(const FString& Folder, FString& InOutMessage) const
+{
+	const FString SourceFolder = FPaths::Combine(Folder, TEXT("_source"));
+	if (FPaths::DirectoryExists(SourceFolder))
+	{
+		IFileManager::Get().DeleteDirectory(*SourceFolder, false, true);
+		InOutMessage += TEXT(" | 已删除_source");
+	}
+
+	if (!bDeleteNonImageFilesAfterExtract)
+	{
+		return;
+	}
+
+	int32 DeletedNonImages = 0;
+	TArray<FString> Files;
+	IFileManager::Get().FindFilesRecursive(Files, *Folder, TEXT("*.*"), true, false);
+	for (const FString& File : Files)
+	{
+		if (IsPBRImageFile(File))
+		{
+			continue;
+		}
+		if (FPaths::IsUnderDirectory(File, SourceFolder))
+		{
+			continue;
+		}
+		if (IFileManager::Get().Delete(*File, false, true))
+		{
+			++DeletedNonImages;
+		}
+	}
+
+	if (DeletedNonImages > 0)
+	{
+		InOutMessage += FString::Printf(TEXT(" | 已删除%d个非图片文件"), DeletedNonImages);
 	}
 }
 
@@ -713,59 +810,6 @@ bool FPBRDownloadManager::ImportLocalArchiveToLibrary(const FString& ArchivePath
 	OutMessage = Queue[Index].DetailStatus;
 	OnQueueChanged.ExecuteIfBound();
 	return true;
-}
-
-void FPBRDownloadManager::RenameEntry(int32 Index, const FString& NewName)
-{
-	if (Index < 0 || Index >= Queue.Num() || NewName.IsEmpty()) return;
-
-	FPBRDownloadEntry& Entry = Queue[Index];
-	const FString OldName = Entry.Name;
-	Entry.Name = NewName;
-
-	// Rename folder on disk if TargetDirectory exists and its basename matches the old name
-	const FString OldDir = Entry.TargetDirectory;
-	if (FPaths::DirectoryExists(OldDir) && FPaths::GetCleanFilename(OldDir) == OldName)
-	{
-		const FString ParentDir = FPaths::GetPath(OldDir);
-		const FString NewDir = FPaths::Combine(ParentDir, NewName);
-		if (!FPaths::DirectoryExists(NewDir))
-		{
-			IFileManager::Get().Move(*NewDir, *OldDir, true, true);
-			Entry.TargetDirectory = NewDir;
-		}
-	}
-
-	OnQueueChanged.ExecuteIfBound();
-}
-
-void FPBRDownloadManager::RemoveSourceFolder(int32 Index)
-{
-	if (Index < 0 || Index >= Queue.Num()) return;
-	const FString SourceDir = FPaths::Combine(Queue[Index].TargetDirectory, TEXT("_source"));
-	if (FPaths::DirectoryExists(SourceDir))
-	{
-		IFileManager::Get().DeleteDirectory(*SourceDir, false, true);
-	}
-}
-
-void FPBRDownloadManager::CleanNonImageContent(const FString& TargetDir)
-{
-	if (!FPaths::DirectoryExists(TargetDir)) return;
-
-	TArray<FString> Files;
-	IFileManager::Get().FindFilesRecursive(Files, *TargetDir, TEXT("*.*"), true, false);
-	for (const FString& File : Files)
-	{
-		const FString Ext = FPaths::GetExtension(File, true).ToLower();
-		if (Ext != TEXT(".png") && Ext != TEXT(".jpg") && Ext != TEXT(".jpeg") &&
-			Ext != TEXT(".tga") && Ext != TEXT(".exr") && Ext != TEXT(".tif") &&
-			Ext != TEXT(".tiff") && Ext != TEXT(".bmp") && Ext != TEXT(".hdr") &&
-			Ext != TEXT(".webp"))
-		{
-			IFileManager::Get().Delete(*File, false, true);
-		}
-	}
 }
 
 void FPBRDownloadManager::LoadSites()

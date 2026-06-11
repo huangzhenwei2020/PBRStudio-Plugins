@@ -10,10 +10,12 @@ class PBRSTUDIO_API FPBRMaterialTemplateManager
 {
 public:
 	static FString GetTemplatePackagePath(EPBRMaterialType MaterialType);
+	static FString GetExampleMaterialInstancePackagePath(EPBRMaterialType MaterialType);
 	static UMaterial* EnsureTemplateMaterial(EPBRMaterialType MaterialType, FString& OutMessage);
 	static int32 EnsureAllTemplateMaterials(TArray<FString>& OutMessages);
 	static int32 EnsureSpecialTemplateMaterials(TArray<FString>& OutMessages);
 	static UMaterialInstanceConstant* EnsureExampleMaterialInstance(EPBRMaterialType MaterialType, FString& OutMessage);
+	static const TArray<FString>& GetSpecialMaterialAssetNames();
 
 private:
 	static FString GetTemplateAssetName(EPBRMaterialType MaterialType);

@@ -5,6 +5,7 @@
 #include "Services/PBRMaterialInstanceFactory.h"
 #include "Services/PBRMaterialTemplateManager.h"
 
+#include "AssetThumbnail.h"
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Components/PrimitiveComponent.h"
@@ -14,8 +15,10 @@
 #include "Engine/Selection.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/Layout/SSplitter.h"
 #include "Widgets/Layout/SSpacer.h"
 #include "Widgets/Layout/SBorder.h"
@@ -28,12 +31,13 @@
 #include "Widgets/Views/SListView.h"
 #include "Widgets/Views/STileView.h"
 #include "Widgets/Views/STableRow.h"
+#include "Widgets/Notifications/SProgressBar.h"
+#include "Widgets/SWindow.h"
 #include "Misc/MessageDialog.h"
 #include "Brushes/SlateDynamicImageBrush.h"
 #include "DesktopPlatformModule.h"
 #include "IDesktopPlatform.h"
 #include "Framework/Application/SlateApplication.h"
-#include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "IImageWrapper.h"
 #include "IImageWrapperModule.h"
 #include "Modules/ModuleManager.h"
@@ -42,11 +46,41 @@
 #include "Misc/Paths.h"
 #include "Misc/PackageName.h"
 #include "Misc/ScopedSlowTask.h"
+#include "Materials/MaterialInterface.h"
 
 #define LOCTEXT_NAMESPACE "SPBRTextureSuiteTab"
 
 const FString SPBRTextureSuiteTab::ConfigFileName = TEXT("TextureSuiteConfig.json");
 const FString SPBRTextureSuiteTab::CacheFileName = TEXT("TextureSuiteLastList.json");
+
+static bool IsPBRTextureFile(const FString& FilePath)
+{
+	const FString Ext = FPaths::GetExtension(FilePath).ToLower();
+	return Ext == TEXT("png") || Ext == TEXT("jpg") || Ext == TEXT("jpeg") || Ext == TEXT("tif") ||
+		Ext == TEXT("tiff") || Ext == TEXT("exr") || Ext == TEXT("hdr") || Ext == TEXT("tga") ||
+		Ext == TEXT("webp") || Ext == TEXT("bmp");
+}
+
+static void AddPBRManualFile(TArray<FString>& Files, const FString& FilePath)
+{
+	if (!FilePath.IsEmpty() && FPaths::FileExists(FilePath))
+	{
+		Files.AddUnique(FilePath);
+	}
+}
+
+static FPBRMaterialCreateOptions BuildTextureSuiteExistingOptions(const FPBRMaterialSet& Set, const FPBRMaterialFactory::FCreateSettings& Settings)
+{
+	FPBRMaterialCreateOptions Options;
+	Options.PackageRoot = Settings.PackagePath;
+	Options.MaterialInstancePrefix = Settings.MaterialPrefix.StartsWith(TEXT("M_"))
+		? Settings.MaterialPrefix.Replace(TEXT("M_"), TEXT("MI_"))
+		: Settings.MaterialPrefix;
+	Options.MaterialType = FPBRMaterialFactory::ResolveMaterialTypeForSet(Set, Settings.MaterialTypeMode);
+	Options.bCreateIsolatedMaterialFolder = true;
+	Options.NormalPreference = Settings.NormalPreference;
+	return Options;
+}
 
 DECLARE_DELEGATE_TwoParams(FPBROnBoxSelectRange, const FVector2D&, const FVector2D&);
 
@@ -157,6 +191,7 @@ private:
 void SPBRTextureSuiteTab::Construct(const FArguments& InArgs)
 {
 	OnCompactModeChanged = InArgs._OnCompactModeChanged;
+	ThumbnailPool = MakeShared<FAssetThumbnailPool>(64);
 	MaterialTypeOptions = {
 		MakeShared<FString>(TEXT("自动")),
 		MakeShared<FString>(TEXT("标准")),
@@ -181,6 +216,15 @@ void SPBRTextureSuiteTab::Construct(const FArguments& InArgs)
 	};
 	SelectedNormalModeOption = NormalModeOptions[0];
 	SelectedNormalMode = *SelectedNormalModeOption;
+	PBRChannelOptions.Reset();
+	for (const FString& Channel : FPBRTextureScanner::ChannelDisplayOrder)
+	{
+		if (Channel != TEXT("Unknown"))
+		{
+			PBRChannelOptions.Add(MakeShared<FString>(Channel));
+		}
+	}
+	PBRChannelOptions.Add(MakeShared<FString>(TEXT("不使用")));
 
 	ChildSlot
 	[
@@ -206,14 +250,7 @@ void SPBRTextureSuiteTab::Construct(const FArguments& InArgs)
 			[
 				SNew(SHorizontalBox)
 				.Visibility(this, &SPBRTextureSuiteTab::GetStandardControlsVisibility)
-				+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.Padding(0, 0, 24, 0)
-				[
-					SNew(SButton)
-					.Text(LOCTEXT("CreateSpecialParents", "一键创建特殊材质"))
-					.OnClicked(this, &SPBRTextureSuiteTab::OnCreateSpecialMaterials)
-				]
+
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
 				.VAlign(VAlign_Center)
@@ -396,6 +433,32 @@ void SPBRTextureSuiteTab::Construct(const FArguments& InArgs)
 			.AutoHeight()
 			.Padding(8, 0, 8, 4)
 			[
+				SNew(SHorizontalBox)
+				.Visibility(this, &SPBRTextureSuiteTab::GetStandardControlsVisibility)
+				+ SHorizontalBox::Slot()
+				.FillWidth(0.42f)
+				.VAlign(VAlign_Center)
+				.Padding(0, 0, 8, 0)
+				[
+					SAssignNew(CreateProgressBar, SProgressBar)
+					.Percent_Lambda([this]() -> TOptional<float>
+					{
+						return CreateProgress;
+					})
+				]
+				+ SHorizontalBox::Slot()
+				.FillWidth(0.58f)
+				.VAlign(VAlign_Center)
+				[
+					SAssignNew(CreateProgressText, STextBlock)
+					.Text(LOCTEXT("CreateProgressReady", "创建进度：就绪"))
+				]
+			]
+
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(8, 0, 8, 4)
+			[
 				SAssignNew(MaterialTypeHelpText, STextBlock)
 				.Visibility(this, &SPBRTextureSuiteTab::GetStandardControlsVisibility)
 				.Text(FText::FromString(GetMaterialTypeDescription(SelectedMaterialTypeMode)))
@@ -456,8 +519,38 @@ void SPBRTextureSuiteTab::Construct(const FArguments& InArgs)
 				.Padding(0, 0, 24, 0)
 				[
 					SNew(SButton)
+					.Text(LOCTEXT("ManualMapping", "手动通道"))
+					.OnClicked_Lambda([this]()
+					{
+						OnManualMapping();
+						return FReply::Handled();
+					})
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.Padding(0, 0, 24, 0)
+				[
+					SNew(SButton)
 					.Text(LOCTEXT("CreateAllParents", "一键创建母材质"))
 					.OnClicked(this, &SPBRTextureSuiteTab::OnCreateAllParentMaterials)
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.Padding(0, 0, 8, 0)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("OpenCurrentParent", "定位母材质"))
+					.ToolTipText(LOCTEXT("OpenCurrentParentTip", "在内容浏览器中定位当前母材质类型对应的母材质。自动模式会优先使用当前选中的套件判断类型。"))
+					.OnClicked(this, &SPBRTextureSuiteTab::OnOpenCurrentParentMaterial)
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.Padding(0, 0, 24, 0)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("OpenCurrentExample", "定位示例材质"))
+					.ToolTipText(LOCTEXT("OpenCurrentExampleTip", "在内容浏览器中定位当前母材质类型对应的示例材质实例。"))
+					.OnClicked(this, &SPBRTextureSuiteTab::OnOpenCurrentExampleMaterial)
 				]
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
@@ -620,8 +713,8 @@ void SPBRTextureSuiteTab::Construct(const FArguments& InArgs)
 							.ListItemsSource(&MaterialSets)
 							.OnGenerateRow(this, &SPBRTextureSuiteTab::OnGenerateRow)
 							.OnSelectionChanged(this, &SPBRTextureSuiteTab::OnSelectionChanged)
+							.OnContextMenuOpening(this, &SPBRTextureSuiteTab::MakeMaterialSetContextMenu)
 							.SelectionMode(ESelectionMode::Multi)
-							.OnContextMenuOpening(this, &SPBRTextureSuiteTab::OnMaterialSetContextMenuOpening)
 							.ClearSelectionOnClick(false)
 							.HeaderRow(BuildHeaderRow())
 						]
@@ -633,6 +726,7 @@ void SPBRTextureSuiteTab::Construct(const FArguments& InArgs)
 						.ListItemsSource(&MaterialSets)
 						.OnGenerateTile(this, &SPBRTextureSuiteTab::OnGenerateTile)
 						.OnSelectionChanged(this, &SPBRTextureSuiteTab::OnSelectionChanged)
+						.OnContextMenuOpening(this, &SPBRTextureSuiteTab::MakeMaterialSetContextMenu)
 						.SelectionMode(ESelectionMode::Multi)
 						.ClearSelectionOnClick(false)
 						.ItemWidth(100.0f)
@@ -830,12 +924,14 @@ FReply SPBRTextureSuiteTab::OnScanFolder()
 	{
 		TSharedPtr<FPBRMaterialSet> NewSet = MakeShareable(new FPBRMaterialSet(S));
 
-		FPBRMaterialCreateOptions ExistingOptions;
-		ExistingOptions.PackageRoot = TEXT("/Game/Materials/PBR/");
-		ExistingOptions.MaterialInstancePrefix = PrefixBox.IsValid() && PrefixBox->GetText().ToString().StartsWith(TEXT("M_"))
-			? PrefixBox->GetText().ToString().Replace(TEXT("M_"), TEXT("MI_"))
-			: (PrefixBox.IsValid() ? PrefixBox->GetText().ToString() : TEXT("MI_"));
-		ExistingOptions.bCreateIsolatedMaterialFolder = true;
+		FPBRMaterialFactory::FCreateSettings ExistingCreateSettings;
+		if (PrefixBox.IsValid())
+		{
+			ExistingCreateSettings.MaterialPrefix = PrefixBox->GetText().ToString();
+		}
+		ExistingCreateSettings.MaterialTypeMode = SelectedMaterialTypeMode;
+		ExistingCreateSettings.NormalPreference = SelectedNormalMode;
+		FPBRMaterialCreateOptions ExistingOptions = BuildTextureSuiteExistingOptions(*NewSet, ExistingCreateSettings);
 
 		FString ExistingPath;
 		if (UMaterialInterface* ExistingMaterial = FPBRMaterialInstanceFactory::FindExistingMaterialInstance(*NewSet, ExistingOptions, ExistingPath))
@@ -930,6 +1026,30 @@ FReply SPBRTextureSuiteTab::OnToggleCompactMode()
 	SavePersistedState();
 	RefreshMaterialSetList();
 	return FReply::Handled();
+}
+
+FReply SPBRTextureSuiteTab::ToggleCompactModeFromGlobal()
+{
+	return OnToggleCompactMode();
+}
+
+void SPBRTextureSuiteTab::SetCompactModeFromGlobal(bool bInCompactMode)
+{
+	if (bCompactMode == bInCompactMode)
+	{
+		return;
+	}
+	bCompactMode = bInCompactMode;
+	if (bCompactMode)
+	{
+		bGridViewMode = true;
+	}
+	if (OnCompactModeChanged.IsBound())
+	{
+		OnCompactModeChanged.Execute(bCompactMode);
+	}
+	SavePersistedState();
+	RefreshMaterialSetList();
 }
 
 EVisibility SPBRTextureSuiteTab::GetStandardControlsVisibility() const
@@ -1057,6 +1177,24 @@ FReply SPBRTextureSuiteTab::OnCreateAllParentMaterials()
 	return FReply::Handled();
 }
 
+FReply SPBRTextureSuiteTab::OnOpenCurrentParentMaterial()
+{
+	const EPBRMaterialType MaterialType = ResolveCurrentTemplateType();
+	FString Message;
+	FPBRMaterialTemplateManager::EnsureTemplateMaterial(MaterialType, Message);
+	SyncBrowserToAsset(FPBRMaterialTemplateManager::GetTemplatePackagePath(MaterialType));
+	return FReply::Handled();
+}
+
+FReply SPBRTextureSuiteTab::OnOpenCurrentExampleMaterial()
+{
+	const EPBRMaterialType MaterialType = ResolveCurrentTemplateType();
+	FString Message;
+	FPBRMaterialTemplateManager::EnsureExampleMaterialInstance(MaterialType, Message);
+	SyncBrowserToAsset(FPBRMaterialTemplateManager::GetExampleMaterialInstancePackagePath(MaterialType));
+	return FReply::Handled();
+}
+
 FReply SPBRTextureSuiteTab::OnCreateSpecialMaterials()
 {
 	TArray<FString> Messages;
@@ -1080,6 +1218,7 @@ static bool IsManagedPBRAssetClass(const FAssetData& Asset)
 	return ClassName == TEXT("MaterialInstanceConstant") ||
 		ClassName == TEXT("Material") ||
 		ClassName == TEXT("MaterialInstance") ||
+		ClassName == TEXT("MaterialFunction") ||
 		ClassName == TEXT("Texture2D");
 }
 
@@ -1093,9 +1232,29 @@ static bool IsPBRStudioGeneratedAsset(const FAssetData& Asset)
 	const FString PackageName = Asset.PackageName.ToString();
 	const FString AssetName = Asset.AssetName.ToString();
 
+	if (PackageName.StartsWith(TEXT("/Game/PBRStudio/SceneReplaced/")))
+	{
+		return true;
+	}
+
+	if (PackageName.StartsWith(TEXT("/Game/PBRStudio/Substrate/")))
+	{
+		return AssetName.StartsWith(TEXT("M_PBR_Substrate_")) ||
+			AssetName.StartsWith(TEXT("MI_示例_Substrate_")) ||
+			AssetName.StartsWith(TEXT("MF_PBRStudio_Substrate_")) ||
+			AssetName.StartsWith(TEXT("T_"));
+	}
+
+	if (PackageName.StartsWith(TEXT("/Game/PBRStudio/Functions/")))
+	{
+		return AssetName.StartsWith(TEXT("MF_PBRStudio_"));
+	}
+
 	if (PackageName.StartsWith(TEXT("/Game/PBRStudio/Templates/")))
 	{
-		return AssetName.StartsWith(TEXT("M_PBR_")) || AssetName.StartsWith(TEXT("MI_")) || AssetName.StartsWith(TEXT("T_Demo_"));
+		return AssetName.StartsWith(TEXT("M_PBR_")) ||
+			AssetName.StartsWith(TEXT("MI_示例_")) ||
+			AssetName.StartsWith(TEXT("T_Demo_"));
 	}
 
 	if (PackageName.StartsWith(TEXT("/Game/PBRStudio/SpecialMaterials/Examples/")))
@@ -1116,6 +1275,13 @@ static bool IsPBRStudioGeneratedAsset(const FAssetData& Asset)
 	}
 
 	return false;
+}
+
+static bool IsPBRStudioExampleAssetPackage(const FString& PackageName)
+{
+	return PackageName.StartsWith(TEXT("/Game/PBRStudio/SpecialMaterials/Examples/")) ||
+		PackageName.StartsWith(TEXT("/Game/PBRStudio/Templates/Examples/")) ||
+		PackageName.StartsWith(TEXT("/Game/PBRStudio/Substrate/Examples/"));
 }
 
 static void CollectMaterialReferencesFromWorld(UWorld* World, TSet<FString>& OutReferencedMaterialPaths)
@@ -1165,7 +1331,11 @@ FReply SPBRTextureSuiteTab::OnDeleteUnusedCreatedAssets()
 
 	const TArray<FString> ManagedRoots = {
 		TEXT("/Game/Materials/PBR"),
-		TEXT("/Game/PBRStudio")
+		TEXT("/Game/PBRStudio/SceneReplaced"),
+		TEXT("/Game/PBRStudio/Templates"),
+		TEXT("/Game/PBRStudio/Functions"),
+		TEXT("/Game/PBRStudio/SpecialMaterials"),
+		TEXT("/Game/PBRStudio/Substrate")
 	};
 
 	TSet<FString> ReferencedMaterials;
@@ -1197,7 +1367,7 @@ FReply SPBRTextureSuiteTab::OnDeleteUnusedCreatedAssets()
 	}
 
 	FScopedSlowTask SlowTask(
-		static_cast<float>(FMath::Max(ManagedAssets.Num() * 3, 1)),
+		static_cast<float>(FMath::Max(ManagedAssets.Num() * 2, 1)),
 		FText::FromString(TEXT("正在清理未使用的 PBRStudio 资源...")));
 	SlowTask.MakeDialog(true);
 
@@ -1210,6 +1380,28 @@ FReply SPBRTextureSuiteTab::OnDeleteUnusedCreatedAssets()
 		{
 			PackagesToKeep.Add(ReferencedPackage);
 			PackagesToVisit.Add(ReferencedPackage);
+		}
+	}
+
+	for (const FAssetData& Asset : ManagedAssets)
+	{
+		const FString PackageName = Asset.PackageName.ToString();
+		TArray<FName> Referencers;
+		AssetRegistry.GetReferencers(FName(*PackageName), Referencers, UE::AssetRegistry::EDependencyCategory::Package);
+		for (const FName& Referencer : Referencers)
+		{
+			const FString ReferencerPackage = Referencer.ToString();
+			if (ReferencerPackage == PackageName || ManagedAssetsByPackage.Contains(ReferencerPackage))
+			{
+				continue;
+			}
+
+			if (ReferencerPackage.StartsWith(TEXT("/Game/")) || ReferencerPackage.StartsWith(TEXT("/Plugin/")))
+			{
+				PackagesToKeep.Add(PackageName);
+				PackagesToVisit.Add(PackageName);
+				break;
+			}
 		}
 	}
 
@@ -1228,6 +1420,10 @@ FReply SPBRTextureSuiteTab::OnDeleteUnusedCreatedAssets()
 		for (const FName& Dependency : Dependencies)
 		{
 			const FString DependencyPackage = Dependency.ToString();
+			if (IsPBRStudioExampleAssetPackage(DependencyPackage))
+			{
+				continue;
+			}
 			if (ManagedAssetsByPackage.Contains(DependencyPackage) && !PackagesToKeep.Contains(DependencyPackage))
 			{
 				PackagesToKeep.Add(DependencyPackage);
@@ -1261,40 +1457,6 @@ FReply SPBRTextureSuiteTab::OnDeleteUnusedCreatedAssets()
 			DeletedPackages.Add(PackageName);
 			DeletedAssets.Add(AssetPath);
 		}
-	}
-
-	// Second pass: clean up orphan material instances whose parent/reference was deleted
-	{
-		bool bFoundOrphan;
-		do
-		{
-			bFoundOrphan = false;
-			for (const FAssetData& Asset : ManagedAssets)
-			{
-				const FString PackageName = Asset.PackageName.ToString();
-				if (!PackagesToKeep.Contains(PackageName)) continue;
-				if (DeletedPackages.Contains(PackageName)) continue;
-
-				TArray<FName> Dependencies;
-				AssetRegistry.GetDependencies(FName(*PackageName), Dependencies, UE::AssetRegistry::EDependencyCategory::Package);
-				for (const FName& Dep : Dependencies)
-				{
-					if (DeletedPackages.Contains(Dep.ToString()))
-					{
-						const FString AssetPath = Asset.GetObjectPathString();
-						SlowTask.EnterProgressFrame(0.5f, FText::FromString(FString::Printf(TEXT("正在删除孤立资源：%s"), *Asset.AssetName.ToString())));
-						EmptyFolderCandidates.Add(FPackageName::GetLongPackagePath(PackageName));
-						if (UEditorAssetLibrary::DeleteAsset(AssetPath))
-						{
-							DeletedPackages.Add(PackageName);
-							DeletedAssets.Add(AssetPath);
-							bFoundOrphan = true;
-						}
-						break;
-					}
-				}
-			}
-		} while (bFoundOrphan);
 	}
 
 	EmptyFolderCandidates.Sort();
@@ -1352,6 +1514,8 @@ void SPBRTextureSuiteTab::OnCreateMaterials(const FString& Scope)
 	Settings.NormalPreference = SelectedNormalMode;
 
 	int32 Created = 0;
+	int32 ExistingCount = 0;
+	int32 FailedCount = 0;
 	TArray<TSharedPtr<FPBRMaterialSet>> ToCreate;
 
 	if (Scope == TEXT("selected"))
@@ -1374,8 +1538,40 @@ void SPBRTextureSuiteTab::OnCreateMaterials(const FString& Scope)
 		ToCreate = MaterialSets;
 	}
 
-	for (TSharedPtr<FPBRMaterialSet>& Set : ToCreate)
+	FScopedSlowTask SlowTask(
+		static_cast<float>(FMath::Max(ToCreate.Num(), 1)),
+		FText::FromString(TEXT("正在创建贴图套件材质...")));
+	SlowTask.MakeDialog(true);
+	CreateProgress = 0.0f;
+	if (CreateProgressText.IsValid())
 	{
+		CreateProgressText->SetText(FText::FromString(FString::Printf(TEXT("创建进度：0 / %d"), ToCreate.Num())));
+	}
+
+	for (int32 Index = 0; Index < ToCreate.Num(); ++Index)
+	{
+		TSharedPtr<FPBRMaterialSet>& Set = ToCreate[Index];
+		if (SlowTask.ShouldCancel())
+		{
+			break;
+		}
+		SlowTask.EnterProgressFrame(1.0f, FText::FromString(Set.IsValid()
+			? FString::Printf(TEXT("正在处理：%s"), *Set->Name)
+			: TEXT("正在处理贴图套件...")));
+		CreateProgress = ToCreate.Num() > 0 ? static_cast<float>(Index) / static_cast<float>(ToCreate.Num()) : 0.0f;
+		if (CreateProgressText.IsValid())
+		{
+			CreateProgressText->SetText(FText::FromString(FString::Printf(TEXT("创建进度：%d / %d"), Index, ToCreate.Num())));
+		}
+		if (CreateProgressBar.IsValid())
+		{
+			CreateProgressBar->Invalidate(EInvalidateWidgetReason::Paint);
+		}
+		if (FSlateApplication::IsInitialized())
+		{
+			FSlateApplication::Get().Tick();
+		}
+
 		if (Set.IsValid() && Set->Channels.Num() > 0)
 		{
 			FString Notes;
@@ -1383,11 +1579,12 @@ void SPBRTextureSuiteTab::OnCreateMaterials(const FString& Scope)
 			const EPBRMaterialType ResolvedType = FPBRMaterialFactory::ResolveMaterialTypeForSet(*Set, Settings.MaterialTypeMode);
 			TArray<FString> UnusedChannels;
 			FPBRMaterialFactory::GetUnusedChannelsForMaterialType(*Set, ResolvedType, UnusedChannels);
-			if (ResolvedType != EPBRMaterialType::Standard && UnusedChannels.Num() > 0 && bAutoStandardWhenChannelsUnused)
+			const bool bHasOpacityChannel = Set->Channels.Contains(FPBRChannels::Opacity.ToString());
+			if (ResolvedType != EPBRMaterialType::Standard && UnusedChannels.Num() > 0 && bAutoStandardWhenChannelsUnused && !bHasOpacityChannel)
 			{
 				EffectiveSettings.MaterialTypeMode = TEXT("Standard");
 			}
-			if (ResolvedType != EPBRMaterialType::Standard && UnusedChannels.Num() > 0 && !bAutoStandardWhenChannelsUnused)
+			if (ResolvedType != EPBRMaterialType::Standard && UnusedChannels.Num() > 0 && !bAutoStandardWhenChannelsUnused && !bHasOpacityChannel)
 			{
 				const FString Prompt = FString::Printf(
 					TEXT("%s 当前母材质可能不会使用这些贴图：%s\n\n是否改用标准母材质，尽量把贴图全部用上？"),
@@ -1398,6 +1595,16 @@ void SPBRTextureSuiteTab::OnCreateMaterials(const FString& Scope)
 				{
 					EffectiveSettings.MaterialTypeMode = TEXT("Standard");
 				}
+			}
+
+			FPBRMaterialCreateOptions ExistingOptions = BuildTextureSuiteExistingOptions(*Set, EffectiveSettings);
+			FString ExistingPath;
+			if (UMaterialInterface* ExistingMaterial = FPBRMaterialInstanceFactory::FindExistingMaterialInstance(*Set, ExistingOptions, ExistingPath))
+			{
+				Set->CreatedMaterial = ExistingMaterial;
+				Set->Status = TEXT("已存在，直接使用已有材质实例");
+				ExistingCount++;
+				continue;
 			}
 
 			UMaterialInterface* Mat = FPBRMaterialFactory::CreateMaterialFromPBRSet(*Set, EffectiveSettings, Notes);
@@ -1414,12 +1621,23 @@ void SPBRTextureSuiteTab::OnCreateMaterials(const FString& Scope)
 				Set->Status = Notes.StartsWith(TEXT("重复"))
 					? Notes
 					: FString::Printf(TEXT("失败: %s"), *Notes);
+				FailedCount++;
 			}
 		}
 		else if (Set.IsValid())
 		{
 			Set->Status = TEXT("跳过: 没有可用贴图通道");
+			FailedCount++;
 		}
+	}
+	CreateProgress = 1.0f;
+	if (CreateProgressText.IsValid())
+	{
+		CreateProgressText->SetText(FText::FromString(FString::Printf(TEXT("创建完成：新建 %d，已存在 %d，失败/跳过 %d"), Created, ExistingCount, FailedCount)));
+	}
+	if (CreateProgressBar.IsValid())
+	{
+		CreateProgressBar->Invalidate(EInvalidateWidgetReason::Paint);
 	}
 
 	RefreshMaterialSetList();
@@ -1428,7 +1646,267 @@ void SPBRTextureSuiteTab::OnCreateMaterials(const FString& Scope)
 
 void SPBRTextureSuiteTab::OnManualMapping()
 {
-	// Placeholder for manual mapping dialog
+	const TArray<TSharedPtr<FPBRMaterialSet>> Selected = bGridViewMode && TileView.IsValid()
+		? TileView->GetSelectedItems()
+		: (TreeView.IsValid() ? TreeView->GetSelectedItems() : TArray<TSharedPtr<FPBRMaterialSet>>());
+	if (Selected.Num() == 0 || !Selected[0].IsValid())
+	{
+		return;
+	}
+	OnManualMappingForSet(Selected[0]);
+}
+
+TSharedRef<SWidget> SPBRTextureSuiteTab::GeneratePBRChannelOption(FStringOption Option) const
+{
+	return SNew(STextBlock).Text(FText::FromString(Option.IsValid() ? *Option : FString()));
+}
+
+TSharedRef<ITableRow> SPBRTextureSuiteTab::GenerateManualTextureRow(TSharedPtr<FPBRManualTextureChannelItem> TextureItem, const TSharedRef<STableViewBase>& Owner)
+{
+	return SNew(STableRow<TSharedPtr<FPBRManualTextureChannelItem>>, Owner)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(0.14f).Padding(4)
+			[
+				SNew(SBox)
+				.WidthOverride(48.0f)
+				.HeightOverride(48.0f)
+				[
+					SNew(SScaleBox)
+					.Stretch(EStretch::ScaleToFit)
+					.StretchDirection(EStretchDirection::DownOnly)
+					[
+						SNew(SImage)
+						.Image_Lambda([this, TextureItem]()
+						{
+							return TextureItem.IsValid() ? GetManualTextureBrush(TextureItem->FilePath) : FAppStyle::GetBrush("WhiteBrush");
+						})
+					]
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(0.52f).Padding(4)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(TextureItem.IsValid() ? FPaths::GetCleanFilename(TextureItem->FilePath) : FString()))
+				.ToolTipText(FText::FromString(TextureItem.IsValid() ? TextureItem->FilePath : FString()))
+			]
+			+ SHorizontalBox::Slot().FillWidth(0.34f).Padding(4)
+			[
+				SNew(SComboBox<FStringOption>)
+				.OptionsSource(&PBRChannelOptions)
+				.OnGenerateWidget(this, &SPBRTextureSuiteTab::GeneratePBRChannelOption)
+				.OnSelectionChanged(this, &SPBRTextureSuiteTab::OnPBRChannelSelected, TextureItem)
+				[
+					SNew(STextBlock)
+					.Text_Lambda([TextureItem]() { return FText::FromString(TextureItem.IsValid() ? TextureItem->Channel : FString()); })
+				]
+			]
+		];
+}
+
+void SPBRTextureSuiteTab::OnPBRChannelSelected(FStringOption Option, ESelectInfo::Type SelectInfo, TSharedPtr<FPBRManualTextureChannelItem> TextureItem)
+{
+	if (Option.IsValid() && TextureItem.IsValid())
+	{
+		TextureItem->Channel = *Option;
+	}
+}
+
+void SPBRTextureSuiteTab::ApplyManualTextureChannels(TSharedPtr<FPBRMaterialSet> Set)
+{
+	if (!Set.IsValid())
+	{
+		return;
+	}
+
+	Set->Channels.Reset();
+	Set->Duplicates.Reset();
+	Set->Unknown.Reset();
+	Set->PreviewPath.Empty();
+
+	for (const TSharedPtr<FPBRManualTextureChannelItem>& Row : ManualTextureRows)
+	{
+		if (!Row.IsValid() || Row->FilePath.IsEmpty() || Row->Channel == TEXT("不使用"))
+		{
+			continue;
+		}
+		if (Row->Channel == TEXT("Preview"))
+		{
+			if (Set->PreviewPath.IsEmpty())
+			{
+				Set->PreviewPath = Row->FilePath;
+			}
+			else
+			{
+				Set->Duplicates.Add(Row->FilePath);
+			}
+			continue;
+		}
+		if (Row->Channel == TEXT("Unknown"))
+		{
+			Set->Unknown.Add(Row->FilePath);
+			continue;
+		}
+		if (Set->Channels.Contains(Row->Channel))
+		{
+			Set->Duplicates.Add(Set->Channels[Row->Channel]);
+		}
+		Set->Channels.Add(Row->Channel, Row->FilePath);
+	}
+
+	if (Set->PreviewPath.IsEmpty())
+	{
+		if (const FString* BaseColorPath = Set->Channels.Find(TEXT("BaseColor")))
+		{
+			Set->PreviewPath = *BaseColorPath;
+		}
+	}
+	Set->Status = TEXT("手动通道");
+	SavePersistedState();
+	RefreshMaterialSetList();
+}
+
+const FSlateBrush* SPBRTextureSuiteTab::GetManualTextureBrush(const FString& ImagePath)
+{
+	if (ImagePath.IsEmpty() || !FPaths::FileExists(ImagePath))
+	{
+		return FAppStyle::GetBrush("WhiteBrush");
+	}
+
+	if (!PreviewBrushCache.Contains(ImagePath))
+	{
+		PreviewBrushCache.Add(
+			ImagePath,
+			MakeShared<FSlateDynamicImageBrush>(FName(*ImagePath), GetPreviewImageSize(ImagePath)));
+	}
+
+	const TSharedPtr<FSlateDynamicImageBrush>* Brush = PreviewBrushCache.Find(ImagePath);
+	return Brush && Brush->IsValid() ? Brush->Get() : FAppStyle::GetBrush("WhiteBrush");
+}
+
+FReply SPBRTextureSuiteTab::OnManualMappingForSet(TSharedPtr<FPBRMaterialSet> Set)
+{
+	if (!Set.IsValid())
+	{
+		return FReply::Handled();
+	}
+
+	TArray<FString> Files;
+	if (!Set->Folder.IsEmpty() && FPaths::DirectoryExists(Set->Folder))
+	{
+		IFileManager::Get().FindFilesRecursive(Files, *Set->Folder, TEXT("*.*"), true, false);
+		Files.RemoveAll([](const FString& File) { return !IsPBRTextureFile(File); });
+	}
+	for (const TPair<FString, FString>& Pair : Set->Channels)
+	{
+		AddPBRManualFile(Files, Pair.Value);
+	}
+	for (const FString& File : Set->Duplicates)
+	{
+		AddPBRManualFile(Files, File);
+	}
+	for (const FString& File : Set->Unknown)
+	{
+		AddPBRManualFile(Files, File);
+	}
+	AddPBRManualFile(Files, Set->PreviewPath);
+	Files.Sort();
+
+	ManualTextureRows.Reset();
+	for (const FString& File : Files)
+	{
+		TSharedPtr<FPBRManualTextureChannelItem> Row = MakeShared<FPBRManualTextureChannelItem>();
+		Row->FilePath = File;
+		Row->Channel = TEXT("不使用");
+		if (FPaths::IsSamePath(Set->PreviewPath, File))
+		{
+			Row->Channel = TEXT("Preview");
+		}
+		for (const TPair<FString, FString>& Pair : Set->Channels)
+		{
+			if (FPaths::IsSamePath(Pair.Value, File))
+			{
+				Row->Channel = Pair.Key;
+				break;
+			}
+		}
+		if (Row->Channel == TEXT("不使用") && Set->Unknown.ContainsByPredicate([&File](const FString& UnknownFile)
+		{
+			return FPaths::IsSamePath(UnknownFile, File);
+		}))
+		{
+			Row->Channel = TEXT("Unknown");
+		}
+		if (Row->Channel == TEXT("不使用"))
+		{
+			Row->Channel = FPBRTextureScanner::IsProbablePBRPreviewImage(File)
+				? TEXT("Preview")
+				: FPBRTextureScanner::DetectPBRChannelFromFilename(File);
+		}
+		ManualTextureRows.Add(Row);
+	}
+
+	if (ManualTextureRows.Num() == 0)
+	{
+		return FReply::Handled();
+	}
+
+	TSharedPtr<SListView<TSharedPtr<FPBRManualTextureChannelItem>>> ManualListView;
+	TSharedRef<SWindow> Window = SNew(SWindow)
+		.Title(FText::FromString(TEXT("手动修改 PBR 贴图通道")))
+		.ClientSize(FVector2D(820, 520))
+		.SupportsMaximize(false)
+		.SupportsMinimize(false);
+
+	Window->SetContent(
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(12, 10, 12, 6)
+		[
+			SNew(STextBlock)
+			.Text(FText::FromString(FString::Printf(TEXT("材质: %s    文件夹: %s"), *Set->Name, *Set->Folder)))
+			.AutoWrapText(true)
+		]
+		+ SVerticalBox::Slot().FillHeight(1.0f).Padding(12, 4)
+		[
+			SAssignNew(ManualListView, SListView<TSharedPtr<FPBRManualTextureChannelItem>>)
+			.ListItemsSource(&ManualTextureRows)
+			.HeaderRow(
+				SNew(SHeaderRow)
+				+ SHeaderRow::Column(TEXT("Preview")).DefaultLabel(LOCTEXT("PBRManualPreview", "预览")).FillWidth(0.14f)
+				+ SHeaderRow::Column(TEXT("File")).DefaultLabel(LOCTEXT("PBRManualFile", "贴图文件")).FillWidth(0.66f)
+				+ SHeaderRow::Column(TEXT("Channel")).DefaultLabel(LOCTEXT("PBRManualChannel", "通道")).FillWidth(0.34f))
+			.OnGenerateRow(this, &SPBRTextureSuiteTab::GenerateManualTextureRow)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(12, 8)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.0f)[SNew(SSpacer)]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("PBRManualApply", "应用通道"))
+				.ButtonStyle(FAppStyle::Get(), "FlatButton.Success")
+				.OnClicked_Lambda([this, Set, Window]()
+				{
+					ApplyManualTextureChannels(Set);
+					Window->RequestDestroyWindow();
+					return FReply::Handled();
+				})
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("PBRManualCancel", "取消"))
+				.OnClicked_Lambda([Window]()
+				{
+					Window->RequestDestroyWindow();
+					return FReply::Handled();
+				})
+			]
+		]);
+
+	FSlateApplication::Get().AddWindow(Window);
+	return FReply::Handled();
 }
 
 TSharedRef<SHeaderRow> SPBRTextureSuiteTab::BuildHeaderRow()
@@ -1439,8 +1917,9 @@ TSharedRef<SHeaderRow> SPBRTextureSuiteTab::BuildHeaderRow()
 		+ SHeaderRow::Column(TEXT("Status")).DefaultLabel(LOCTEXT("ColStatus", "状态")).FillWidth(0.14f)
 		+ SHeaderRow::Column(TEXT("Name")).DefaultLabel(LOCTEXT("ColName", "名称")).FillWidth(0.18f)
 		+ SHeaderRow::Column(TEXT("Type")).DefaultLabel(LOCTEXT("ColType", "母材质")).FillWidth(0.12f)
-		+ SHeaderRow::Column(TEXT("Channels")).DefaultLabel(LOCTEXT("ColChannels", "通道")).FillWidth(0.21f)
-		+ SHeaderRow::Column(TEXT("Issues")).DefaultLabel(LOCTEXT("ColIssues", "问题")).FillWidth(0.18f);
+		+ SHeaderRow::Column(TEXT("Channels")).DefaultLabel(LOCTEXT("ColChannels", "通道")).FillWidth(0.16f)
+		+ SHeaderRow::Column(TEXT("ManualChannels")).DefaultLabel(LOCTEXT("ColManualChannels", "手动通道")).FillWidth(0.1f)
+		+ SHeaderRow::Column(TEXT("Issues")).DefaultLabel(LOCTEXT("ColIssues", "问题")).FillWidth(0.13f);
 }
 
 TSharedRef<ITableRow> SPBRTextureSuiteTab::OnGenerateRow(
@@ -1474,17 +1953,7 @@ TSharedRef<ITableRow> SPBRTextureSuiteTab::OnGenerateRow(
 				.HAlign(HAlign_Center)
 				.VAlign(VAlign_Center)
 				[
-					Item->PreviewPath.IsEmpty()
-					? StaticCastSharedRef<SWidget>(SNew(STextBlock).Text(LOCTEXT("NoPreview", "-")))
-					: StaticCastSharedRef<SWidget>(
-						SNew(SBox)
-						.WidthOverride(54)
-						.HeightOverride(54)
-						[
-							SNew(SImage)
-							.Image(GetPreviewBrush(*Item))
-							.DesiredSizeOverride(FVector2D(54.0f, 54.0f))
-						])
+					BuildPreviewWidget(Item, FVector2D(54.0f, 54.0f))
 				]
 			]
 			+ SHorizontalBox::Slot().FillWidth(0.14f).Padding(4)
@@ -1524,11 +1993,17 @@ TSharedRef<ITableRow> SPBRTextureSuiteTab::OnGenerateRow(
 			[
 				SNew(STextBlock).Text(FText::FromString(DetectMaterialTypeLabel(*Item)))
 			]
-			+ SHorizontalBox::Slot().FillWidth(0.21f).Padding(4)
+			+ SHorizontalBox::Slot().FillWidth(0.16f).Padding(4)
 			[
 				SNew(STextBlock).Text(FText::FromString(ChannelSummary(Item->Channels)))
 			]
-			+ SHorizontalBox::Slot().FillWidth(0.18f).Padding(4)
+			+ SHorizontalBox::Slot().FillWidth(0.1f).Padding(4)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("ManualChannelsRow", "通道..."))
+				.OnClicked(this, &SPBRTextureSuiteTab::OnManualMappingForSet, Item)
+			]
+			+ SHorizontalBox::Slot().FillWidth(0.13f).Padding(4)
 			[
 				SNew(STextBlock).Text(FText::FromString(SetDisplayIssues(*Item)))
 			]
@@ -1537,6 +2012,109 @@ TSharedRef<ITableRow> SPBRTextureSuiteTab::OnGenerateRow(
 
 void SPBRTextureSuiteTab::OnSelectionChanged(TSharedPtr<FPBRMaterialSet> Item, ESelectInfo::Type SelectInfo)
 {
+}
+
+TSharedPtr<SWidget> SPBRTextureSuiteTab::MakeMaterialSetContextMenu()
+{
+	FMenuBuilder MenuBuilder(true, nullptr);
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("RenameSetBeforeCreate", "重命名材质"),
+		LOCTEXT("RenameSetBeforeCreateTip", "创建材质前修改套件名称，生成材质会使用新名称"),
+		FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &SPBRTextureSuiteTab::OnRenameSelectedMaterialSet)));
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("ManualMappingContext", "手动修改贴图通道"),
+		LOCTEXT("ManualMappingContextTip", "逐张指定当前 PBR 套件里的贴图通道"),
+		FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([this]() { OnManualMapping(); })));
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("OpenSetLocation", "打开文件所在位置"),
+		LOCTEXT("OpenSetLocationTip", "打开当前贴图套件所在文件夹"),
+		FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &SPBRTextureSuiteTab::OnOpenSelectedMaterialSetLocation)));
+	return MenuBuilder.MakeWidget();
+}
+
+void SPBRTextureSuiteTab::OnRenameSelectedMaterialSet()
+{
+	TArray<TSharedPtr<FPBRMaterialSet>> Selected = bGridViewMode && TileView.IsValid()
+		? TileView->GetSelectedItems()
+		: (TreeView.IsValid() ? TreeView->GetSelectedItems() : TArray<TSharedPtr<FPBRMaterialSet>>());
+	if (Selected.Num() == 0 || !Selected[0].IsValid())
+	{
+		return;
+	}
+
+	TSharedPtr<FPBRMaterialSet> Item = Selected[0];
+	TSharedPtr<SWindow> Window = SNew(SWindow)
+		.Title(LOCTEXT("RenameSetWindow", "重命名材质"))
+		.ClientSize(FVector2D(360, 112))
+		.SupportsMinimize(false)
+		.SupportsMaximize(false);
+
+	TSharedPtr<SEditableTextBox> NameBox;
+	Window->SetContent(
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(12, 12, 12, 6)
+		[
+			SAssignNew(NameBox, SEditableTextBox)
+			.Text(FText::FromString(Item->Name))
+			.SelectAllTextWhenFocused(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(12, 6)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.0f)[SNew(SSpacer)]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("RenameSetOk", "确定"))
+				.OnClicked_Lambda([this, Window, NameBox, Item]()
+				{
+					FString NewName = NameBox.IsValid() ? NameBox->GetText().ToString().TrimStartAndEnd() : FString();
+					if (!NewName.IsEmpty())
+					{
+						Item->Name = NewName;
+						SavePersistedState();
+						RefreshMaterialSetList();
+					}
+					Window->RequestDestroyWindow();
+					return FReply::Handled();
+				})
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("RenameSetCancel", "取消"))
+				.OnClicked_Lambda([Window]() { Window->RequestDestroyWindow(); return FReply::Handled(); })
+			]
+		]);
+	FSlateApplication::Get().AddWindow(Window.ToSharedRef());
+}
+
+void SPBRTextureSuiteTab::OnOpenSelectedMaterialSetLocation()
+{
+	TArray<TSharedPtr<FPBRMaterialSet>> Selected = bGridViewMode && TileView.IsValid()
+		? TileView->GetSelectedItems()
+		: (TreeView.IsValid() ? TreeView->GetSelectedItems() : TArray<TSharedPtr<FPBRMaterialSet>>());
+	if (Selected.Num() == 0 || !Selected[0].IsValid())
+	{
+		return;
+	}
+
+	FString Folder = Selected[0]->Folder;
+	if (Folder.IsEmpty())
+	{
+		for (const auto& Pair : Selected[0]->Channels)
+		{
+			Folder = FPaths::GetPath(Pair.Value);
+			break;
+		}
+	}
+	if (!Folder.IsEmpty())
+	{
+		FPlatformProcess::ExploreFolder(*Folder);
+	}
 }
 
 TSharedRef<ITableRow> SPBRTextureSuiteTab::OnGenerateTile(
@@ -1559,18 +2137,7 @@ TSharedRef<ITableRow> SPBRTextureSuiteTab::OnGenerateTile(
 					.WidthOverride(86)
 					.HeightOverride(86)
 					[
-						Item.IsValid() && !Item->PreviewPath.IsEmpty()
-						? StaticCastSharedRef<SWidget>(
-							SNew(SImage)
-							.Image(GetPreviewBrush(*Item))
-							.DesiredSizeOverride(FVector2D(86.0f, 86.0f)))
-						: StaticCastSharedRef<SWidget>(
-							SNew(SBorder)
-							.BorderImage(FAppStyle::GetBrush("WhiteBrush"))
-							.BorderBackgroundColor(FLinearColor(0.08f, 0.08f, 0.08f))
-							[
-								SNew(STextBlock).Text(LOCTEXT("NoGridPreview", "-"))
-							])
+						BuildPreviewWidget(Item, FVector2D(86.0f, 86.0f))
 					]
 				]
 			]
@@ -1600,131 +2167,6 @@ FReply SPBRTextureSuiteTab::OnMaterialRowDragDetected(
 
 	return FReply::Handled().BeginDragDrop(FAssetDragDropOp::New(FAssetData(Material)));
 }
-
-
-TSharedPtr<SWidget> SPBRTextureSuiteTab::OnMaterialSetContextMenuOpening()
-{
-	TArray<TSharedPtr<FPBRMaterialSet>> Selected = TreeView->GetSelectedItems();
-
-	FMenuBuilder Menu(true, nullptr);
-
-	if (Selected.Num() > 0 && Selected[0].IsValid())
-	{
-		// Open folder — always available
-		FString Folder = Selected[0]->Folder;
-		if (!FPaths::DirectoryExists(Folder))
-		{
-			Folder = FPaths::GetPath(Selected[0]->Folder);
-		}
-		Menu.AddMenuEntry(
-			LOCTEXT("OpenMatFolder", "打开所在文件夹"),
-			FText(),
-			FSlateIcon(),
-			FUIAction(FExecuteAction::CreateLambda([Folder]()
-			{
-				FPlatformProcess::ExploreFolder(*Folder);
-			})));
-
-		// Rename — only if material hasn't been created yet
-		const FString Status = Selected[0]->Status;
-		if (!Status.StartsWith(TEXT("已创建")) && !Status.StartsWith(TEXT("已应用")) &&
-			!Status.StartsWith(TEXT("使用已有")))
-		{
-			Menu.AddMenuEntry(
-				LOCTEXT("RenameMat", "重命名"),
-				FText(),
-				FSlateIcon(),
-				FUIAction(FExecuteAction::CreateLambda([this]()
-				{
-					OnRenameMaterialSet();
-				})));
-		}
-	}
-
-	return Menu.MakeWidget();
-}
-
-void SPBRTextureSuiteTab::OnRenameMaterialSet()
-{
-	TArray<TSharedPtr<FPBRMaterialSet>> Selected = TreeView->GetSelectedItems();
-	if (Selected.Num() == 0 || !Selected[0].IsValid())
-	{
-		return;
-	}
-
-	const FString OldName = Selected[0]->Name;
-	TSharedRef<SWindow> Window = SNew(SWindow)
-		.Title(LOCTEXT("RenameMatTitle", "重命名材质"))
-		.ClientSize(FVector2D(420, 140))
-		.SupportsMinimize(false)
-		.SupportsMaximize(false);
-
-	TSharedPtr<SEditableTextBox> NameBox;
-	Window->SetContent(
-		SNew(SBorder).Padding(12)
-		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
-				[ SNew(STextBlock).Text(LOCTEXT("RenameMatLabel", "新名称")) ]
-				+ SHorizontalBox::Slot()
-				[ SAssignNew(NameBox, SEditableTextBox).Text(FText::FromString(OldName)) ]
-			]
-			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
-				[
-					SNew(SButton).Text(LOCTEXT("RenameMatOK", "确定"))
-					.OnClicked_Lambda([this, Window, NameBox]()
-					{
-						FString NewName = NameBox.IsValid() ? NameBox->GetText().ToString().TrimStartAndEnd() : FString();
-						if (!NewName.IsEmpty())
-						{
-							TArray<TSharedPtr<FPBRMaterialSet>> Sel = TreeView->GetSelectedItems();
-							if (Sel.Num() > 0 && Sel[0].IsValid())
-							{
-								FPBRMaterialSet& Set = *Sel[0];
-								const FString OldSetName = Set.Name;
-
-								// Rename folder on disk
-								const FString OldDir = Set.Folder;
-								if (FPaths::DirectoryExists(OldDir))
-								{
-									const FString ParentDir = FPaths::GetPath(OldDir);
-									const FString NewDir = FPaths::Combine(ParentDir, NewName);
-									if (!FPaths::DirectoryExists(NewDir))
-									{
-										IFileManager::Get().Move(*NewDir, *OldDir, true, true);
-										Set.Folder = NewDir;
-									}
-								}
-
-								Set.Name = NewName;
-								RefreshMaterialSetList();
-							}
-						}
-						FSlateApplication::Get().RequestDestroyWindow(Window);
-						return FReply::Handled();
-					})
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
-				[
-					SNew(SButton).Text(LOCTEXT("RenameMatCancel", "取消"))
-					.OnClicked_Lambda([Window]()
-					{
-						FSlateApplication::Get().RequestDestroyWindow(Window);
-						return FReply::Handled();
-					})
-				]
-			]
-		]);
-
-	FSlateApplication::Get().AddWindow(Window);
-}
-
 
 void SPBRTextureSuiteTab::OnBoxSelectRange(const FVector2D& ScreenStart, const FVector2D& ScreenEnd)
 {
@@ -1830,8 +2272,67 @@ FString SPBRTextureSuiteTab::DetectMaterialTypeLabel(const FPBRMaterialSet& Set)
 		}
 	}
 
-	const EPBRMaterialType Type = FPBRMaterialFactory::ResolveMaterialTypeForSet(Set, TEXT("自动"));
-	return FPBRMaterialFactory::MaterialTypeToDisplayName(Type);
+	FString Text = (Set.Name + TEXT(" ") + Set.Folder).ToLower();
+	for (const TPair<FString, FString>& ChannelPair : Set.Channels)
+	{
+		Text += TEXT(" ") + ChannelPair.Key.ToLower();
+		Text += TEXT(" ") + FPaths::GetBaseFilename(ChannelPair.Value).ToLower();
+	}
+
+	if (Text.Contains(TEXT("water")) || Text.Contains(TEXT("pool")) || Text.Contains(TEXT("ocean")) || Text.Contains(TEXT("水")))
+	{
+		return TEXT("水");
+	}
+	if (Text.Contains(TEXT("glass")) || Text.Contains(TEXT("window")) || Text.Contains(TEXT("mirror")) || Text.Contains(TEXT("玻璃")))
+	{
+		return TEXT("玻璃");
+	}
+	if (Text.Contains(TEXT("transparent")) || Text.Contains(TEXT("opacity")) || Text.Contains(TEXT("alpha")) ||
+		Text.Contains(TEXT("半透明")) || Text.Contains(TEXT("透明")) || Set.Channels.Contains(TEXT("Opacity")))
+	{
+		return TEXT("半透明");
+	}
+	if (Text.Contains(TEXT("emissive")) || Text.Contains(TEXT("glow")) || Text.Contains(TEXT("neon")) ||
+		Text.Contains(TEXT("自发光")) || Text.Contains(TEXT("发光")) || Set.Channels.Contains(TEXT("Emissive")))
+	{
+		return TEXT("自发光");
+	}
+	if (Text.Contains(TEXT("metal")) || Text.Contains(TEXT("steel")) || Text.Contains(TEXT("iron")) ||
+		Text.Contains(TEXT("copper")) || Text.Contains(TEXT("金属")) || Set.Channels.Contains(TEXT("Metallic")))
+	{
+		return TEXT("金属");
+	}
+	if (Text.Contains(TEXT("fabric")) || Text.Contains(TEXT("cloth")) || Text.Contains(TEXT("linen")) ||
+		Text.Contains(TEXT("cotton")) || Text.Contains(TEXT("wool")) || Text.Contains(TEXT("carpet")) ||
+		Text.Contains(TEXT("rug")) || Text.Contains(TEXT("curtain")) || Text.Contains(TEXT("布")) ||
+		Text.Contains(TEXT("织物")) || Text.Contains(TEXT("地毯")))
+	{
+		return TEXT("布艺");
+	}
+	if (Text.Contains(TEXT("leather")) || Text.Contains(TEXT("皮革")) || Text.Contains(TEXT("皮")))
+	{
+		return TEXT("皮革");
+	}
+	if (Text.Contains(TEXT("wood")) || Text.Contains(TEXT("timber")) || Text.Contains(TEXT("floor")) ||
+		Text.Contains(TEXT("木")) || Text.Contains(TEXT("木地板")))
+	{
+		return TEXT("木材");
+	}
+	if (Text.Contains(TEXT("tile")) || Text.Contains(TEXT("ceramic")) || Text.Contains(TEXT("brick")) ||
+		Text.Contains(TEXT("瓷砖")) || Text.Contains(TEXT("砖")))
+	{
+		return TEXT("瓷砖");
+	}
+	if (Text.Contains(TEXT("stone")) || Text.Contains(TEXT("rock")) || Text.Contains(TEXT("marble")) ||
+		Text.Contains(TEXT("granite")) || Text.Contains(TEXT("石")) || Text.Contains(TEXT("大理石")))
+	{
+		return TEXT("石材");
+	}
+	if (Text.Contains(TEXT("plastic")) || Text.Contains(TEXT("pvc")) || Text.Contains(TEXT("塑料")))
+	{
+		return TEXT("塑料");
+	}
+	return TEXT("标准");
 }
 
 FString SPBRTextureSuiteTab::GetMaterialTypeDescription(const FString& MaterialTypeMode) const
@@ -1937,6 +2438,44 @@ FText SPBRTextureSuiteTab::GetSelectedNormalModeText() const
 	return FText::FromString(SelectedNormalModeOption.IsValid() ? *SelectedNormalModeOption : SelectedNormalMode);
 }
 
+TSharedRef<SWidget> SPBRTextureSuiteTab::BuildPreviewWidget(TSharedPtr<FPBRMaterialSet> Item, const FVector2D& Size)
+{
+	if (Item.IsValid() && !Item->PreviewPath.IsEmpty() && FPaths::FileExists(Item->PreviewPath))
+	{
+		return SNew(SImage)
+			.Image(GetPreviewBrush(*Item))
+			.DesiredSizeOverride(Size);
+	}
+
+	UMaterialInterface* Material = GetPreviewFallbackMaterial(Item);
+	if (!ThumbnailPool.IsValid() || !Material)
+	{
+		return SNew(SImage)
+			.Image(FAppStyle::GetBrush("ClassThumbnail.Material"))
+			.DesiredSizeOverride(Size);
+	}
+
+	const FString CacheKey = Material->GetPathName() + FString::Printf(TEXT("_%dx%d"), FMath::RoundToInt(Size.X), FMath::RoundToInt(Size.Y));
+	TSharedPtr<FAssetThumbnail>& Thumbnail = MaterialThumbnailCache.FindOrAdd(CacheKey);
+	if (!Thumbnail.IsValid())
+	{
+		Thumbnail = MakeShared<FAssetThumbnail>(Material, static_cast<uint32>(Size.X), static_cast<uint32>(Size.Y), ThumbnailPool);
+	}
+	return Thumbnail->MakeThumbnailWidget();
+}
+
+UMaterialInterface* SPBRTextureSuiteTab::GetPreviewFallbackMaterial(TSharedPtr<FPBRMaterialSet> Item) const
+{
+	if (Item.IsValid())
+	{
+		if (UMaterialInterface* Created = Item->CreatedMaterial.LoadSynchronous())
+		{
+			return Created;
+		}
+	}
+	return LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial"));
+}
+
 const FSlateBrush* SPBRTextureSuiteTab::GetPreviewBrush(const FPBRMaterialSet& Set)
 {
 	if (Set.PreviewPath.IsEmpty() || !FPaths::FileExists(Set.PreviewPath))
@@ -2032,6 +2571,58 @@ int32 SPBRTextureSuiteTab::GetTargetMaterialSlot() const
 		LexTryParseString(SlotIndex, *MaterialSlotBox->GetText().ToString());
 	}
 	return FMath::Max(0, SlotIndex);
+}
+
+EPBRMaterialType SPBRTextureSuiteTab::ResolveCurrentTemplateType() const
+{
+	FPBRMaterialSet ReferenceSet;
+	if (TreeView.IsValid())
+	{
+		const TArray<TSharedPtr<FPBRMaterialSet>> SelectedItems = TreeView->GetSelectedItems();
+		for (const TSharedPtr<FPBRMaterialSet>& Item : SelectedItems)
+		{
+			if (Item.IsValid())
+			{
+				ReferenceSet = *Item;
+				break;
+			}
+		}
+	}
+
+	if (ReferenceSet.Name.IsEmpty() && TileView.IsValid())
+	{
+		const TArray<TSharedPtr<FPBRMaterialSet>> SelectedItems = TileView->GetSelectedItems();
+		for (const TSharedPtr<FPBRMaterialSet>& Item : SelectedItems)
+		{
+			if (Item.IsValid())
+			{
+				ReferenceSet = *Item;
+				break;
+			}
+		}
+	}
+
+	if (ReferenceSet.Name.IsEmpty() && ReferenceSet.Folder.IsEmpty() && ReferenceSet.Channels.Num() == 0)
+	{
+		for (const TSharedPtr<FPBRMaterialSet>& Item : MaterialSets)
+		{
+			if (Item.IsValid() && Item->bChecked)
+			{
+				ReferenceSet = *Item;
+				break;
+			}
+		}
+	}
+
+	return FPBRMaterialFactory::ResolveMaterialTypeForSet(ReferenceSet, SelectedMaterialTypeMode);
+}
+
+void SPBRTextureSuiteTab::SyncBrowserToAsset(const FString& AssetPath) const
+{
+	if (UEditorAssetLibrary::DoesAssetExist(AssetPath))
+	{
+		UEditorAssetLibrary::SyncBrowserToObjects({ AssetPath });
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

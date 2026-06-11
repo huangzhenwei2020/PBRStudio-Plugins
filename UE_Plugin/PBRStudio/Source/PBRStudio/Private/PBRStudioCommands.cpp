@@ -1,4 +1,4 @@
-#include "PBRStudioCommands.h"
+﻿#include "PBRStudioCommands.h"
 
 #define LOCTEXT_NAMESPACE "FPBRStudioCommands"
 
@@ -6,8 +6,8 @@ void FPBRStudioCommands::RegisterCommands()
 {
 	UI_COMMAND(
 		OpenMainWindow,
-		"PBR 工作室",
-		"打开 PBR 工作室主窗口",
+		"建筑可视化工作台",
+		"打开 AR Studio 主窗口",
 		EUserInterfaceActionType::Button,
 		FInputChord()
 	);

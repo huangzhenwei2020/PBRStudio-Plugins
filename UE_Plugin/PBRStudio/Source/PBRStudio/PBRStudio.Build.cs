@@ -11,6 +11,8 @@ public class PBRStudio : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"RenderCore",
+			"RHI",
 			"Slate",
 			"SlateCore",
 			"ApplicationCore",
@@ -19,22 +21,33 @@ public class PBRStudio : ModuleRules
 			"AssetRegistry",
 			"HTTP",
 			"HTTPServer",
+			"InternationalizationSettings",
 			"Json",
 			"JsonUtilities",
 			"ImageWrapper",
+			"ImageCore",
 			"ImageWriteQueue",
 			"MaterialEditor",
+			"CinematicCamera",
+			"DatasmithContent",
 			"PropertyEditor",
 			"EditorScriptingUtilities",
 			"WorkspaceMenuStructure",
 			"InputCore",
 			"Projects",
 			"DesktopPlatform",
+			"Networking",
+			"Sockets",
+			"LevelEditor",
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
-			"EditorStyle",
+			"AppFramework",
+			"ContentBrowser",
+			"DeveloperSettings",
+			"EditorFramework",
+			"Settings",
 			"ToolMenus",
 		});
 	}

@@ -27,7 +27,6 @@ private:
 	bool HandlePush(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete);
 	bool HandleOptions(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete);
 
-	mutable FCriticalSection ThreadLock;
 	TSharedPtr<IHttpRouter> Router;
 	TArray<FHttpRouteHandle> RouteHandles;
 	int32 BoundPort = 0;

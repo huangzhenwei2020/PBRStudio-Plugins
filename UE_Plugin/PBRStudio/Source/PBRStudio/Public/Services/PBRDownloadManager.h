@@ -17,10 +17,12 @@ public:
 
 	void SetMaterialLibraryDir(const FString& Dir);
 	FString GetMaterialLibraryDir() const;
+	void SetDeleteNonImageFilesAfterExtract(bool bInDelete);
 
 	// Queue management
 	int32 AddToQueue(const FString& URL, const FString& Name, const FString& Source);
 	void RemoveFromQueue(int32 Index);
+	bool RenameQueueEntry(int32 Index, const FString& NewName, FString& OutMessage);
 	void ClearQueue();
 	TArray<FPBRDownloadEntry>& GetQueue() { return Queue; }
 
@@ -42,15 +44,6 @@ public:
 	void AddSite(const FPBRDownloadSite& Site);
 	void RemoveSite(int32 Index);
 
-	// Rename an entry's display name and its folder on disk
-	void RenameEntry(int32 Index, const FString& NewName);
-
-	// Cleanup options
-	bool bCleanNonImage = false;
-
-	void RemoveSourceFolder(int32 Index);
-	void CleanNonImageContent(const FString& TargetDir);
-
 	FOnDownloadQueueChanged OnQueueChanged;
 	FOnDownloadProgress OnProgress;
 	FOnDownloadComplete OnComplete;
@@ -65,6 +58,7 @@ private:
 	FString MakeMaterialFolderFromName(const FString& RawName) const;
 	FString MakeMaterialFolderFromArchive(const FString& ArchivePath) const;
 	void NormalizeExtractedMaterialFolder(const FString& Folder, FString& InOutMessage) const;
+	void CleanupExtractedMaterialFolder(const FString& Folder, FString& InOutMessage) const;
 	bool ExtractZipWithPowerShell(const FString& ArchivePath, const FString& DestinationDir, FString& OutMessage) const;
 	bool ExtractArchiveWithExternalTool(const FString& ArchivePath, const FString& DestinationDir, FString& OutMessage) const;
 
@@ -72,4 +66,5 @@ private:
 	TArray<FPBRDownloadSite> Sites;
 	TArray<TSharedPtr<IHttpRequest>> ActiveRequests;
 	FString MaterialLibraryDir;
+	bool bDeleteNonImageFilesAfterExtract = true;
 };

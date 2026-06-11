@@ -1,5 +1,4 @@
 #include "Services/PBRHttpServer.h"
-#include "HAL/CriticalSection.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -13,7 +12,6 @@ FPBRHttpServer::~FPBRHttpServer()
 
 bool FPBRHttpServer::Start(int32 Port)
 {
-	FScopeLock Lock(&ThreadLock);
 	if (bIsRunning) return true;
 
 	Router = FHttpServerModule::Get().GetHttpRouter(Port, /* bFailOnBindFailure */ false);
@@ -55,7 +53,6 @@ bool FPBRHttpServer::Start(int32 Port)
 
 void FPBRHttpServer::Stop()
 {
-	FScopeLock Lock(&ThreadLock);
 	if (!bIsRunning) return;
 
 	for (FHttpRouteHandle& Handle : RouteHandles)
@@ -75,7 +72,6 @@ void FPBRHttpServer::Stop()
 
 bool FPBRHttpServer::HandlePing(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
 {
-	FScopeLock Lock(&ThreadLock);
 	TSharedRef<FJsonObject> Json = MakeShareable(new FJsonObject);
 	Json->SetStringField(TEXT("status"), TEXT("ok"));
 	Json->SetStringField(TEXT("service"), TEXT("PBRPushServer"));
@@ -92,7 +88,6 @@ bool FPBRHttpServer::HandlePing(const FHttpServerRequest& Request, const FHttpRe
 
 bool FPBRHttpServer::HandlePush(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
 {
-	FScopeLock Lock(&ThreadLock);
 	// Parse JSON body
 	FString BodyStr = FString(UTF8_TO_TCHAR(reinterpret_cast<const char*>(Request.Body.GetData())));
 	BodyStr = BodyStr.Left(Request.Body.Num());

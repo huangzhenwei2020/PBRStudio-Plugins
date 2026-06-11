@@ -1,6 +1,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/Texture2D.h"
+#include "Materials/MaterialInterface.h"
 #include "PBRMaterialTypes.generated.h"
 
 UENUM()
@@ -100,6 +102,16 @@ struct PBRSTUDIO_API FPBRMaterialParameters
 	static const FName UVUOffset;
 	static const FName UVVOffset;
 	static const FName UVRotationDegrees;
+	static const FName DynamicSpeedU;
+	static const FName DynamicSpeedV;
+	static const FName DynamicScale;
+	static const FName DynamicIntensity;
+	static const FName DistortionStrength;
+	static const FName EdgeGlowStrength;
+	static const FName MaskThreshold;
+	static const FName ScanlineStrength;
+	static const FName FlakeScale;
+	static const FName FlakeIntensity;
 };
 
 USTRUCT()
@@ -124,6 +136,18 @@ struct PBRSTUDIO_API FPBRMaterialCreateOptions
 
 	UPROPERTY()
 	FString NormalPreference = TEXT("DirectX");
+
+	UPROPERTY()
+	TSoftObjectPtr<UMaterialInterface> ParentMaterialOverride;
+
+	UPROPERTY()
+	bool bEnsureExampleMaterial = true;
+
+	UPROPERTY()
+	bool bAllowExistingAssets = false;
+
+	UPROPERTY()
+	bool bForceTransparentWhenOpacityExists = true;
 };
 
 USTRUCT()

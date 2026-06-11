@@ -1,0 +1,395 @@
+#include "Services/PBRMaterialFunctionLibrary.h"
+
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "EditorAssetLibrary.h"
+#include "FileHelpers.h"
+#include "Materials/MaterialExpressionAdd.h"
+#include "Materials/MaterialExpressionAppendVector.h"
+#include "Materials/MaterialExpressionClamp.h"
+#include "Materials/MaterialExpressionConstant3Vector.h"
+#include "Materials/MaterialExpressionComment.h"
+#include "Materials/MaterialExpressionDivide.h"
+#include "Materials/MaterialExpressionFresnel.h"
+#include "Materials/MaterialExpressionFunctionInput.h"
+#include "Materials/MaterialExpressionFunctionOutput.h"
+#include "Materials/MaterialExpressionLinearInterpolate.h"
+#include "Materials/MaterialExpressionMultiply.h"
+#include "Materials/MaterialExpressionOneMinus.h"
+#include "Materials/MaterialExpressionPanner.h"
+#include "Materials/MaterialExpressionRotator.h"
+#include "Materials/MaterialExpressionSaturate.h"
+#include "Materials/MaterialExpressionSubtract.h"
+#include "Materials/MaterialExpressionTextureCoordinate.h"
+#include "Materials/MaterialFunction.h"
+#include "UObject/Package.h"
+
+static constexpr const TCHAR* FunctionRoot = TEXT("/Game/PBRStudio/Functions");
+
+static UObject* LoadFunctionAsset(const FString& PackagePath)
+{
+	return UEditorAssetLibrary::DoesAssetExist(PackagePath)
+		? UEditorAssetLibrary::LoadAsset(PackagePath)
+		: nullptr;
+}
+
+static UMaterialFunction* CreateOrResetFunction(const FString& Folder, const FString& AssetName, const FString& Description, const FString& Category)
+{
+	const FString PackagePath = FString(FunctionRoot) + TEXT("/") + Folder + TEXT("/") + AssetName;
+	UPackage* Package = CreatePackage(*PackagePath);
+	if (!Package)
+	{
+		return nullptr;
+	}
+
+	UMaterialFunction* Function = Cast<UMaterialFunction>(LoadFunctionAsset(PackagePath));
+	if (!Function)
+	{
+		Function = NewObject<UMaterialFunction>(Package, FName(*AssetName), RF_Public | RF_Standalone);
+		FAssetRegistryModule::AssetCreated(Function);
+	}
+
+	Function->Description = Description;
+	Function->UserExposedCaption = AssetName;
+	Function->bExposeToLibrary = true;
+	Function->LibraryCategoriesText.Empty();
+	Function->LibraryCategoriesText.Add(FText::FromString(TEXT("PBRStudio/") + Category));
+	Function->GetExpressionCollection().Empty();
+	Function->PreEditChange(nullptr);
+	return Function;
+}
+
+static void SaveFunction(UMaterialFunction* Function)
+{
+	if (!Function)
+	{
+		return;
+	}
+	Function->UpdateInputOutputTypes();
+	Function->PostEditChange();
+	Function->MarkPackageDirty();
+	UEditorLoadingAndSavingUtils::SavePackages({ Function->GetPackage() }, true);
+}
+
+static void AddComment(UMaterialFunction* Function, const FString& Text, int32 X, int32 Y, int32 SizeX, int32 SizeY)
+{
+	UMaterialExpressionComment* Comment = NewObject<UMaterialExpressionComment>(Function);
+	Comment->Text = Text;
+	Comment->MaterialExpressionEditorX = X;
+	Comment->MaterialExpressionEditorY = Y;
+	Comment->SizeX = SizeX;
+	Comment->SizeY = SizeY;
+	Comment->FontSize = 22;
+	Comment->CommentColor = FLinearColor(0.10f, 0.13f, 0.16f, 1.0f);
+	Comment->bGroupMode = true;
+	Function->GetExpressionCollection().AddExpression(Comment);
+}
+
+static UMaterialExpressionFunctionInput* AddInput(
+	UMaterialFunction* Function,
+	const FName& Name,
+	EFunctionInputType Type,
+	const FVector4f& Preview,
+	int32 SortPriority,
+	int32 X,
+	int32 Y,
+	const FString& Description = FString())
+{
+	UMaterialExpressionFunctionInput* Input = NewObject<UMaterialExpressionFunctionInput>(Function);
+	Input->InputName = Name;
+	Input->Description = Description;
+	Input->InputType = Type;
+	Input->PreviewValue = Preview;
+	Input->bUsePreviewValueAsDefault = true;
+	Input->SortPriority = SortPriority;
+	Input->MaterialExpressionEditorX = X;
+	Input->MaterialExpressionEditorY = Y;
+	Input->ConditionallyGenerateId(true);
+	Function->GetExpressionCollection().AddExpression(Input);
+	return Input;
+}
+
+static UMaterialExpressionFunctionOutput* AddOutput(
+	UMaterialFunction* Function,
+	const FName& Name,
+	UMaterialExpression* Expression,
+	int32 SortPriority,
+	int32 X,
+	int32 Y,
+	const FString& Description = FString())
+{
+	UMaterialExpressionFunctionOutput* Output = NewObject<UMaterialExpressionFunctionOutput>(Function);
+	Output->OutputName = Name;
+	Output->Description = Description;
+	Output->SortPriority = SortPriority;
+	Output->A.Connect(0, Expression);
+	Output->MaterialExpressionEditorX = X;
+	Output->MaterialExpressionEditorY = Y;
+	Output->ConditionallyGenerateId(true);
+	Function->GetExpressionCollection().AddExpression(Output);
+	return Output;
+}
+
+template <typename T>
+static T* AddNode(UMaterialFunction* Function, int32 X, int32 Y)
+{
+	T* Node = NewObject<T>(Function);
+	Node->MaterialExpressionEditorX = X;
+	Node->MaterialExpressionEditorY = Y;
+	Function->GetExpressionCollection().AddExpression(Node);
+	return Node;
+}
+
+static bool BuildUVControlsFunction(FString& OutMessage)
+{
+	UMaterialFunction* Function = CreateOrResetFunction(TEXT("01_UV"), TEXT("MF_PBRStudio_UVControls"), TEXT("统一 UV 平铺、偏移、旋转。"), TEXT("01 UV"));
+	if (!Function) { return false; }
+
+	AddComment(Function, TEXT("UV 调整: TexCoord -> 平铺 -> 偏移 -> 旋转"), -1140, -360, 1700, 760);
+	UMaterialExpressionFunctionInput* UTiling = AddInput(Function, TEXT("U 平铺"), FunctionInput_Scalar, FVector4f(1, 0, 0, 0), 10, -1080, -260);
+	UMaterialExpressionFunctionInput* VTiling = AddInput(Function, TEXT("V 平铺"), FunctionInput_Scalar, FVector4f(1, 0, 0, 0), 20, -1080, -140);
+	UMaterialExpressionFunctionInput* UOffset = AddInput(Function, TEXT("U 偏移"), FunctionInput_Scalar, FVector4f(0, 0, 0, 0), 30, -1080, -20);
+	UMaterialExpressionFunctionInput* VOffset = AddInput(Function, TEXT("V 偏移"), FunctionInput_Scalar, FVector4f(0, 0, 0, 0), 40, -1080, 100);
+	UMaterialExpressionFunctionInput* RotationDegrees = AddInput(Function, TEXT("旋转角度"), FunctionInput_Scalar, FVector4f(0, 0, 0, 0), 50, -1080, 220);
+
+	UMaterialExpressionTextureCoordinate* TexCoord = AddNode<UMaterialExpressionTextureCoordinate>(Function, -1080, -420);
+	UMaterialExpressionAppendVector* TilingUV = AddNode<UMaterialExpressionAppendVector>(Function, -760, -220);
+	TilingUV->A.Connect(0, UTiling);
+	TilingUV->B.Connect(0, VTiling);
+	UMaterialExpressionAppendVector* OffsetUV = AddNode<UMaterialExpressionAppendVector>(Function, -760, 20);
+	OffsetUV->A.Connect(0, UOffset);
+	OffsetUV->B.Connect(0, VOffset);
+	UMaterialExpressionMultiply* TiledUV = AddNode<UMaterialExpressionMultiply>(Function, -500, -300);
+	TiledUV->A.Connect(0, TexCoord);
+	TiledUV->B.Connect(0, TilingUV);
+	UMaterialExpressionAdd* OffsetResult = AddNode<UMaterialExpressionAdd>(Function, -260, -300);
+	OffsetResult->A.Connect(0, TiledUV);
+	OffsetResult->B.Connect(0, OffsetUV);
+	UMaterialExpressionMultiply* DegreesToRadians = AddNode<UMaterialExpressionMultiply>(Function, -260, -80);
+	DegreesToRadians->A.Connect(0, RotationDegrees);
+	DegreesToRadians->ConstB = UE_PI / 180.0f;
+	UMaterialExpressionRotator* Rotator = AddNode<UMaterialExpressionRotator>(Function, 0, -300);
+	Rotator->CenterX = 0.5f;
+	Rotator->CenterY = 0.5f;
+	Rotator->Speed = 1.0f;
+	Rotator->Coordinate.Connect(0, OffsetResult);
+	Rotator->Time.Connect(0, DegreesToRadians);
+	AddOutput(Function, TEXT("UV"), Rotator, 10, 300, -300);
+
+	SaveFunction(Function);
+	OutMessage = TEXT("已创建/更新函数: MF_PBRStudio_UVControls");
+	return true;
+}
+
+static bool BuildDynamicPannerFunction(FString& OutMessage)
+{
+	UMaterialFunction* Function = CreateOrResetFunction(TEXT("02_Dynamic"), TEXT("MF_PBRStudio_DynamicPanner"), TEXT("动态 UV 平移和缩放。"), TEXT("02 Dynamic"));
+	if (!Function) { return false; }
+
+	AddComment(Function, TEXT("动态控制: 输入 UV -> 缩放 -> Panner"), -1120, -280, 1640, 640);
+	UMaterialExpressionFunctionInput* UV = AddInput(Function, TEXT("UV"), FunctionInput_Vector2, FVector4f(0, 0, 0, 0), 10, -1080, -200);
+	UMaterialExpressionFunctionInput* SpeedU = AddInput(Function, TEXT("U 速度"), FunctionInput_Scalar, FVector4f(0, 0, 0, 0), 20, -1080, -80);
+	UMaterialExpressionFunctionInput* SpeedV = AddInput(Function, TEXT("V 速度"), FunctionInput_Scalar, FVector4f(0, 0, 0, 0), 30, -1080, 40);
+	UMaterialExpressionFunctionInput* Scale = AddInput(Function, TEXT("缩放"), FunctionInput_Scalar, FVector4f(1, 0, 0, 0), 40, -1080, 160);
+	UMaterialExpressionAppendVector* Speed = AddNode<UMaterialExpressionAppendVector>(Function, -760, -40);
+	Speed->A.Connect(0, SpeedU);
+	Speed->B.Connect(0, SpeedV);
+	UMaterialExpressionMultiply* ScaledUV = AddNode<UMaterialExpressionMultiply>(Function, -520, -190);
+	ScaledUV->A.Connect(0, UV);
+	ScaledUV->B.Connect(0, Scale);
+	UMaterialExpressionPanner* Panner = AddNode<UMaterialExpressionPanner>(Function, -240, -160);
+	Panner->Coordinate.Connect(0, ScaledUV);
+	Panner->Speed.Connect(0, Speed);
+	AddOutput(Function, TEXT("动态 UV"), Panner, 10, 120, -160);
+
+	SaveFunction(Function);
+	OutMessage = TEXT("已创建/更新函数: MF_PBRStudio_DynamicPanner");
+	return true;
+}
+
+static bool BuildTextureTintFunction(FString& OutMessage)
+{
+	UMaterialFunction* Function = CreateOrResetFunction(TEXT("03_Surface"), TEXT("MF_PBRStudio_TextureTintIntensity"), TEXT("贴图颜色乘以调色和强度。"), TEXT("03 Surface"));
+	if (!Function) { return false; }
+
+	AddComment(Function, TEXT("表面颜色: TextureColor * Tint * Intensity"), -980, -260, 1320, 520);
+	UMaterialExpressionFunctionInput* TextureColor = AddInput(Function, TEXT("贴图颜色"), FunctionInput_Vector3, FVector4f(1, 1, 1, 1), 10, -920, -180);
+	UMaterialExpressionFunctionInput* Tint = AddInput(Function, TEXT("调色"), FunctionInput_Vector3, FVector4f(1, 1, 1, 1), 20, -920, -40);
+	UMaterialExpressionFunctionInput* Intensity = AddInput(Function, TEXT("强度"), FunctionInput_Scalar, FVector4f(1, 0, 0, 0), 30, -920, 100);
+	UMaterialExpressionMultiply* Tinted = AddNode<UMaterialExpressionMultiply>(Function, -560, -150);
+	Tinted->A.Connect(0, TextureColor);
+	Tinted->B.Connect(0, Tint);
+	UMaterialExpressionMultiply* Result = AddNode<UMaterialExpressionMultiply>(Function, -280, -120);
+	Result->A.Connect(0, Tinted);
+	Result->B.Connect(0, Intensity);
+	AddOutput(Function, TEXT("颜色"), Result, 10, 80, -120);
+
+	SaveFunction(Function);
+	OutMessage = TEXT("已创建/更新函数: MF_PBRStudio_TextureTintIntensity");
+	return true;
+}
+
+static bool BuildNormalStrengthFunction(FString& OutMessage)
+{
+	UMaterialFunction* Function = CreateOrResetFunction(TEXT("03_Surface"), TEXT("MF_PBRStudio_NormalStrength"), TEXT("法线强度调整。"), TEXT("03 Surface"));
+	if (!Function) { return false; }
+
+	AddComment(Function, TEXT("法线强度: lerp(FlatNormal, Normal, Strength)"), -980, -260, 1380, 540);
+	UMaterialExpressionFunctionInput* Normal = AddInput(Function, TEXT("法线"), FunctionInput_Vector3, FVector4f(0.5f, 0.5f, 1.0f, 0), 10, -920, -160);
+	UMaterialExpressionFunctionInput* Strength = AddInput(Function, TEXT("强度"), FunctionInput_Scalar, FVector4f(1, 0, 0, 0), 20, -920, 20);
+	UMaterialExpressionClamp* Clamped = AddNode<UMaterialExpressionClamp>(Function, -620, 20);
+	Clamped->Input.Connect(0, Strength);
+	Clamped->MinDefault = 0.0f;
+	Clamped->MaxDefault = 1.0f;
+	UMaterialExpressionConstant3Vector* FlatNormal = AddNode<UMaterialExpressionConstant3Vector>(Function, -620, -170);
+	FlatNormal->Constant = FLinearColor(0.5f, 0.5f, 1.0f);
+	UMaterialExpressionLinearInterpolate* Lerp = AddNode<UMaterialExpressionLinearInterpolate>(Function, -320, -120);
+	Lerp->A.Connect(0, FlatNormal);
+	Lerp->B.Connect(0, Normal);
+	Lerp->Alpha.Connect(0, Clamped);
+	AddOutput(Function, TEXT("法线"), Lerp, 10, 80, -120);
+
+	SaveFunction(Function);
+	OutMessage = TEXT("已创建/更新函数: MF_PBRStudio_NormalStrength");
+	return true;
+}
+
+static bool BuildBaseColorBlendFunction(FString& OutMessage)
+{
+	UMaterialFunction* Function = CreateOrResetFunction(TEXT("03_Surface"), TEXT("MF_PBRStudio_BaseColorBlend"), TEXT("Base color texture/tint/intensity outputs."), TEXT("03 Surface"));
+	if (!Function) { return false; }
+
+	AddComment(Function, TEXT("Base Color: texture path and solid color path"), -980, -260, 1380, 560);
+	UMaterialExpressionFunctionInput* TextureColor = AddInput(Function, TEXT("贴图颜色"), FunctionInput_Vector3, FVector4f(1, 1, 1, 1), 10, -920, -160);
+	UMaterialExpressionFunctionInput* Tint = AddInput(Function, TEXT("调色"), FunctionInput_Vector3, FVector4f(1, 1, 1, 1), 20, -920, 0);
+	UMaterialExpressionFunctionInput* Intensity = AddInput(Function, TEXT("强度"), FunctionInput_Scalar, FVector4f(1, 0, 0, 0), 30, -920, 160);
+	UMaterialExpressionMultiply* TintedTexture = AddNode<UMaterialExpressionMultiply>(Function, -560, -120);
+	TintedTexture->A.Connect(0, TextureColor);
+	TintedTexture->B.Connect(0, Tint);
+	UMaterialExpressionMultiply* TexturedColor = AddNode<UMaterialExpressionMultiply>(Function, -280, -120);
+	TexturedColor->A.Connect(0, TintedTexture);
+	TexturedColor->B.Connect(0, Intensity);
+	UMaterialExpressionMultiply* SolidColor = AddNode<UMaterialExpressionMultiply>(Function, -280, 80);
+	SolidColor->A.Connect(0, Tint);
+	SolidColor->B.Connect(0, Intensity);
+	AddOutput(Function, TEXT("贴图颜色输出"), TexturedColor, 10, 120, -120);
+	AddOutput(Function, TEXT("纯色输出"), SolidColor, 20, 120, 80);
+
+	SaveFunction(Function);
+	OutMessage = TEXT("已创建/更新函数: MF_PBRStudio_BaseColorBlend");
+	return true;
+}
+
+static bool BuildScalarTextureSwitchFunction(FString& OutMessage)
+{
+	UMaterialFunction* Function = CreateOrResetFunction(TEXT("04_Mask"), TEXT("MF_PBRStudio_ScalarTextureSwitch"), TEXT("Scalar texture multiplier and solid value outputs."), TEXT("04 Mask"));
+	if (!Function) { return false; }
+
+	AddComment(Function, TEXT("Scalar Channel: texture * multiplier, or solid value"), -980, -240, 1320, 500);
+	UMaterialExpressionFunctionInput* TextureValue = AddInput(Function, TEXT("贴图值"), FunctionInput_Scalar, FVector4f(1, 0, 0, 0), 10, -920, -140);
+	UMaterialExpressionFunctionInput* Multiplier = AddInput(Function, TEXT("倍增"), FunctionInput_Scalar, FVector4f(1, 0, 0, 0), 20, -920, 0);
+	UMaterialExpressionFunctionInput* SolidValue = AddInput(Function, TEXT("固定值"), FunctionInput_Scalar, FVector4f(1, 0, 0, 0), 30, -920, 140);
+	UMaterialExpressionMultiply* TexturedValue = AddNode<UMaterialExpressionMultiply>(Function, -520, -80);
+	TexturedValue->A.Connect(0, TextureValue);
+	TexturedValue->B.Connect(0, Multiplier);
+	AddOutput(Function, TEXT("贴图输出"), TexturedValue, 10, -120, -80);
+	AddOutput(Function, TEXT("固定输出"), SolidValue, 20, -120, 120);
+
+	SaveFunction(Function);
+	OutMessage = TEXT("已创建/更新函数: MF_PBRStudio_ScalarTextureSwitch");
+	return true;
+}
+
+static bool BuildHeightDisplacementFunction(FString& OutMessage)
+{
+	UMaterialFunction* Function = CreateOrResetFunction(TEXT("06_Displacement"), TEXT("MF_PBRStudio_HeightDisplacement"), TEXT("Height map to world offset and pixel depth offset."), TEXT("06 Displacement"));
+	if (!Function) { return false; }
+
+	AddComment(Function, TEXT("Height: height * strength -> WPO and PDO"), -1040, -300, 1580, 620);
+	UMaterialExpressionFunctionInput* Height = AddInput(Function, TEXT("高度"), FunctionInput_Scalar, FVector4f(0, 0, 0, 0), 10, -980, -180);
+	UMaterialExpressionFunctionInput* HeightStrength = AddInput(Function, TEXT("高度强度"), FunctionInput_Scalar, FVector4f(0, 0, 0, 0), 20, -980, -40);
+	UMaterialExpressionFunctionInput* PixelDepthStrength = AddInput(Function, TEXT("深度偏移强度"), FunctionInput_Scalar, FVector4f(0, 0, 0, 0), 30, -980, 100);
+	UMaterialExpressionFunctionInput* VertexNormal = AddInput(Function, TEXT("顶点法线"), FunctionInput_Vector3, FVector4f(0, 0, 1, 0), 40, -980, 240);
+	UMaterialExpressionMultiply* HeightAmount = AddNode<UMaterialExpressionMultiply>(Function, -600, -120);
+	HeightAmount->A.Connect(0, Height);
+	HeightAmount->B.Connect(0, HeightStrength);
+	UMaterialExpressionMultiply* WorldOffset = AddNode<UMaterialExpressionMultiply>(Function, -280, -120);
+	WorldOffset->A.Connect(0, VertexNormal);
+	WorldOffset->B.Connect(0, HeightAmount);
+	UMaterialExpressionMultiply* PixelDepthOffset = AddNode<UMaterialExpressionMultiply>(Function, -280, 80);
+	PixelDepthOffset->A.Connect(0, HeightAmount);
+	PixelDepthOffset->B.Connect(0, PixelDepthStrength);
+	UMaterialExpressionConstant3Vector* NoWorldOffset = AddNode<UMaterialExpressionConstant3Vector>(Function, -280, 260);
+	NoWorldOffset->Constant = FLinearColor::Black;
+	AddOutput(Function, TEXT("世界偏移"), WorldOffset, 10, 120, -120);
+	AddOutput(Function, TEXT("像素深度偏移"), PixelDepthOffset, 20, 120, 80);
+	AddOutput(Function, TEXT("无世界偏移"), NoWorldOffset, 30, 120, 260);
+
+	SaveFunction(Function);
+	OutMessage = TEXT("已创建/更新函数: MF_PBRStudio_HeightDisplacement");
+	return true;
+}
+
+static bool BuildMaskClipFunction(FString& OutMessage)
+{
+	UMaterialFunction* Function = CreateOrResetFunction(TEXT("04_Mask"), TEXT("MF_PBRStudio_MaskClip"), TEXT("遮罩阈值和软化控制。"), TEXT("04 Mask"));
+	if (!Function) { return false; }
+
+	AddComment(Function, TEXT("遮罩: saturate((Mask - Threshold) / Softness)"), -1000, -260, 1460, 540);
+	UMaterialExpressionFunctionInput* Mask = AddInput(Function, TEXT("遮罩"), FunctionInput_Scalar, FVector4f(1, 0, 0, 0), 10, -940, -160);
+	UMaterialExpressionFunctionInput* Threshold = AddInput(Function, TEXT("阈值"), FunctionInput_Scalar, FVector4f(0.5f, 0, 0, 0), 20, -940, -20);
+	UMaterialExpressionFunctionInput* Softness = AddInput(Function, TEXT("软化"), FunctionInput_Scalar, FVector4f(0.05f, 0, 0, 0), 30, -940, 120);
+	UMaterialExpressionSubtract* Subtract = AddNode<UMaterialExpressionSubtract>(Function, -620, -120);
+	Subtract->A.Connect(0, Mask);
+	Subtract->B.Connect(0, Threshold);
+	UMaterialExpressionDivide* Divide = AddNode<UMaterialExpressionDivide>(Function, -340, -100);
+	Divide->A.Connect(0, Subtract);
+	Divide->B.Connect(0, Softness);
+	UMaterialExpressionSaturate* Saturate = AddNode<UMaterialExpressionSaturate>(Function, -100, -100);
+	Saturate->Input.Connect(0, Divide);
+	AddOutput(Function, TEXT("遮罩"), Saturate, 10, 180, -100);
+
+	SaveFunction(Function);
+	OutMessage = TEXT("已创建/更新函数: MF_PBRStudio_MaskClip");
+	return true;
+}
+
+static bool BuildFresnelGlowFunction(FString& OutMessage)
+{
+	UMaterialFunction* Function = CreateOrResetFunction(TEXT("05_SpecialFX"), TEXT("MF_PBRStudio_FresnelGlow"), TEXT("菲涅尔边缘光颜色和强度。"), TEXT("05 Special FX"));
+	if (!Function) { return false; }
+
+	AddComment(Function, TEXT("特殊效果: Fresnel * Color * Intensity"), -980, -260, 1380, 560);
+	UMaterialExpressionFunctionInput* Color = AddInput(Function, TEXT("颜色"), FunctionInput_Vector3, FVector4f(0.1f, 0.75f, 1.0f, 1), 10, -920, -140);
+	UMaterialExpressionFunctionInput* Intensity = AddInput(Function, TEXT("强度"), FunctionInput_Scalar, FVector4f(1, 0, 0, 0), 20, -920, 0);
+	UMaterialExpressionFunctionInput* Exponent = AddInput(Function, TEXT("衰减"), FunctionInput_Scalar, FVector4f(5, 0, 0, 0), 30, -920, 140);
+	UMaterialExpressionFresnel* Fresnel = AddNode<UMaterialExpressionFresnel>(Function, -580, -100);
+	Fresnel->ExponentIn.Connect(0, Exponent);
+	UMaterialExpressionMultiply* EdgeColor = AddNode<UMaterialExpressionMultiply>(Function, -300, -100);
+	EdgeColor->A.Connect(0, Fresnel);
+	EdgeColor->B.Connect(0, Color);
+	UMaterialExpressionMultiply* Glow = AddNode<UMaterialExpressionMultiply>(Function, -40, -100);
+	Glow->A.Connect(0, EdgeColor);
+	Glow->B.Connect(0, Intensity);
+	AddOutput(Function, TEXT("边缘光"), Glow, 10, 240, -100);
+	AddOutput(Function, TEXT("菲涅尔"), Fresnel, 20, 240, 80);
+
+	SaveFunction(Function);
+	OutMessage = TEXT("已创建/更新函数: MF_PBRStudio_FresnelGlow");
+	return true;
+}
+
+int32 FPBRMaterialFunctionLibrary::EnsureAllMaterialFunctions(TArray<FString>& OutMessages)
+{
+	int32 Count = 0;
+	FString Message;
+	if (BuildUVControlsFunction(Message)) { ++Count; OutMessages.Add(Message); }
+	if (BuildDynamicPannerFunction(Message)) { ++Count; OutMessages.Add(Message); }
+	if (BuildTextureTintFunction(Message)) { ++Count; OutMessages.Add(Message); }
+	if (BuildNormalStrengthFunction(Message)) { ++Count; OutMessages.Add(Message); }
+	if (BuildBaseColorBlendFunction(Message)) { ++Count; OutMessages.Add(Message); }
+	if (BuildScalarTextureSwitchFunction(Message)) { ++Count; OutMessages.Add(Message); }
+	if (BuildMaskClipFunction(Message)) { ++Count; OutMessages.Add(Message); }
+	if (BuildFresnelGlowFunction(Message)) { ++Count; OutMessages.Add(Message); }
+	if (BuildHeightDisplacementFunction(Message)) { ++Count; OutMessages.Add(Message); }
+	return Count;
+}

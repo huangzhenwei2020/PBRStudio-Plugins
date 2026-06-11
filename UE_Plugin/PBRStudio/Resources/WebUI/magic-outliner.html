@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Magic Outliner</title>
+  <style>
+    :root {
+      --bg: #11161c;
+      --panel: #18212a;
+      --raised: #202b35;
+      --row: #151c23;
+      --row-hover: #1d2a34;
+      --primary: #38c5d8;
+      --primary-soft: #1c7180;
+      --select: #f2a93b;
+      --text: #edf4f8;
+      --muted: #96a8b5;
+      --border: #2b3a45;
+      --drop: #173946;
+      --success: #55c58a;
+      --danger: #ff6b6b;
+      font-family: "Microsoft YaHei UI", "Segoe UI", Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--bg); color: var(--text); }
+    body { font-size: 13px; letter-spacing: 0; }
+    button, input { font: inherit; }
+    .app { height: 100vh; min-width: 1080px; display: grid; grid-template-rows: 42px 62px 1fr 30px; background: radial-gradient(circle at 45% -20%, rgba(56,197,216,.13), transparent 34%), var(--bg); }
+    .titlebar { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid rgba(255,255,255,.06); background: rgba(10,14,18,.72); }
+    .badge { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: #10161c; font-weight: 700; }
+    .brand { font-size: 15px; font-weight: 700; }
+    .tab-title { margin-left: 10px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); font-weight: 700; }
+    .spacer { flex: 1; }
+    .seg, .theme { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); padding: 8px 12px; color: var(--muted); }
+    .seg strong, .theme strong { color: var(--text); }
+    .switch { width: 34px; height: 18px; border-radius: 999px; background: var(--primary-soft); padding: 2px; display: flex; justify-content: flex-end; }
+    .knob { width: 14px; height: 14px; border-radius: 50%; background: white; }
+    .modules { margin: 7px 8px; border: 1px solid var(--border); border-radius: 8px; background: rgba(24,33,42,.78); display: flex; align-items: stretch; overflow: hidden; }
+    .module { min-width: 118px; display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-right: 1px solid rgba(255,255,255,.07); color: var(--muted); cursor: pointer; }
+    .module.active { background: rgba(56,197,216,.08); color: var(--text); }
+    .module .ico { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; border: 1px solid rgba(56,197,216,.4); color: var(--primary); }
+    .module strong { display: block; font-size: 14px; }
+    .module span { display: block; color: var(--muted); margin-top: 2px; }
+    .workspace { min-height: 0; display: grid; grid-template-columns: 220px minmax(520px, 1fr) 380px; gap: 8px; padding: 0 8px; }
+    .panel { min-height: 0; border: 1px solid var(--border); border-radius: 8px; background: rgba(24,33,42,.86); overflow: hidden; }
+    .left { display: grid; grid-template-rows: auto 1fr auto; }
+    .panel-head { padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,.06); display: flex; align-items: center; gap: 8px; }
+    .panel-head h2 { margin: 0; font-size: 14px; }
+    .panel-head small { color: var(--muted); }
+    .icon-btn { border: 1px solid var(--border); background: var(--raised); color: var(--primary); border-radius: 6px; width: 30px; height: 30px; display: grid; place-items: center; cursor: pointer; }
+    .groups { padding: 10px 8px; overflow: auto; }
+    .group { display: grid; grid-template-columns: 24px 1fr auto; align-items: center; gap: 8px; padding: 9px 8px; border-radius: 6px; color: var(--muted); cursor: pointer; }
+    .group.active, .group:hover { background: var(--drop); color: var(--text); }
+    .stack { width: 16px; height: 16px; border: 1px solid var(--primary); border-radius: 3px; box-shadow: 5px 5px 0 rgba(56,197,216,.22); }
+    .group strong { display: block; font-weight: 700; }
+    .group span { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .count { color: var(--primary); font-weight: 800; }
+    .left-foot { padding: 10px; border-top: 1px solid rgba(255,255,255,.06); display: flex; gap: 8px; }
+    .full-btn { flex: 1; border: 1px solid var(--border); background: var(--raised); color: var(--text); border-radius: 6px; padding: 9px; cursor: pointer; }
+    .main { display: grid; grid-template-rows: auto auto 1fr auto; }
+    .toolbar { padding: 10px; display: flex; gap: 8px; align-items: center; border-bottom: 1px solid rgba(255,255,255,.06); }
+    .tool { border: 1px solid var(--border); background: var(--raised); color: var(--text); border-radius: 6px; padding: 9px 12px; cursor: pointer; display: flex; gap: 8px; align-items: center; }
+    .tool.primary { color: var(--primary); }
+    .search { flex: 1; border: 1px solid var(--border); background: #101820; color: var(--text); border-radius: 6px; height: 36px; padding: 0 12px; outline: none; }
+    .chip { border: 1px solid var(--primary-soft); background: var(--drop); color: var(--primary); border-radius: 6px; padding: 8px 10px; font-weight: 700; }
+    .table-head, .row { display: grid; grid-template-columns: 38px 68px minmax(190px, 1.2fr) 140px 70px minmax(180px, .9fr) 46px; align-items: center; }
+    .table-head { margin: 8px 10px 0; color: var(--muted); background: rgba(32,43,53,.8); border: 1px solid rgba(255,255,255,.04); border-radius: 6px; padding: 7px 0; }
+    .table-head div { padding: 0 10px; border-right: 1px solid rgba(255,255,255,.05); }
+    .rows { min-height: 0; overflow: auto; padding: 8px 10px; }
+    .row { min-height: 58px; margin-bottom: 6px; border: 1px solid rgba(255,255,255,.06); border-radius: 7px; background: rgba(21,28,35,.86); }
+    .row:hover { background: var(--row-hover); border-color: rgba(56,197,216,.32); }
+    .row.checked { border-color: rgba(242,169,59,.76); background: rgba(242,169,59,.12); }
+    .cell { padding: 8px 10px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .check { width: 18px; height: 18px; border: 1px solid var(--border); border-radius: 4px; display: grid; place-items: center; color: var(--select); cursor: pointer; }
+    .checked .check::after { content: "✓"; font-weight: 900; }
+    .preview { width: 42px; height: 42px; border-radius: 50%; border: 1px solid rgba(56,197,216,.55); background: var(--raised); box-shadow: inset 0 0 16px rgba(255,255,255,.14); }
+    .mat0 { background: radial-gradient(circle at 35% 28%, #eee, #8b8173 38%, #4c4b4c 70%, #1b1d20); }
+    .mat1 { background: radial-gradient(circle at 35% 28%, #c8a77c, #7f5d3e 44%, #28211b 72%); }
+    .mat2 { background: radial-gradient(circle at 35% 28%, #f8f8f8, #b8c1c4 38%, #2b3438 72%); }
+    .mat3 { background: radial-gradient(circle at 35% 28%, #181b20, #31353b 46%, #060708 72%); }
+    .name { font-weight: 800; color: var(--text); }
+    .type { color: var(--muted); }
+    .num { color: var(--primary); font-weight: 900; text-align: center; }
+    .target { border: 1px dashed rgba(150,168,181,.45); color: var(--muted); border-radius: 6px; padding: 9px; text-align: center; }
+    .pager { height: 44px; display: flex; align-items: center; gap: 12px; padding: 0 14px; border-top: 1px solid rgba(255,255,255,.06); color: var(--muted); }
+    .page { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 6px; }
+    .page.active { border-color: var(--primary); color: var(--primary); }
+    .inspector { display: grid; grid-template-rows: auto auto 1fr auto; }
+    .actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px; border-bottom: 1px solid rgba(255,255,255,.06); }
+    .action { min-height: 58px; border: 1px solid var(--border); background: var(--raised); color: var(--text); border-radius: 6px; cursor: pointer; }
+    .cards { overflow: auto; padding: 12px; }
+    .material-card { display: grid; grid-template-columns: 72px 1fr 96px; gap: 10px; padding: 10px; margin-bottom: 10px; border: 1px solid rgba(242,169,59,.65); border-radius: 8px; background: linear-gradient(90deg, rgba(242,169,59,.1), rgba(21,28,35,.92)); }
+    .ball { width: 62px; height: 62px; border-radius: 50%; border: 1px solid rgba(255,255,255,.22); }
+    .card-title { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .tag { color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-size: 12px; }
+    .meta { color: var(--muted); line-height: 1.8; }
+    .drop { border: 1px dashed rgba(150,168,181,.45); border-radius: 8px; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 10px; }
+    .tokens { display: flex; gap: 8px; padding: 12px; border-top: 1px solid rgba(255,255,255,.06); }
+    .token { max-width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--border); background: var(--raised); border-radius: 6px; padding: 8px 10px; }
+    .status { display: flex; align-items: center; padding: 0 14px; border-top: 1px solid rgba(255,255,255,.06); background: rgba(10,14,18,.76); color: var(--muted); }
+    .status strong { color: var(--primary); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="titlebar">
+      <div class="badge">AR</div>
+      <div class="brand">AR Studio / PBR Studio</div>
+      <div class="tab-title">魔法大纲 / Magic Outliner</div>
+      <div class="spacer"></div>
+      <div class="seg">EN / <strong>中</strong></div>
+      <div class="seg"><span>精简模式<br>Compact Mode</span><div class="switch"><div class="knob"></div></div></div>
+      <div class="theme"><span>主题<br><strong>Graphite Cyan</strong></span></div>
+    </header>
+    <nav class="modules" id="modules"></nav>
+    <main class="workspace">
+      <aside class="panel left">
+        <div class="panel-head"><div><h2>智能分组 <small>Smart Groups</small></h2><small>按关键词勾选场景对象</small></div><div class="spacer"></div><button class="icon-btn">＋</button><button class="icon-btn">⚙</button></div>
+        <div class="groups" id="groups"></div>
+        <div class="left-foot"><button class="full-btn">＋ 新建分组</button><button class="icon-btn">⚙</button></div>
+      </aside>
+      <section class="panel main">
+        <div class="toolbar">
+          <button class="tool primary" id="refreshBtn">⟳ 刷新场景<br>Refresh</button>
+          <button class="tool" id="selectBtn">▣ 选择<br>Select</button>
+          <button class="tool">▽ 过滤<br>Filter</button>
+          <input id="search" class="search" placeholder="搜索名称、类型、使用、路径..." />
+          <div class="chip" id="selectedChip">已选中 0 项</div>
+          <button class="tool">清空</button>
+        </div>
+        <div class="table-head"><div></div><div>预览<br>Preview</div><div>名称<br>Name</div><div>类型<br>Type</div><div>数量<br>Count</div><div>使用 / 路径<br>Usage / Path</div><div>自动</div></div>
+        <div class="rows" id="rows"></div>
+        <div class="pager"><span id="materialTotal">共 0 项材质</span><span id="rowRange">显示 0 - 0</span><span>每页 50</span><div class="spacer"></div><span>‹‹</span><span>‹</span><div class="page active">1</div><div class="page">2</div><div class="page">3</div><span>...</span><div class="page">12</div><span>›</span><span>››</span></div>
+      </section>
+      <aside class="panel inspector">
+        <div class="panel-head"><div><h2>所选对象材质 / Selected Object Materials</h2><small>撤销上次替换 · Undo Last Replace</small></div><div class="spacer"></div><button class="icon-btn">↶</button></div>
+        <div class="actions"><button class="action" id="openBtn">打开材质<br>Open</button><button class="action" id="selectActorsBtn">选择关联 Actor<br>Select Actors</button><button class="action" id="resetBtn">重置为默认<br>Reset</button></div>
+        <div class="cards" id="cards"></div>
+        <div class="tokens" id="tokens"></div>
+      </aside>
+    </main>
+    <footer class="status"><span id="statusText">自动聚焦：<strong>已就绪</strong></span><div class="spacer"></div>批量操作支持 Ctrl+Z</footer>
+  </div>
+  <script>
+    /*__PBR_MAGIC_OUTLINER_SCENE_DATA__*/
+  </script>
+  <script>
+    const modules = [
+      ["◈", "模型", "Models"], ["◉", "材质", "Materials"], ["☼", "灯光", "Lights"],
+      ["▣", "相机 / 后期", "Camera/Post"], ["▧", "蓝图", "Blueprints"], ["▤", "关卡", "Levels"], ["◍", "全部", "All"]
+    ];
+    const fallbackGroups = [
+      ["全部材质", "All Materials", 593], ["餐桌", "Dining Table", 64], ["椅子", "Chair", 123], ["柜子", "Cabinet", 85],
+      ["灯带", "Light Strip", 57], ["沙发", "Sofa", 41], ["地毯", "Carpet", 28], ["木地板", "Wood Floor", 37],
+      ["玻璃", "Glass", 33], ["金属", "Metal", 76], ["布料", "Fabric", 44], ["石材", "Stone", 69], ["墙面", "Wall", 51]
+    ];
+    const fallbackMaterials = [
+      {name:"M_Table_Top_01", type:"Material Instance", count:12, usage:"餐桌、会议桌、吧台", path:"/Game/Materials/M_Table_Top_01", style:"mat0"},
+      {name:"M_Chair_Leg_Wood", type:"Material Instance", count:24, usage:"椅子、凳子、长凳", path:"/Game/Materials/M_Chair_Leg_Wood", style:"mat1"},
+      {name:"M_Chair_Cushion_Fabric", type:"Material Instance", count:18, usage:"椅子、沙发、软垫", path:"/Game/Materials/M_Chair_Cushion_Fabric", style:"mat2"},
+      {name:"M_Table_Marble_Black", type:"Material Instance", count:8, usage:"餐桌、茶几、台面", path:"/Game/Materials/M_Table_Marble_Black", style:"mat3"}
+    ];
+    const sceneData = window.__PBR_MAGIC_OUTLINER_DATA__ || {};
+    const groups = (sceneData.groups && sceneData.groups.length)
+      ? sceneData.groups.map(g => [g.name, g.en || "Scene Group", g.count || 0])
+      : fallbackGroups;
+    const materials = (sceneData.materials && sceneData.materials.length) ? sceneData.materials : fallbackMaterials;
+    const state = { selected: new Set(materials.length ? [0] : []), query: "" };
+    function command(name, params = {}) {
+      const query = Object.entries(params)
+        .filter(([, value]) => value !== undefined && value !== null && String(value).length)
+        .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+        .join("&");
+      window.location.href = `pbrstudio://${name}${query ? `?${query}` : ""}`;
+    }
+    function firstSelectedMaterial() {
+      const index = [...state.selected][0];
+      return materials[index] || materials[0];
+    }
+    function selectedActorPaths() {
+      const paths = [];
+      [...state.selected].forEach(index => {
+        const actors = materials[index] && materials[index].actors ? materials[index].actors : [];
+        actors.forEach(path => {
+          if (!paths.includes(path)) paths.push(path);
+        });
+      });
+      return paths;
+    }
+    const modulesEl = document.getElementById("modules");
+    modules.forEach((m, i) => {
+      const el = document.createElement("div");
+      el.className = "module" + (i === 1 ? " active" : "");
+      el.innerHTML = `<div class="ico">${m[0]}</div><div><strong>${m[1]}</strong><span>${m[2]}</span></div>`;
+      modulesEl.appendChild(el);
+    });
+    const groupsEl = document.getElementById("groups");
+    groups.forEach((g, i) => {
+      const el = document.createElement("div");
+      el.className = "group" + (i === 0 ? " active" : "");
+      el.innerHTML = `<div class="stack"></div><div><strong>${g[0]}</strong><span>${g[1]}</span></div><div class="count">${g[2]}</div>`;
+      groupsEl.appendChild(el);
+    });
+    function renderRows() {
+      const rowsEl = document.getElementById("rows");
+      rowsEl.innerHTML = "";
+      materials
+        .map((m, i) => ({ m, i }))
+        .filter(({m}) => !state.query || (`${m.name} ${m.type} ${m.usage} ${m.path}`.toLowerCase().includes(state.query)))
+        .forEach(({m, i}) => {
+          const row = document.createElement("div");
+          row.className = "row" + (state.selected.has(i) ? " checked" : "");
+          row.innerHTML = `<div class="cell"><div class="check"></div></div><div class="cell"><div class="preview ${m.style || "mat0"}"></div></div><div class="cell name" title="${m.name}">${m.name}</div><div class="cell type">${m.type}</div><div class="cell num">${m.count}</div><div class="cell" title="${m.usage} ${m.path}">${m.usage} ${m.path}</div><div class="cell"><div class="target">◎</div></div>`;
+          row.querySelector(".check").onclick = () => { state.selected.has(i) ? state.selected.delete(i) : state.selected.add(i); renderAll(); };
+          rowsEl.appendChild(row);
+        });
+      document.getElementById("materialTotal").textContent = `共 ${materials.length} 项材质`;
+      document.getElementById("rowRange").textContent = `显示 ${materials.length ? 1 : 0} - ${Math.min(materials.length, 50)}`;
+    }
+    function renderInspector() {
+      const chosen = [...state.selected].slice(0, 3).map(i => materials[i]);
+      document.getElementById("selectedChip").textContent = `已选中 ${state.selected.size} 项`;
+      document.getElementById("cards").innerHTML = chosen.map(m => `<div class="material-card"><div class="ball ${m.style || "mat0"}"></div><div><div class="card-title"><strong>${m.name}</strong><span class="tag">实例 Instance</span></div><div class="meta">${m.type}<br>路径 ${m.path}<br>数量 / Count ${m.count}　用途 / Used In ${m.usage}</div></div><div class="drop">拖拽材质到此处<br>替换<br>Drag & Drop</div></div>`).join("");
+      document.getElementById("tokens").innerHTML = chosen.map(m => `<div class="token">${m.name} ×</div>`).join("") + `<button class="icon-btn">清</button>`;
+      document.getElementById("statusText").innerHTML = `已扫描 ${sceneData.actorCount || 0} 个 Actor，<strong>${materials.length}</strong> 项材质`;
+    }
+    function renderAll() { renderRows(); renderInspector(); }
+    document.getElementById("search").addEventListener("input", e => { state.query = e.target.value.toLowerCase(); renderRows(); });
+    document.getElementById("refreshBtn").addEventListener("click", () => command("refresh"));
+    document.getElementById("openBtn").addEventListener("click", () => {
+      const material = firstSelectedMaterial();
+      if (material) command("open-material", { path: material.path });
+    });
+    document.getElementById("selectBtn").addEventListener("click", () => command("select-actors", { actors: selectedActorPaths().join("|") }));
+    document.getElementById("selectActorsBtn").addEventListener("click", () => command("select-actors", { actors: selectedActorPaths().join("|") }));
+    document.getElementById("resetBtn").addEventListener("click", () => {
+      state.selected.clear();
+      renderAll();
+    });
+    renderAll();
+  </script>
+</body>
+</html>

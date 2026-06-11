@@ -15,9 +15,20 @@ private:
 	TSharedRef<SWidget> BuildTopBar();
 	TSharedRef<SWidget> BuildStatusBar();
 	EVisibility GetSideNavVisibility() const;
+	FReply OnCreateWorkspaceTemplate();
+	FReply OnOpenWorkspaceTemplateSettings();
+	FReply OnGlobalManualRefreshScene();
+	FReply OnGlobalOpenProjectFolder();
+	FReply OnGlobalSelectSameMaterial();
+	FReply OnOpenMagicOutliner();
+	FReply OnGlobalToggleCompactMode();
+	FText GetGlobalCompactModeText() const;
 
 	TSharedPtr<class SPBRSideNav> SideNavWidget;
 	TSharedPtr<class SWidgetSwitcher> ContentSwitcher;
 	TSharedPtr<class STextBlock> StatusText;
-	bool bTextureSuiteCompactMode = false;
+	TSharedPtr<class SPBRTextureSuiteTab> TextureSuiteTab;
+	TSharedPtr<class SPBRSpecialMaterialsTab> SpecialMaterialsTab;
+	TSharedPtr<class SMaterialVaultWindow> MaterialVaultTab;
+	bool bAnyContentCompactMode = false;
 };

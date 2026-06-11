@@ -6,19 +6,25 @@
 #include "Factories/TextureFactory.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceConstant.h"
+#include "MaterialEditingLibrary.h"
 #include "Engine/Texture2D.h"
 #include "Factories/MaterialInstanceConstantFactoryNew.h"
 #include "Services/PBRMaterialTemplateManager.h"
 
 FString FPBRMaterialInstanceFactory::SanitizeAssetName(const FString& InName)
 {
-	FString Out = InName;
-	const FString Invalid = TEXT("\\/:*?\"<>|.,;'");
+	FString Out = InName.TrimStartAndEnd();
+	const FString Invalid = TEXT("\\/:*?\"<>|' ,.&!~\n\r\t@#(){}[]=;^%$`");
 	for (int32 i = 0; i < Invalid.Len(); ++i)
 	{
 		Out.ReplaceInline(*FString::Chr(Invalid[i]), TEXT("_"));
 	}
-	Out.ReplaceInline(TEXT(" "), TEXT("_"));
+	while (Out.Contains(TEXT("__")))
+	{
+		Out.ReplaceInline(TEXT("__"), TEXT("_"));
+	}
+	Out.RemoveFromStart(TEXT("_"));
+	Out.RemoveFromEnd(TEXT("_"));
 	if (Out.Len() > 80)
 	{
 		Out = Out.Left(80);
@@ -392,34 +398,7 @@ static bool MaterialNameSuggestsStrongDisplacement(const FString& Text)
 
 static float GetDefaultHeightStrength(EPBRMaterialType MaterialType, const FPBRMaterialSet* SourceSet, bool bHasHeightTexture)
 {
-	if (!bHasHeightTexture)
-	{
-		return 0.0f;
-	}
-
-	const FString DetectionText = SourceSet
-		? (SourceSet->Name + TEXT(" ") + SourceSet->Folder).ToLower()
-		: FString();
-	if (MaterialNameSuggestsStrongDisplacement(DetectionText))
-	{
-		return 1.0f;
-	}
-
-	switch (MaterialType)
-	{
-	case EPBRMaterialType::Stone:
-	case EPBRMaterialType::Tile:
-		return 1.0f;
-	case EPBRMaterialType::Wood:
-		return DetectionText.Contains(TEXT("bark")) || DetectionText.Contains(TEXT("树皮")) ? 1.0f : 0.35f;
-	case EPBRMaterialType::Leather:
-	case EPBRMaterialType::Fabric:
-		return 0.18f;
-	case EPBRMaterialType::Standard:
-		return 0.5f;
-	default:
-		return 0.05f;
-	}
+	return 0.0f;
 }
 
 void FPBRMaterialInstanceFactory::ApplyTextureParameters(UMaterialInstanceConstant* Instance, const TMap<FString, UTexture2D*>& Textures, EPBRMaterialType MaterialType, const FPBRMaterialSet* SourceSet)
@@ -513,6 +492,8 @@ void FPBRMaterialInstanceFactory::ApplyTextureParameters(UMaterialInstanceConsta
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::UVUOffset, 0.0f);
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::UVVOffset, 0.0f);
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::UVRotationDegrees, 0.0f);
+	Instance->InitStaticPermutation();
+	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
 	Instance->PostEditChange();
 }
 
@@ -524,14 +505,22 @@ bool FPBRMaterialInstanceFactory::CreateInstanceFromSet(
 	OutResult = FPBRMaterialCreateResult();
 
 	FString TemplateMessage;
-	UMaterial* ParentMaterial = FPBRMaterialTemplateManager::EnsureTemplateMaterial(Options.MaterialType, TemplateMessage);
+	UMaterialInterface* ParentMaterialInterface = Options.ParentMaterialOverride.LoadSynchronous();
+	UMaterial* ParentMaterial = Cast<UMaterial>(ParentMaterialInterface);
+	if (!ParentMaterial)
+	{
+		ParentMaterial = FPBRMaterialTemplateManager::EnsureTemplateMaterial(Options.MaterialType, TemplateMessage);
+	}
 	if (!ParentMaterial)
 	{
 		OutResult.Message = TemplateMessage;
 		return false;
 	}
-	FString ExampleMessage;
-	FPBRMaterialTemplateManager::EnsureExampleMaterialInstance(Options.MaterialType, ExampleMessage);
+	if (Options.bEnsureExampleMaterial)
+	{
+		FString ExampleMessage;
+		FPBRMaterialTemplateManager::EnsureExampleMaterialInstance(Options.MaterialType, ExampleMessage);
+	}
 	OutResult.ParentMaterial = ParentMaterial;
 
 	const FString SetPackagePath = BuildSetPackagePath(Set, Options);
@@ -545,7 +534,7 @@ bool FPBRMaterialInstanceFactory::CreateInstanceFromSet(
 	{
 		OutResult.MaterialInstance = ExistingInstance;
 		OutResult.bSkippedBecauseExists = true;
-		OutResult.Message = TEXT("使用已有材质实例");
+		OutResult.Message = TEXT("已存在，直接使用已有材质实例");
 		return true;
 	}
 
@@ -569,7 +558,7 @@ bool FPBRMaterialInstanceFactory::CreateInstanceFromSet(
 		}
 	}
 
-	if (ExistingAssetNames.Num() > 0)
+	if (ExistingAssetNames.Num() > 0 && !Options.bAllowExistingAssets)
 	{
 		OutResult.bSkippedBecauseExists = true;
 		OutResult.Message = FString::Printf(
