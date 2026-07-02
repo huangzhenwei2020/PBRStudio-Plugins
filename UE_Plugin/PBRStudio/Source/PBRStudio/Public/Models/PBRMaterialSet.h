@@ -51,7 +51,9 @@ struct PBRSTUDIO_API FPBRMaterialSet
 			|| Channels.Contains(TEXT("NormalDX"))
 			|| Channels.Contains(TEXT("NormalGL"));
 		bool bHasRoughness = Channels.Contains(TEXT("Roughness"))
-			|| Channels.Contains(TEXT("Glossiness"));
+			|| Channels.Contains(TEXT("Glossiness"))
+			|| Channels.Contains(TEXT("ORM"))
+			|| Channels.Contains(TEXT("ARM"));
 		return bHasBaseColor && bHasNormal && bHasRoughness;
 	}
 };

@@ -34,7 +34,7 @@ const TMap<FString, TArray<FString>> FPBRTextureScanner::ChannelTokens = {
 	{ TEXT("ClearCoatRoughness"), { TEXT("clearcoatroughness"), TEXT("clear_coat_roughness"), TEXT("coatroughness"), TEXT("coat_roughness") } },
 	{ TEXT("Anisotropy"),   { TEXT("anisotropy"), TEXT("anisotropic"), TEXT("aniso") } },
 	{ TEXT("Thickness"),    { TEXT("thickness"), TEXT("transmission"), TEXT("translucency") } },
-	{ TEXT("ORM"),          { TEXT("orm"), TEXT("rma"), TEXT("mro"), TEXT("occlusionroughnessmetallic"), TEXT("occlusion_roughness_metallic") } },
+	{ TEXT("ORM"),          { TEXT("orm"), TEXT("rma"), TEXT("rmo"), TEXT("mra"), TEXT("mro"), TEXT("occlusionroughnessmetallic"), TEXT("occlusion_roughness_metallic") } },
 	{ TEXT("ARM"),          { TEXT("arm"), TEXT("ambientroughnessmetallic"), TEXT("ambient_roughness_metallic") } },
 };
 
@@ -124,11 +124,17 @@ FString FPBRTextureScanner::DetectPBRChannelFromFilename(const FString& Path)
 	{
 		return Compact.Contains(TEXT("ambientroughnessmetallic")) ? TEXT("ARM") : TEXT("ORM");
 	}
+	if (Compact.Contains(TEXT("roughnessmetallicao")) || Compact.Contains(TEXT("roughnessmetallicambient")) ||
+		Compact.Contains(TEXT("metallicroughnessao")) || Compact.Contains(TEXT("metallicroughnessambient")))
+	{
+		return TEXT("ORM");
+	}
 	if (TokenSet.Contains(TEXT("arm")))
 	{
 		return TEXT("ARM");
 	}
-	if (TokenSet.Contains(TEXT("orm")) || TokenSet.Contains(TEXT("rma")))
+	if (TokenSet.Contains(TEXT("orm")) || TokenSet.Contains(TEXT("rma")) || TokenSet.Contains(TEXT("rmo")) ||
+		TokenSet.Contains(TEXT("mra")) || TokenSet.Contains(TEXT("mro")))
 	{
 		return TEXT("ORM");
 	}

@@ -444,6 +444,12 @@ void FPBRStudioModule::RegisterConsoleCommands()
 		ECVF_Default));
 
 	ConsoleCommands.Add(IConsoleManager::Get().RegisterConsoleCommand(
+		TEXT("PBRStudio.RebuildParentTemplates"),
+		TEXT("Rebuild PBR Studio material functions and parent templates only."),
+		FConsoleCommandDelegate::CreateStatic(&FPBRStudioModule::RebuildParentTemplateMaterialsFromConsole),
+		ECVF_Default));
+
+	ConsoleCommands.Add(IConsoleManager::Get().RegisterConsoleCommand(
 		TEXT("PBRStudio.RebuildTemplates"),
 		TEXT("Rebuild all PBR Studio template and special materials."),
 		FConsoleCommandDelegate::CreateStatic(&FPBRStudioModule::RebuildTemplateMaterialsFromConsole),
@@ -495,6 +501,23 @@ void FPBRStudioModule::UnregisterInputProcessor()
 	{
 		FSlateApplication::Get().UnregisterInputPreProcessor(InputProcessor);
 		InputProcessor.Reset();
+	}
+}
+
+void FPBRStudioModule::RebuildParentTemplateMaterialsFromConsole()
+{
+	TArray<FString> TemplateMessages;
+	TArray<FString> FunctionMessages;
+	const int32 FunctionCount = FPBRMaterialFunctionLibrary::EnsureAllMaterialFunctions(FunctionMessages);
+	const int32 TemplateCount = FPBRMaterialTemplateManager::EnsureAllTemplateMaterials(TemplateMessages);
+	UE_LOG(LogPBRStudio, Display, TEXT("PBRStudio parent templates rebuilt. Functions: %d, Templates: %d"), FunctionCount, TemplateCount);
+	for (const FString& Message : FunctionMessages)
+	{
+		UE_LOG(LogPBRStudio, Display, TEXT("%s"), *Message);
+	}
+	for (const FString& Message : TemplateMessages)
+	{
+		UE_LOG(LogPBRStudio, Display, TEXT("%s"), *Message);
 	}
 }
 

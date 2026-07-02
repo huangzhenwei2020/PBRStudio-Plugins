@@ -8,8 +8,10 @@ class AActor;
 class APostProcessVolume;
 class UCameraComponent;
 class ULightComponent;
+class UMaterialInstanceConstant;
 class UMaterialInterface;
 class UMeshComponent;
+class UPrimitiveComponent;
 class UStaticMesh;
 class FAssetThumbnail;
 class FAssetThumbnailPool;
@@ -22,6 +24,7 @@ class FDragDropEvent;
 struct FAssetData;
 template<typename ItemType> class SListView;
 template<typename ItemType> class STreeView;
+enum class EPBRMaterialType : uint8;
 
 enum class EPBRMagicOutlinerCategory : uint8
 {
@@ -56,6 +59,7 @@ struct FPBRMagicOutlinerItem
 	FString TypeText;
 	FString DetailText;
 	TWeakObjectPtr<AActor> Actor;
+	TWeakObjectPtr<UMeshComponent> MeshComponent;
 	TWeakObjectPtr<UMaterialInterface> Material;
 	TArray<FPBRMaterialSlotReference> MaterialSlots;
 	TArray<TSharedPtr<FPBRMagicOutlinerItem>> Children;
@@ -110,6 +114,10 @@ private:
 	TSharedRef<SWidget> BuildNameCheckPanel();
 	TSharedRef<SWidget> BuildCheckedListPanel();
 	TSharedRef<SWidget> BuildSelectedMaterialPanel();
+	TSharedRef<SWidget> BuildSelectedMaterialEditorPanel();
+	TSharedRef<SWidget> BuildEditableMaterialTypeMenu();
+	TSharedRef<SWidget> BuildMaterialScalarControl(const FText& Label, const FName& ParameterName, float MinValue, float MaxValue, float DefaultValue);
+	TSharedRef<SWidget> BuildMaterialVectorControl(const FText& Label, const FName& ParameterName, const FLinearColor& DefaultValue);
 	TSharedRef<SWidget> BuildModelToolsPanel();
 	TSharedRef<SWidget> BuildLightAdjustPanel();
 	TSharedRef<SWidget> BuildCameraPostProcessPanel();
@@ -120,6 +128,7 @@ private:
 	TSharedRef<ITableRow> GenerateCheckedActorRow(TSharedPtr<FPBRCheckedActorListItem> Item, const TSharedRef<STableViewBase>& OwnerTable);
 	void GetItemChildren(TSharedPtr<FPBRMagicOutlinerItem> Item, TArray<TSharedPtr<FPBRMagicOutlinerItem>>& OutChildren) const;
 	void OnTreeSelectionChanged(TSharedPtr<FPBRMagicOutlinerItem> Item, ESelectInfo::Type SelectInfo);
+	void HandleTreeItemClicked(TSharedPtr<FPBRMagicOutlinerItem> Item, bool bAddToSelection);
 	void OnTreeItemDoubleClicked(TSharedPtr<FPBRMagicOutlinerItem> Item);
 	void OnCheckedActorSelectionChanged(TSharedPtr<FPBRCheckedActorListItem> Item, ESelectInfo::Type SelectInfo);
 	EActiveTimerReturnType SyncMaterialSelectionTimer(double InCurrentTime, float InDeltaTime);
@@ -135,6 +144,9 @@ private:
 	const TSet<TWeakObjectPtr<AActor>>& GetActiveCheckedActors() const;
 	void GatherActors(TArray<AActor*>& OutActors) const;
 	void GetDisplayedActors(TArray<AActor*>& OutActors) const;
+	void CollectItemActors(TSharedPtr<FPBRMagicOutlinerItem> Item, TArray<AActor*>& OutActors, TSet<AActor*>& AddedActors) const;
+	TSharedPtr<FPBRMagicOutlinerItem> FindFirstItemForActor(AActor* Actor, TArray<TSharedPtr<FPBRMagicOutlinerItem>>* OutAncestors = nullptr) const;
+	void FocusFirstEditorSelectedActor(const TArray<AActor*>& SelectedActors);
 	void SyncAutoSelectCheckedActors();
 	bool PassesCategory(AActor* Actor) const;
 	bool PassesClassicSearch(AActor* Actor) const;
@@ -152,6 +164,7 @@ private:
 	FString GetActorTypeText(AActor* Actor) const;
 	FString GetActorDetailText(AActor* Actor) const;
 	void AddActorToGroup(const FString& GroupKey, AActor* Actor, TMap<FString, TSharedPtr<FPBRMagicOutlinerItem>>& GroupMap);
+	void AddModelMeshChildren(TSharedPtr<FPBRMagicOutlinerItem> ActorItem, AActor* Actor);
 	void AddMaterialSlotToList(UMaterialInterface* Material, AActor* Actor, UMeshComponent* MeshComponent, int32 SlotIndex, TMap<UMaterialInterface*, TSharedPtr<FPBRMagicOutlinerItem>>& MaterialMap);
 	FString MakeNameCheckKey(AActor* Actor) const;
 	ECheckBoxState GetNameCheckState(const FString& Name) const;
@@ -180,16 +193,28 @@ private:
 	FReply OnMaterialItemDrop(const FGeometry& Geometry, const FDragDropEvent& DragDropEvent, TSharedPtr<FPBRMagicOutlinerItem> Item);
 	FReply OnMaterialSlotDrop(const FGeometry& Geometry, const FDragDropEvent& DragDropEvent, TSharedPtr<FPBRMagicOutlinerItem> Item, int32 MaterialSlotIndex);
 	FReply OnModelReplacementDrop(const FGeometry& Geometry, const FDragDropEvent& DragDropEvent, TSharedPtr<FPBRMagicOutlinerItem> Item);
+	FReply OnEditSelectedMaterialSlot(TSharedPtr<FPBRMagicOutlinerItem> Item);
 	void OpenMaterialEditor(TSharedPtr<FPBRMagicOutlinerItem> Item);
+	bool ResolveEditableMaterialSlot(UPrimitiveComponent*& OutComponent, int32& OutSlotIndex) const;
+	UMaterialInstanceConstant* GetEditableMaterialInstance() const;
+	FText GetEditableMaterialNameText() const;
+	FText GetEditableMaterialSlotText() const;
+	FText GetEditableMaterialTypeText() const;
+	TOptional<float> GetEditableMaterialScalar(const FName& ParameterName, float DefaultValue) const;
+	TOptional<float> GetEditableMaterialVectorChannel(const FName& ParameterName, int32 ChannelIndex, const FLinearColor& DefaultValue) const;
+	void CommitEditableMaterialScalar(const FName& ParameterName, float Value, float MinValue, float MaxValue);
+	void CommitEditableMaterialVectorChannel(const FName& ParameterName, int32 ChannelIndex, float Value, const FLinearColor& DefaultValue);
+	void SelectEditableMaterialType(EPBRMaterialType MaterialType);
 	int32 ReplaceMaterialItem(TSharedPtr<FPBRMagicOutlinerItem> Item, UMaterialInterface* NewMaterial);
 	int32 ReplaceMaterialSlot(TSharedPtr<FPBRMagicOutlinerItem> Item, int32 MaterialSlotIndex, UMaterialInterface* NewMaterial);
 	int32 ReplaceModelActorsMesh(const TArray<AActor*>& Actors, UStaticMesh* NewMesh);
 	FReply OnModelBatchRenameClicked();
 	FReply OnModelReplaceActorsClicked();
 	FReply OnModelGroupToFolderClicked();
-	void ApplyModelBatchRename(const FString& Prefix, int32 StartIndex, bool bKeepOriginalName, bool bMoveToFolder, const FString& FolderName);
+	void ApplyModelBatchRename(const FString& Prefix, int32 StartIndex, bool bKeepOriginalName, bool bMoveToFolder, const FString& FolderName, bool bMoveToNewActor, const FString& NewActorName);
 	void MoveModelTargetsToFolder(const FString& FolderName);
 	int32 MoveActorsToFolder(const TArray<AActor*>& Actors, const FString& FolderName, bool bUseAttachmentRoot);
+	int32 MoveActorsToNewParentActor(const TArray<AActor*>& Actors, const FString& NewActorName);
 	bool IsIsolationProtectedActor(AActor* Actor) const;
 	bool DoesKeyEventMatchShortcut(const FKeyEvent& InKeyEvent) const;
 	FString ShortcutToString(const FInputChord& Chord) const;
@@ -229,6 +254,7 @@ private:
 	EVisibility GetCameraPostProcessVisibility() const;
 	EVisibility GetCheckedActionsVisibility() const;
 	EVisibility GetSelectedMaterialVisibility() const;
+	EVisibility GetEditableMaterialPanelVisibility() const;
 	EVisibility GetStandardControlsVisibility() const;
 	EVisibility GetDetailsPanelVisibility() const;
 	FText GetCheckedSummaryText() const;
@@ -248,6 +274,8 @@ private:
 	TArray<TSharedPtr<FPBRCheckedActorListItem>> CheckedListItems;
 	TArray<TSharedPtr<FPBRMagicOutlinerItem>> SelectedMaterialItems;
 	TSharedPtr<FPBRMagicOutlinerItem> ActiveTreeItem;
+	TWeakObjectPtr<UPrimitiveComponent> EditableMaterialComponent;
+	int32 EditableMaterialSlotIndex = INDEX_NONE;
 	TSet<TWeakObjectPtr<AActor>> PaintSelectedCheckedActors;
 	TMap<EPBRMagicOutlinerCategory, TSet<TWeakObjectPtr<AActor>>> CheckedActorsByCategory;
 	TMap<TWeakObjectPtr<AActor>, bool> IsolateHiddenStates;

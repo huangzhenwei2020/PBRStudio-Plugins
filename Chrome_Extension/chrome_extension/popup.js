@@ -3,6 +3,7 @@ const statusText = document.getElementById("status-text");
 const pageInfo = document.getElementById("page-info");
 const pendingBox = document.getElementById("pending-box");
 const portInput = document.getElementById("port-input");
+const tokenInput = document.getElementById("token-input");
 const portHint = document.getElementById("port-hint");
 const btnPushPage = document.getElementById("btn-push-page");
 const btnPushPageUE = document.getElementById("btn-push-page-ue");
@@ -17,6 +18,7 @@ const btnTargetUE = document.getElementById("target-ue");
 let pageUrls = [];
 let target = "max";
 let portDirty = false;
+let tokenDirty = false;
 
 function targetLabel() {
   return target === "ue" ? "UE" : "Max";
@@ -45,6 +47,8 @@ function formatCheckTime(timestamp) {
 
 function setTarget(nextTarget) {
   target = nextTarget === "ue" ? "ue" : "max";
+  portDirty = false;
+  tokenDirty = false;
   btnTargetMax.classList.toggle("active", target === "max");
   btnTargetUE.classList.toggle("active", target === "ue");
   chrome.runtime.sendMessage({ action: "setTarget", target }, () => refresh());
@@ -55,10 +59,14 @@ function refresh() {
     const online = !!(resp && resp.online);
     const pending = (resp && resp.pendingList) || [];
     const port = (resp && resp.port) || defaultPortForTarget();
+    const token = (resp && resp.token) || "";
     const checkedAt = resp && resp.lastCheckedAt;
 
     if (!portDirty && document.activeElement !== portInput) {
       portInput.value = port;
+    }
+    if (!tokenDirty && document.activeElement !== tokenInput) {
+      tokenInput.value = token;
     }
 
     dot.className = "dot " + (online ? "online" : "offline");
@@ -91,20 +99,17 @@ function refresh() {
 }
 
 function queryPageLinks() {
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (!tabs || !tabs[0]) return;
-    chrome.tabs.sendMessage(tabs[0].id, { action: "collectLinks" }, (resp) => {
-      if (chrome.runtime.lastError || !resp) {
-        pageInfo.textContent = "无法扫描当前页面，请刷新标签页后重试。";
-        btnPushPage.disabled = true;
-        btnPushPageUE.disabled = true;
-        return;
-      }
-      pageUrls = resp.urls || [];
-      pageInfo.textContent = pageUrls.length ? "识别到下载链接：" + String(pageUrls.length) : "没有识别到下载链接";
-      btnPushPage.disabled = pageUrls.length === 0;
-      btnPushPageUE.disabled = pageUrls.length === 0;
-    });
+  chrome.runtime.sendMessage({ action: "collectActiveTabLinks" }, (resp) => {
+    if (chrome.runtime.lastError || !resp || resp.ok === false) {
+      pageInfo.textContent = "无法扫描当前页面，请刷新标签页后重试。";
+      btnPushPage.disabled = true;
+      btnPushPageUE.disabled = true;
+      return;
+    }
+    pageUrls = resp.urls || [];
+    pageInfo.textContent = pageUrls.length ? "识别到下载链接：" + String(pageUrls.length) : "没有识别到下载链接";
+    btnPushPage.disabled = pageUrls.length === 0;
+    btnPushPageUE.disabled = pageUrls.length === 0;
   });
 }
 
@@ -154,8 +159,9 @@ btnSavePort.addEventListener("click", () => {
     portHint.textContent = msg;
     return;
   }
-  chrome.runtime.sendMessage({ action: "setPort", target, port: Number(portInput.value) }, (resp) => {
+  chrome.runtime.sendMessage({ action: "setPort", target, port: Number(portInput.value), token: tokenInput.value.trim() }, (resp) => {
     portDirty = false;
+    tokenDirty = false;
     portHint.textContent = (resp && resp.message) || "端口已保存";
     refresh();
   });
@@ -169,9 +175,11 @@ btnCheckPort.addEventListener("click", () => {
   }
   btnCheckPort.disabled = true;
   btnCheckPort.textContent = "连接中...";
-  chrome.runtime.sendMessage({ action: "checkPort", target, port: Number(portInput.value) }, (resp) => {
+  chrome.runtime.sendMessage({ action: "checkPort", target, port: Number(portInput.value), token: tokenInput.value.trim() }, (resp) => {
     btnCheckPort.disabled = false;
     btnCheckPort.textContent = "连接";
+    portDirty = false;
+    tokenDirty = false;
     portHint.textContent = (resp && resp.message) || "检测完成";
     refresh();
   });
@@ -179,6 +187,10 @@ btnCheckPort.addEventListener("click", () => {
 
 portInput.addEventListener("input", () => {
   portDirty = true;
+});
+
+tokenInput.addEventListener("input", () => {
+  tokenDirty = true;
 });
 
 chrome.storage.local.get(["pushTarget"], (data) => {

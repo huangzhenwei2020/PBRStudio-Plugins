@@ -74,6 +74,7 @@ private:
 	TSharedPtr<class SEditableTextBox> LibraryPathBox;
 	TSharedPtr<class SComboBox<FStringOption>> LibraryHistoryComboBox;
 	TSharedPtr<SSpinBox<int32>> PortSpin;
+	TSharedPtr<class SEditableTextBox> BridgeTokenBox;
 	TSharedPtr<class STextBlock> ServerStatusText;
 	TSharedPtr<SListView<TSharedPtr<FPBRDownloadSite>>> SiteTree;
 	TSharedPtr<SListView<TSharedPtr<FPBRDownloadEntry>>> QueueTree;
@@ -85,6 +86,8 @@ private:
 	TArray<TSharedPtr<FPBRDownloadEntry>> QueueRows;
 	TSharedPtr<FPBRDownloadManager> DownloadManager;
 	TSharedPtr<FPBRHttpServer> HttpServer;
+	FString BridgeToken;
+	FString LastServerError;
 	FString LastClipboardText;
 	TArray<FStringOption> LibraryHistoryOptions;
 	FOnLibrarySentToTextureSuite OnLibrarySentToTextureSuite;

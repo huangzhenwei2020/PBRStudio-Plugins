@@ -47,6 +47,8 @@ public class PBRStudio : ModuleRules
 			"ContentBrowser",
 			"DeveloperSettings",
 			"EditorFramework",
+			"MaterialBaking",
+			"MaterialUtilities",
 			"Settings",
 			"ToolMenus",
 		});

@@ -1,6 +1,7 @@
 const DEFAULT_MAX_PORT = 19527;
 const DEFAULT_UE_PORT = 19528;
 const DEFAULT_PORT = DEFAULT_MAX_PORT;
+const TOKEN_HEADER = "X-PBRStudio-Token";
 
 function t(key, substitutions) {
   const value = chrome.i18n.getMessage(key, substitutions);
@@ -20,15 +21,17 @@ function getSettings() {
     chrome.storage.local.get([
       "serverPort", "pendingQueue", "serverOnline", "lastCheckedAt", "lastTriedPorts",
       "ueServerPort", "uePendingQueue", "ueServerOnline", "ueLastCheckedAt", "ueLastTriedPorts",
-      "pushTarget"
+      "pushTarget", "bridgeToken", "ueBridgeToken"
     ], (data) => {
       resolve({
         port: Number(data.serverPort || DEFAULT_MAX_PORT),
+        token: String(data.bridgeToken || ""),
         pendingQueue: data.pendingQueue || [],
         serverOnline: !!data.serverOnline,
         lastCheckedAt: Number(data.lastCheckedAt || 0),
         lastTriedPorts: Array.isArray(data.lastTriedPorts) ? data.lastTriedPorts : [],
         uePort: Number(data.ueServerPort || DEFAULT_UE_PORT),
+        ueToken: String(data.ueBridgeToken || ""),
         uePendingQueue: data.uePendingQueue || [],
         ueServerOnline: !!data.ueServerOnline,
         ueLastCheckedAt: Number(data.ueLastCheckedAt || 0),
@@ -47,6 +50,18 @@ function serverUrl(port) {
   return "http://127.0.0.1:" + Number(port || DEFAULT_PORT);
 }
 
+function normalizeToken(token) {
+  return String(token || "").trim();
+}
+
+function authHeaders(token, json = false) {
+  const headers = {};
+  if (json) headers["Content-Type"] = "application/json";
+  const normalized = normalizeToken(token);
+  if (normalized) headers[TOKEN_HEADER] = normalized;
+  return headers;
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -57,9 +72,9 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
   }
 }
 
-async function pingPort(port) {
+async function pingPort(port, token = "") {
   try {
-    const resp = await fetchWithTimeout(serverUrl(port) + "/ping", { method: "GET" }, 2500);
+    const resp = await fetchWithTimeout(serverUrl(port) + "/ping", { method: "GET", headers: authHeaders(token) }, 2500);
     const data = await resp.json().catch(() => ({}));
     return !!(resp.ok && data && data.status === "ok");
   } catch (_e) {
@@ -73,6 +88,10 @@ function candidatePorts(preferredPort) {
 
 function targetPort(settings, target) {
   return target === "ue" ? Number(settings.uePort || DEFAULT_UE_PORT) : Number(settings.port || DEFAULT_MAX_PORT);
+}
+
+function targetToken(settings, target) {
+  return target === "ue" ? normalizeToken(settings.ueToken) : normalizeToken(settings.token);
 }
 
 function pendingKey(target) {
@@ -95,19 +114,23 @@ function portKey(target) {
   return target === "ue" ? "ueServerPort" : "serverPort";
 }
 
+function tokenKey(target) {
+  return target === "ue" ? "ueBridgeToken" : "bridgeToken";
+}
+
 function targetName(target) {
   return target === "ue" ? "UE" : "3ds Max";
 }
 
-async function discoverServerPort(preferredPort) {
+async function discoverServerPort(preferredPort, token = "", target = "max") {
   const candidates = candidatePorts(preferredPort);
   for (const port of candidates) {
-    if (await pingPort(port)) {
-      await setSettings({ serverPort: Number(port), serverOnline: true, lastCheckedAt: Date.now(), lastTriedPorts: candidates });
+    if (await pingPort(port, token)) {
+      await setSettings({ [portKey(target)]: Number(port), [onlineKey(target)]: true, [checkedAtKey(target)]: Date.now(), [triedPortsKey(target)]: candidates });
       return Number(port);
     }
   }
-  await setSettings({ serverOnline: false, lastCheckedAt: Date.now(), lastTriedPorts: candidates });
+  await setSettings({ [onlineKey(target)]: false, [checkedAtKey(target)]: Date.now(), [triedPortsKey(target)]: candidates });
   return Number(preferredPort || DEFAULT_PORT);
 }
 
@@ -156,6 +179,35 @@ chrome.runtime.onInstalled.addListener(async () => {
   });
 });
 
+function sendMessageToTab(tabId, message) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, message, (resp) => {
+      const err = chrome.runtime.lastError;
+      if (err) reject(new Error(err.message));
+      else resolve(resp);
+    });
+  });
+}
+
+async function injectContentScript(tabId) {
+  if (!chrome.scripting || !chrome.scripting.executeScript) {
+    throw new Error("当前 Chrome 不支持脚本注入");
+  }
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["content.js"]
+  });
+}
+
+async function collectLinksFromTab(tabId) {
+  try {
+    return await sendMessageToTab(tabId, { action: "collectLinks" });
+  } catch (_e) {
+    await injectContentScript(tabId);
+    return await sendMessageToTab(tabId, { action: "collectLinks" });
+  }
+}
+
 chrome.downloads.onCreated.addListener(async (item) => {
   try {
     const url = normalizeDownloadUrl(item && item.finalUrl ? item.finalUrl : item && item.url);
@@ -182,17 +234,16 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       showNotification(t("noActiveTab"));
       return;
     }
-    chrome.tabs.sendMessage(tab.id, { action: "collectLinks" }, async (resp) => {
-      if (chrome.runtime.lastError) {
-        showNotification(t("couldNotScanPage"));
-        return;
-      }
+    try {
+      const resp = await collectLinksFromTab(tab.id);
       if (resp && resp.urls && resp.urls.length > 0) {
         await pushUrls(resp.urls, { target: info.menuItemId === "pushPageLinksUE" ? "ue" : "max" });
       } else {
         showNotification(t("noDownloadableLinksOnPage"));
       }
-    });
+    } catch (_e) {
+      showNotification(t("couldNotScanPage"));
+    }
   }
 });
 
@@ -214,6 +265,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         pending: pending.length,
         pendingList: pending,
         port: targetPort(data, target),
+        token: targetToken(data, target),
         target,
         lastCheckedAt: target === "ue" ? data.ueLastCheckedAt : data.lastCheckedAt,
         triedPorts: target === "ue" ? [targetPort(data, target)] : [targetPort(data, target)]
@@ -229,6 +281,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     setSettings({ [pendingKey(msg.target || "max")]: [] }).then(() => sendResponse({ ok: true }));
     return true;
   }
+  if (msg.action === "collectActiveTabLinks") {
+    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+      try {
+        if (!tabs || !tabs[0] || typeof tabs[0].id !== "number") {
+          sendResponse({ ok: false, urls: [], error: t("noActiveTab") });
+          return;
+        }
+        const resp = await collectLinksFromTab(tabs[0].id);
+        sendResponse({ ok: true, urls: (resp && resp.urls) || [] });
+      } catch (e) {
+        sendResponse({ ok: false, urls: [], error: String(e) });
+      }
+    });
+    return true;
+  }
   if (msg.action === "setPort") {
     const err = validatePort(msg.port);
     if (err) {
@@ -236,7 +303,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return true;
     }
     const target = msg.target || "max";
-    setSettings({ [portKey(target)]: Number(msg.port), [onlineKey(target)]: false, pushTarget: target }).then(() => {
+    const patch = { [portKey(target)]: Number(msg.port), [onlineKey(target)]: false, pushTarget: target };
+    if (typeof msg.token === "string") {
+      patch[tokenKey(target)] = normalizeToken(msg.token);
+    }
+    setSettings(patch).then(() => {
       sendResponse({
         ok: true,
         message: targetName(target) + " 端口已保存为 " + String(Number(msg.port))
@@ -251,12 +322,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return true;
     }
     const target = msg.target || "max";
+    const token = normalizeToken(msg.token);
+    if (!token) {
+      sendResponse({ ok: false, message: targetName(target) + " Token 未填写" });
+      return true;
+    }
     const url = serverUrl(msg.port) + "/ping";
-    fetch(url, { method: "GET" }).then(async (resp) => {
+    fetch(url, { method: "GET", headers: authHeaders(token) }).then(async (resp) => {
       const data = await resp.json().catch(() => ({}));
       const ok = !!(data && data.status === "ok");
       await setSettings({
         [portKey(target)]: Number(msg.port),
+        [tokenKey(target)]: token,
         [onlineKey(target)]: ok,
         [checkedAtKey(target)]: Date.now(),
         [triedPortsKey(target)]: [Number(msg.port)],
@@ -281,6 +358,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }).catch(() => {
       setSettings({
         [portKey(target)]: Number(msg.port),
+        [tokenKey(target)]: token,
         [onlineKey(target)]: false,
         [checkedAtKey(target)]: Date.now(),
         [triedPortsKey(target)]: [Number(msg.port)],
@@ -296,13 +374,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === "getAiState") {
     getSettings().then(async (data) => {
       try {
-        const port = await discoverServerPort(data.port);
-        const resp = await fetchWithTimeout(serverUrl(port) + "/api/ai/state", { method: "GET" }, 8000);
+        const token = targetToken(data, "max");
+        const port = await discoverServerPort(data.port, token, "max");
+        const resp = await fetchWithTimeout(serverUrl(port) + "/api/ai/state", { method: "GET", headers: authHeaders(token) }, 8000);
         const payload = await resp.json().catch(() => ({}));
         sendResponse({
           ok: !!resp.ok,
           port,
-          online: await pingPort(port),
+          online: await pingPort(port, token),
           payload
         });
       } catch (e) {
@@ -344,11 +423,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 async function proxyAiRequest(path, payload) {
   const settings = await getSettings();
-  const port = await discoverServerPort(settings.port);
+  const token = targetToken(settings, "max");
+  const port = await discoverServerPort(settings.port, token, "max");
   try {
     const resp = await fetchWithTimeout(serverUrl(port) + path, {
       method: payload ? "POST" : "GET",
-      headers: payload ? { "Content-Type": "application/json" } : undefined,
+      headers: authHeaders(token, !!payload),
       body: payload ? JSON.stringify(payload) : undefined
     }, path === "/api/ai/send" ? 12000 : 8000);
     const data = await resp.json().catch(() => ({}));
@@ -796,8 +876,15 @@ async function pushUrls(urls, options = {}) {
   const settings = await getSettings();
   const target = options.target === "ue" ? "ue" : "max";
   const port = targetPort(settings, target);
+  const token = targetToken(settings, target);
   const queueKey = pendingKey(target);
   const pushEndpoint = serverUrl(port) + "/push";
+
+  if (!token) {
+    const message = targetName(target) + " Token 未配置，请先在弹窗里填写本地桥接 Token";
+    showNotification(message);
+    return { ok: false, error: message };
+  }
 
   const isOnline = target === "ue" ? settings.ueServerOnline : settings.serverOnline;
   if (!isOnline) {
@@ -807,7 +894,7 @@ async function pushUrls(urls, options = {}) {
   try {
     const resp = await fetch(pushEndpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders(token, true),
       body: JSON.stringify({ urls, auto_start_download: !!options.autoStart })
     });
     const data = await resp.json().catch(() => ({}));
@@ -839,8 +926,9 @@ async function retryPendingQueue(target = "max") {
 
 async function updateConnectionStatus() {
   const settings = await getSettings();
-  const port = await discoverServerPort(settings.port);
-  await setSettings({ serverPort: port, serverOnline: await pingPort(port), lastCheckedAt: Date.now() });
+  const token = targetToken(settings, "max");
+  const port = await discoverServerPort(settings.port, token, "max");
+  await setSettings({ serverPort: port, serverOnline: await pingPort(port, token), lastCheckedAt: Date.now() });
 }
 
 function showNotification(message) {

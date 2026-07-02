@@ -2249,7 +2249,7 @@ FString SPBRTextureSuiteTab::SetDisplayIssues(const FPBRMaterialSet& Set) const
 	{
 		Issues.Add(TEXT("无法线，使用母材质默认"));
 	}
-	if (!Set.Channels.Contains(TEXT("Roughness")) && !Set.Channels.Contains(TEXT("Glossiness")) && !Set.Channels.Contains(TEXT("ORM")))
+	if (!Set.Channels.Contains(TEXT("Roughness")) && !Set.Channels.Contains(TEXT("Glossiness")) && !Set.Channels.Contains(TEXT("ORM")) && !Set.Channels.Contains(TEXT("ARM")))
 	{
 		Issues.Add(TEXT("无粗糙度，使用母材质默认"));
 	}

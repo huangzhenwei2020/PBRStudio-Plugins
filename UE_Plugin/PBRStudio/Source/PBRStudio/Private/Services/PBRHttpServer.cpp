@@ -3,6 +3,28 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 
+namespace
+{
+	const TCHAR* PBRBridgeTokenHeader = TEXT("X-PBRStudio-Token");
+
+	FString RequestHeaderValue(const FHttpServerRequest& Request, const FString& HeaderName)
+	{
+		if (const TArray<FString>* Values = Request.Headers.Find(HeaderName))
+		{
+			return Values->Num() > 0 ? (*Values)[0] : FString();
+		}
+
+		for (const TPair<FString, TArray<FString>>& Header : Request.Headers)
+		{
+			if (Header.Key.Equals(HeaderName, ESearchCase::IgnoreCase))
+			{
+				return Header.Value.Num() > 0 ? Header.Value[0] : FString();
+			}
+		}
+		return FString();
+	}
+}
+
 FPBRHttpServer::FPBRHttpServer() = default;
 
 FPBRHttpServer::~FPBRHttpServer()
@@ -10,9 +32,16 @@ FPBRHttpServer::~FPBRHttpServer()
 	Stop();
 }
 
-bool FPBRHttpServer::Start(int32 Port)
+bool FPBRHttpServer::Start(int32 Port, const FString& InBridgeToken)
 {
 	if (bIsRunning) return true;
+
+	BridgeToken = InBridgeToken.TrimStartAndEnd();
+	if (BridgeToken.IsEmpty())
+	{
+		UE_LOG(LogTemp, Error, TEXT("[PBRHttpServer] Bridge token is empty"));
+		return false;
+	}
 
 	Router = FHttpServerModule::Get().GetHttpRouter(Port, /* bFailOnBindFailure */ false);
 	if (!Router.IsValid())
@@ -66,45 +95,48 @@ void FPBRHttpServer::Stop()
 	Router.Reset();
 	bIsRunning = false;
 	BoundPort = 0;
+	BridgeToken.Empty();
 
 	UE_LOG(LogTemp, Display, TEXT("[PBRHttpServer] Stopped"));
 }
 
 bool FPBRHttpServer::HandlePing(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
 {
+	if (!IsAuthorized(Request))
+	{
+		OnComplete(MakeErrorResponse(TEXT("Unauthorized")));
+		return true;
+	}
+
 	TSharedRef<FJsonObject> Json = MakeShareable(new FJsonObject);
 	Json->SetStringField(TEXT("status"), TEXT("ok"));
 	Json->SetStringField(TEXT("service"), TEXT("PBRPushServer"));
 
-	FString Body;
-	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Body);
-	FJsonSerializer::Serialize(Json, Writer);
-
-	TUniquePtr<FHttpServerResponse> Response = FHttpServerResponse::Create(Body, TEXT("application/json"));
-	Response->Headers.Add(TEXT("Access-Control-Allow-Origin"), { TEXT("*") });
-	OnComplete(MoveTemp(Response));
+	OnComplete(MakeJsonResponse(Json));
 	return true;
 }
 
 bool FPBRHttpServer::HandlePush(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
 {
+	if (!IsAuthorized(Request))
+	{
+		OnComplete(MakeErrorResponse(TEXT("Unauthorized")));
+		return true;
+	}
+
 	// Parse JSON body
-	FString BodyStr = FString(UTF8_TO_TCHAR(reinterpret_cast<const char*>(Request.Body.GetData())));
-	BodyStr = BodyStr.Left(Request.Body.Num());
+	FString BodyStr;
+	if (Request.Body.Num() > 0)
+	{
+		FUTF8ToTCHAR ConvertedBody(reinterpret_cast<const ANSICHAR*>(Request.Body.GetData()), Request.Body.Num());
+		BodyStr = FString(ConvertedBody.Length(), ConvertedBody.Get());
+	}
 
 	TSharedPtr<FJsonObject> Json;
 	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(BodyStr);
 	if (!FJsonSerializer::Deserialize(Reader, Json) || !Json.IsValid())
 	{
-		TSharedRef<FJsonObject> ErrJson = MakeShareable(new FJsonObject);
-		ErrJson->SetBoolField(TEXT("ok"), false);
-		ErrJson->SetStringField(TEXT("error"), TEXT("Invalid JSON"));
-		FString ErrBody;
-		TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ErrBody);
-		FJsonSerializer::Serialize(ErrJson, Writer);
-		TUniquePtr<FHttpServerResponse> Response = FHttpServerResponse::Create(ErrBody, TEXT("application/json"));
-		Response->Headers.Add(TEXT("Access-Control-Allow-Origin"), { TEXT("*") });
-		OnComplete(MoveTemp(Response));
+		OnComplete(MakeErrorResponse(TEXT("Invalid JSON")));
 		return true;
 	}
 
@@ -127,24 +159,49 @@ bool FPBRHttpServer::HandlePush(const FHttpServerRequest& Request, const FHttpRe
 	ResultJson->SetBoolField(TEXT("ok"), true);
 	ResultJson->SetNumberField(TEXT("count"), Urls.Num());
 
-	FString ResultBody;
-	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResultBody);
-	FJsonSerializer::Serialize(ResultJson, Writer);
-
-	TUniquePtr<FHttpServerResponse> Response = FHttpServerResponse::Create(ResultBody, TEXT("application/json"));
-	Response->Headers.Add(TEXT("Access-Control-Allow-Origin"), { TEXT("*") });
-	Response->Headers.Add(TEXT("Access-Control-Allow-Methods"), { TEXT("GET, POST, OPTIONS") });
-	Response->Headers.Add(TEXT("Access-Control-Allow-Headers"), { TEXT("Content-Type") });
-	OnComplete(MoveTemp(Response));
+	OnComplete(MakeJsonResponse(ResultJson));
 	return true;
 }
 
 bool FPBRHttpServer::HandleOptions(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
 {
 	TUniquePtr<FHttpServerResponse> Response = FHttpServerResponse::Create(TEXT(""), TEXT("text/plain"));
-	Response->Headers.Add(TEXT("Access-Control-Allow-Origin"), { TEXT("*") });
-	Response->Headers.Add(TEXT("Access-Control-Allow-Methods"), { TEXT("GET, POST, OPTIONS") });
-	Response->Headers.Add(TEXT("Access-Control-Allow-Headers"), { TEXT("Content-Type") });
+	AddCorsHeaders(*Response);
 	OnComplete(MoveTemp(Response));
 	return true;
+}
+
+bool FPBRHttpServer::IsAuthorized(const FHttpServerRequest& Request) const
+{
+	if (BridgeToken.IsEmpty())
+	{
+		return false;
+	}
+	return RequestHeaderValue(Request, PBRBridgeTokenHeader).TrimStartAndEnd() == BridgeToken;
+}
+
+TUniquePtr<FHttpServerResponse> FPBRHttpServer::MakeJsonResponse(const TSharedRef<FJsonObject>& Json) const
+{
+	FString Body;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Body);
+	FJsonSerializer::Serialize(Json, Writer);
+
+	TUniquePtr<FHttpServerResponse> Response = FHttpServerResponse::Create(Body, TEXT("application/json"));
+	AddCorsHeaders(*Response);
+	return Response;
+}
+
+TUniquePtr<FHttpServerResponse> FPBRHttpServer::MakeErrorResponse(const FString& Error) const
+{
+	TSharedRef<FJsonObject> Json = MakeShareable(new FJsonObject);
+	Json->SetBoolField(TEXT("ok"), false);
+	Json->SetStringField(TEXT("error"), Error);
+	return MakeJsonResponse(Json);
+}
+
+void FPBRHttpServer::AddCorsHeaders(FHttpServerResponse& Response) const
+{
+	Response.Headers.Add(TEXT("Access-Control-Allow-Origin"), { TEXT("*") });
+	Response.Headers.Add(TEXT("Access-Control-Allow-Methods"), { TEXT("GET, POST, OPTIONS") });
+	Response.Headers.Add(TEXT("Access-Control-Allow-Headers"), { FString::Printf(TEXT("Content-Type, %s"), PBRBridgeTokenHeader) });
 }

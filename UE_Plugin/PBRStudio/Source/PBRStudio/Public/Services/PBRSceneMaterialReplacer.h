@@ -6,9 +6,12 @@
 
 class AActor;
 class UMaterial;
+class UMaterialInstanceConstant;
 class UMaterialInterface;
 class UPrimitiveComponent;
 class UTexture2D;
+
+enum class EPBRMaterialType : uint8;
 
 enum class EPBRSceneReplacementKind : uint8
 {
@@ -95,6 +98,14 @@ struct PBRSTUDIO_API FPBRSceneReplaceResult
 	TArray<FString> Messages;
 };
 
+struct PBRSTUDIO_API FPBRSceneEditableMaterialResult
+{
+	UMaterialInstanceConstant* Instance = nullptr;
+	FString Message;
+	bool bCreatedOrUpdatedInstance = false;
+	bool bAssignedToSlot = false;
+};
+
 class PBRSTUDIO_API FPBRSceneMaterialReplacer
 {
 public:
@@ -109,6 +120,11 @@ public:
 
 	static void RefreshCurrentLevelMaterialAssignments();
 	static int32 UndoLastReplacement(FPBRSceneReplaceResult& OutResult);
+	static FPBRSceneEditableMaterialResult EnsureEditableMaterialForSlot(UPrimitiveComponent* Component, int32 MaterialIndex);
+	static bool SetMaterialTypeForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, EPBRMaterialType MaterialType, FString& OutMessage);
+	static bool SetScalarParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, float Value, FString& OutMessage);
+	static bool SetVectorParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, const FLinearColor& Value, FString& OutMessage);
+	static bool SetStaticSwitchParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, bool bValue, FString& OutMessage);
 
 private:
 	static TArray<FPBRSceneMaterialSlot> LastReplacementSlots;

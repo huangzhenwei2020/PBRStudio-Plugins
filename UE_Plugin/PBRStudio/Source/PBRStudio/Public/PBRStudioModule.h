@@ -18,6 +18,7 @@ public:
 	static void ToggleMagicOutlinerWindow();
 	static void TogglePluginLanguage();
 	static void RefreshOpenPluginWindows();
+	static void RebuildParentTemplateMaterialsFromConsole();
 	static void RebuildTemplateMaterialsFromConsole();
 	static void RebuildSubstrateTemplateMaterialsFromConsole();
 	static void ScanMaterialFunctionUsageFromConsole();

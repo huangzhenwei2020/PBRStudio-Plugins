@@ -8,6 +8,7 @@
 #include "Components/LightComponent.h"
 #include "Components/MeshComponent.h"
 #include "Components/PointLightComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/RectLightComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -28,15 +29,20 @@
 #include "GameFramework/Actor.h"
 #include "Materials/Material.h"
 #include "InputCoreTypes.h"
+#include "MaterialShared.h"
+#include "Materials/MaterialInstanceConstant.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstance.h"
 #include "Misc/ObjectThumbnail.h"
+#include "Misc/MessageDialog.h"
 #include "ObjectTools.h"
+#include "Models/PBRMaterialTypes.h"
 #include "PBRStudioModule.h"
 #include "PBRStudioStyle.h"
 #include "Rendering/DrawElements.h"
 #include "Services/PBRDataStore.h"
 #include "Services/PBRLocalization.h"
+#include "Services/PBRSceneMaterialReplacer.h"
 #include "Styling/AppStyle.h"
 #include "ScopedTransaction.h"
 #include "Subsystems/AssetEditorSubsystem.h"
@@ -76,6 +82,101 @@ const TCHAR* MagicOutlinerThemeConfigKey = TEXT("magic_outliner_theme");
 static FText PBRText(const TCHAR* Key, const TCHAR* Chinese, const TCHAR* English)
 {
 	return FPBRLocalization::Text(Key, Chinese, English);
+}
+
+struct FPBRMagicMaterialTypeOption
+{
+	EPBRMaterialType Type;
+	const TCHAR* Key;
+	const TCHAR* Chinese;
+	const TCHAR* English;
+};
+
+static const TArray<FPBRMagicMaterialTypeOption>& GetMagicMaterialTypeOptions()
+{
+	static const TArray<FPBRMagicMaterialTypeOption> Options = {
+		{ EPBRMaterialType::Standard, TEXT("MagicMaterialTypeStandard"), TEXT("标准"), TEXT("Standard") },
+		{ EPBRMaterialType::Wood, TEXT("MagicMaterialTypeWood"), TEXT("木材"), TEXT("Wood") },
+		{ EPBRMaterialType::Stone, TEXT("MagicMaterialTypeStone"), TEXT("石材"), TEXT("Stone") },
+		{ EPBRMaterialType::Tile, TEXT("MagicMaterialTypeTile"), TEXT("瓷砖"), TEXT("Tile") },
+		{ EPBRMaterialType::Fabric, TEXT("MagicMaterialTypeFabric"), TEXT("布料"), TEXT("Fabric") },
+		{ EPBRMaterialType::Leather, TEXT("MagicMaterialTypeLeather"), TEXT("皮革"), TEXT("Leather") },
+		{ EPBRMaterialType::Plastic, TEXT("MagicMaterialTypePlastic"), TEXT("塑料"), TEXT("Plastic") },
+		{ EPBRMaterialType::Metal, TEXT("MagicMaterialTypeMetal"), TEXT("金属"), TEXT("Metal") },
+		{ EPBRMaterialType::Transparent, TEXT("MagicMaterialTypeTransparent"), TEXT("半透明"), TEXT("Transparent") },
+		{ EPBRMaterialType::Glass, TEXT("MagicMaterialTypeGlass"), TEXT("玻璃"), TEXT("Glass") },
+		{ EPBRMaterialType::Water, TEXT("MagicMaterialTypeWater"), TEXT("水"), TEXT("Water") },
+		{ EPBRMaterialType::Emissive, TEXT("MagicMaterialTypeEmissive"), TEXT("自发光"), TEXT("Emissive") }
+	};
+	return Options;
+}
+
+static FText GetMagicMaterialTypeLabel(EPBRMaterialType MaterialType)
+{
+	for (const FPBRMagicMaterialTypeOption& Option : GetMagicMaterialTypeOptions())
+	{
+		if (Option.Type == MaterialType)
+		{
+			return PBRText(Option.Key, Option.Chinese, Option.English);
+		}
+	}
+	return PBRText(TEXT("MagicMaterialTypeUnknown"), TEXT("未知"), TEXT("Unknown"));
+}
+
+static EPBRMaterialType GuessMagicMaterialTypeFromMaterial(UMaterialInterface* Material)
+{
+	const UMaterialInterface* InspectMaterial = Material;
+	if (const UMaterialInstance* Instance = Cast<UMaterialInstance>(Material))
+	{
+		InspectMaterial = Instance->Parent;
+	}
+
+	const FString Name = InspectMaterial ? (InspectMaterial->GetName() + TEXT(" ") + InspectMaterial->GetPathName()).ToLower() : FString();
+	if (Name.Contains(TEXT("wood")) || Name.Contains(TEXT("木")))
+	{
+		return EPBRMaterialType::Wood;
+	}
+	if (Name.Contains(TEXT("stone")) || Name.Contains(TEXT("石")))
+	{
+		return EPBRMaterialType::Stone;
+	}
+	if (Name.Contains(TEXT("tile")) || Name.Contains(TEXT("瓷")) || Name.Contains(TEXT("砖")))
+	{
+		return EPBRMaterialType::Tile;
+	}
+	if (Name.Contains(TEXT("fabric")) || Name.Contains(TEXT("cloth")) || Name.Contains(TEXT("布")))
+	{
+		return EPBRMaterialType::Fabric;
+	}
+	if (Name.Contains(TEXT("leather")) || Name.Contains(TEXT("皮")))
+	{
+		return EPBRMaterialType::Leather;
+	}
+	if (Name.Contains(TEXT("plastic")) || Name.Contains(TEXT("塑")))
+	{
+		return EPBRMaterialType::Plastic;
+	}
+	if (Name.Contains(TEXT("metal")) || Name.Contains(TEXT("金属")))
+	{
+		return EPBRMaterialType::Metal;
+	}
+	if (Name.Contains(TEXT("transparent")) || Name.Contains(TEXT("translucent")) || Name.Contains(TEXT("半透明")))
+	{
+		return EPBRMaterialType::Transparent;
+	}
+	if (Name.Contains(TEXT("glass")) || Name.Contains(TEXT("玻璃")))
+	{
+		return EPBRMaterialType::Glass;
+	}
+	if (Name.Contains(TEXT("water")) || Name.Contains(TEXT("水")))
+	{
+		return EPBRMaterialType::Water;
+	}
+	if (Name.Contains(TEXT("emissive")) || Name.Contains(TEXT("自发光")))
+	{
+		return EPBRMaterialType::Emissive;
+	}
+	return EPBRMaterialType::Standard;
 }
 
 static FString ActorLabel(AActor* Actor);
@@ -359,7 +460,7 @@ public:
 	{
 		if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton && OwnerWindow)
 		{
-			OwnerWindow->OnTreeSelectionChanged(Item, ESelectInfo::OnMouseClick);
+			OwnerWindow->HandleTreeItemClicked(Item, MouseEvent.IsControlDown() || MouseEvent.IsShiftDown());
 			return FReply::Handled();
 		}
 		return STableRow<TSharedPtr<FPBRMagicOutlinerItem>>::OnMouseButtonDown(MyGeometry, MouseEvent);
@@ -591,13 +692,7 @@ public:
 				}
 				break;
 			case EPBRMagicPaintHitAction::RowSelect:
-				OwnerWindow->ActiveTreeItem = Hit.Item;
-				OwnerWindow->DetailsActor = Hit.Item.IsValid() && Hit.Item->Actor.IsValid() ? Hit.Item->Actor : nullptr;
-				OwnerWindow->SelectItemActors(Hit.Item, false);
-				if (Hit.Item.IsValid() && Hit.Item->Material.IsValid())
-				{
-					OwnerWindow->SyncMaterialListSelectionFromEditor();
-				}
+				OwnerWindow->HandleTreeItemClicked(Hit.Item, MouseEvent.IsControlDown() || MouseEvent.IsShiftDown());
 				break;
 			case EPBRMagicPaintHitAction::OpenMaterial:
 				if (OwnerWindow->ActiveTreeItem.IsValid())
@@ -802,8 +897,7 @@ public:
 			}
 			if (Hit.Item.IsValid())
 			{
-				OwnerWindow->ActiveTreeItem = Hit.Item;
-				OwnerWindow->SelectItemActors(Hit.Item, false);
+				OwnerWindow->HandleTreeItemClicked(Hit.Item, false);
 				Invalidate(EInvalidateWidgetReason::Paint);
 				return FReply::Handled();
 			}
@@ -1356,7 +1450,8 @@ private:
 		const FString Needle = SearchText.ToLower();
 		return Item->DisplayName.ToLower().Contains(Needle)
 			|| Item->TypeText.ToLower().Contains(Needle)
-			|| Item->DetailText.ToLower().Contains(Needle);
+			|| Item->DetailText.ToLower().Contains(Needle)
+			|| (Item->MeshComponent.IsValid() && Item->MeshComponent->GetName().ToLower().Contains(Needle));
 	}
 
 	bool ItemOrChildPassesSearch(const TSharedPtr<FPBRMagicOutlinerItem>& Item) const
@@ -1371,7 +1466,7 @@ private:
 		}
 		for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Item->Children)
 		{
-			if (ItemPassesSearch(Child))
+			if (ItemOrChildPassesSearch(Child))
 			{
 				return true;
 			}
@@ -1381,25 +1476,28 @@ private:
 
 	void BuildVisibleRows(TArray<TPair<TSharedPtr<FPBRMagicOutlinerItem>, int32>>& OutRows) const
 	{
-		for (const TSharedPtr<FPBRMagicOutlinerItem>& Root : OwnerWindow->RootItems)
+		TFunction<void(const TSharedPtr<FPBRMagicOutlinerItem>&, int32)> AddVisibleItem =
+			[this, &OutRows, &AddVisibleItem](const TSharedPtr<FPBRMagicOutlinerItem>& Item, int32 Depth)
 		{
-			if (!ItemOrChildPassesSearch(Root))
+			if (!ItemOrChildPassesSearch(Item))
 			{
-				continue;
+				return;
 			}
-			OutRows.Add(TPair<TSharedPtr<FPBRMagicOutlinerItem>, int32>(Root, 0));
-			const bool bShowChildren = Root.IsValid() && (Root->bExpanded || !SearchText.IsEmpty());
+			OutRows.Add(TPair<TSharedPtr<FPBRMagicOutlinerItem>, int32>(Item, Depth));
+			const bool bShowChildren = Item.IsValid() && (Item->bExpanded || !SearchText.IsEmpty());
 			if (!bShowChildren)
 			{
-				continue;
+				return;
 			}
-			for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Root->Children)
+			for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Item->Children)
 			{
-				if (ItemPassesSearch(Child))
-				{
-					OutRows.Add(TPair<TSharedPtr<FPBRMagicOutlinerItem>, int32>(Child, 1));
-				}
+				AddVisibleItem(Child, Depth + 1);
 			}
+		};
+
+		for (const TSharedPtr<FPBRMagicOutlinerItem>& Root : OwnerWindow->RootItems)
+		{
+			AddVisibleItem(Root, 0);
 		}
 	}
 
@@ -1417,6 +1515,19 @@ private:
 		}
 
 		LastPaintSelectionSignature = SelectionSignature;
+		if (OwnerWindow->ActiveTreeItem.IsValid())
+		{
+			for (int32 Index = 0; Index < VisibleItems.Num(); ++Index)
+			{
+				if (VisibleItems[Index].Key == OwnerWindow->ActiveTreeItem)
+				{
+					const float HalfPage = FMath::Max(0.0f, FMath::FloorToFloat(VisibleRowCapacity * 0.5f));
+					const float MaxOffset = FMath::Max(0.0f, static_cast<float>(VisibleItems.Num()) - VisibleRowCapacity);
+					RowScrollOffset = FMath::Clamp(static_cast<float>(Index) - HalfPage, 0.0f, MaxOffset);
+					return;
+				}
+			}
+		}
 		for (int32 Index = 0; Index < VisibleItems.Num(); ++Index)
 		{
 			if (OwnerWindow->IsItemRepresentedInEditorSelection(VisibleItems[Index].Key))
@@ -2640,7 +2751,7 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildSceneTreePanel()
 					[
 						SAssignNew(TreeView, STreeView<TSharedPtr<FPBRMagicOutlinerItem>>)
 						.TreeItemsSource(&RootItems)
-						.SelectionMode(ESelectionMode::None)
+						.SelectionMode(ESelectionMode::Multi)
 						.OnGenerateRow(this, &SPBRMagicOutlinerWindow::GenerateRow)
 						.OnGetChildren(this, &SPBRMagicOutlinerWindow::GetItemChildren)
 						.OnMouseButtonDoubleClick(this, &SPBRMagicOutlinerWindow::OnTreeItemDoubleClicked)
@@ -3001,7 +3112,7 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildSelectedMaterialPanel()
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				SNew(SBox)
-				.HeightOverride(360)
+				.HeightOverride(260)
 				[
 					SAssignNew(SelectedMaterialListView, SListView<TSharedPtr<FPBRMagicOutlinerItem>>)
 					.ListItemsSource(&SelectedMaterialItems)
@@ -3012,11 +3123,223 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildSelectedMaterialPanel()
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
 			[
+				BuildSelectedMaterialEditorPanel()
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
+			[
 				SNew(STextBlock)
-				.Text(PBRText(TEXT("MaterialReplaceHint"), TEXT("拖入其它材质到左侧材质行，可替换场景中所有使用旧材质的材质槽。"), TEXT("Drop another material onto the material row to replace every matching scene slot.")))
+				.Text(PBRText(TEXT("MaterialReplaceHint"), TEXT("拖入其它材质到左侧材质行，可替换场景中所有使用旧材质的材质槽；点“调参”可把当前槽位接管成 PBRStudio 可编辑材质。"), TEXT("Drop another material onto the material row to replace every matching scene slot. Use Adjust to make the current slot an editable PBRStudio material.")))
 				.AutoWrapText(true)
 				.Font(FAppStyle::GetFontStyle("SmallFont"))
 				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+			]
+		];
+}
+
+TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildSelectedMaterialEditorPanel()
+{
+	auto MakeHeaderText = [this](const FText& Text)
+	{
+		return SNew(STextBlock)
+			.Text(Text)
+			.Font(FAppStyle::GetFontStyle("SmallFontBold"))
+			.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Text"))); });
+	};
+
+	return SNew(SBorder)
+		.Visibility(this, &SPBRMagicOutlinerWindow::GetEditableMaterialPanelVisibility)
+		.BorderImage(FAppStyle::Get().GetBrush("Brushes.Recessed"))
+		.BorderBackgroundColor_Lambda([this]() { return GetThemeColor(TEXT("PanelRaised")); })
+		.Padding(8)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						MakeHeaderText(PBRText(TEXT("MagicMaterialDirectAdjust"), TEXT("材质直接调整"), TEXT("Direct Material Adjust")))
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+					[
+						SNew(STextBlock)
+						.Text(this, &SPBRMagicOutlinerWindow::GetEditableMaterialNameText)
+						.Font(FAppStyle::GetFontStyle("TinyText"))
+						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.Text(this, &SPBRMagicOutlinerWindow::GetEditableMaterialSlotText)
+					.Font(FAppStyle::GetFontStyle("TinyText"))
+					.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Selection"))); })
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+				[
+					SNew(STextBlock)
+					.Text(PBRText(TEXT("MagicMaterialTypeLabel"), TEXT("材质类型"), TEXT("Material Type")))
+					.Font(FAppStyle::GetFontStyle("SmallFont"))
+					.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.0f)
+				[
+					SNew(SComboButton)
+					.ButtonStyle(FAppStyle::Get(), "FlatButton")
+					.ContentPadding(FMargin(8, 4))
+					.MenuContent()
+					[
+						BuildEditableMaterialTypeMenu()
+					]
+					.ButtonContent()
+					[
+						SNew(STextBlock)
+						.Text(this, &SPBRMagicOutlinerWindow::GetEditableMaterialTypeText)
+						.Font(FAppStyle::GetFontStyle("SmallFontBold"))
+						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Text"))); })
+					]
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
+			[
+				BuildMaterialVectorControl(PBRText(TEXT("MagicBaseColorTint"), TEXT("基础色调"), TEXT("Base Tint")), FPBRMaterialParameters::BaseColorTint, FLinearColor::White)
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
+			[
+				BuildMaterialVectorControl(PBRText(TEXT("MagicEmissiveColor"), TEXT("自发光颜色"), TEXT("Emissive Color")), FPBRMaterialParameters::EmissiveColor, FLinearColor::Black)
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
+			[
+				BuildMaterialScalarControl(PBRText(TEXT("MagicBaseIntensity"), TEXT("基础色强度"), TEXT("Base Intensity")), FPBRMaterialParameters::BaseColorIntensity, 0.0f, 5.0f, 1.0f)
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
+			[
+				BuildMaterialScalarControl(PBRText(TEXT("MagicRoughnessValue"), TEXT("粗糙度"), TEXT("Roughness")), FPBRMaterialParameters::RoughnessValue, 0.0f, 1.0f, 0.5f)
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
+			[
+				BuildMaterialScalarControl(PBRText(TEXT("MagicMetallicValue"), TEXT("金属度"), TEXT("Metallic")), FPBRMaterialParameters::MetallicValue, 0.0f, 1.0f, 0.0f)
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
+			[
+				BuildMaterialScalarControl(PBRText(TEXT("MagicNormalStrength"), TEXT("法线强度"), TEXT("Normal Strength")), FPBRMaterialParameters::NormalStrength, 0.0f, 5.0f, 1.0f)
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
+			[
+				BuildMaterialScalarControl(PBRText(TEXT("MagicOpacity"), TEXT("透明度"), TEXT("Opacity")), FPBRMaterialParameters::Opacity, 0.0f, 1.0f, 1.0f)
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				BuildMaterialScalarControl(PBRText(TEXT("MagicEmissiveIntensity"), TEXT("自发光强度"), TEXT("Emissive Intensity")), FPBRMaterialParameters::EmissiveIntensity, 0.0f, 20.0f, 0.0f)
+			]
+		];
+}
+
+TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildEditableMaterialTypeMenu()
+{
+	TSharedRef<SVerticalBox> MenuBox = SNew(SVerticalBox);
+	for (const FPBRMagicMaterialTypeOption& Option : GetMagicMaterialTypeOptions())
+	{
+		MenuBox->AddSlot()
+		.AutoHeight()
+		[
+			SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "Menu.Button")
+			.OnClicked_Lambda([this, MaterialType = Option.Type]()
+			{
+				SelectEditableMaterialType(MaterialType);
+				return FReply::Handled();
+			})
+			[
+				SNew(STextBlock)
+				.Text(PBRText(Option.Key, Option.Chinese, Option.English))
+				.Font(FAppStyle::GetFontStyle("SmallFont"))
+			]
+		];
+	}
+	return MenuBox;
+}
+
+TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialScalarControl(const FText& Label, const FName& ParameterName, float MinValue, float MaxValue, float DefaultValue)
+{
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(0.45f).VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+		[
+			SNew(STextBlock)
+			.Text(Label)
+			.Font(FAppStyle::GetFontStyle("SmallFont"))
+			.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+		]
+		+ SHorizontalBox::Slot().FillWidth(0.55f)
+		[
+			SNew(SNumericEntryBox<float>)
+			.AllowSpin(true)
+			.MinValue(MinValue)
+			.MaxValue(MaxValue)
+			.MinSliderValue(MinValue)
+			.MaxSliderValue(MaxValue)
+			.Delta((MaxValue - MinValue) <= 1.0f ? 0.01f : 0.05f)
+			.Value_Lambda([this, ParameterName, DefaultValue]()
+			{
+				return GetEditableMaterialScalar(ParameterName, DefaultValue);
+			})
+			.OnValueCommitted_Lambda([this, ParameterName, MinValue, MaxValue](float NewValue, ETextCommit::Type)
+			{
+				CommitEditableMaterialScalar(ParameterName, NewValue, MinValue, MaxValue);
+			})
+		];
+}
+
+TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialVectorControl(const FText& Label, const FName& ParameterName, const FLinearColor& DefaultValue)
+{
+	auto MakeChannelBox = [this, ParameterName, DefaultValue](int32 ChannelIndex)
+	{
+		return SNew(SNumericEntryBox<float>)
+			.AllowSpin(true)
+			.MinValue(0.0f)
+			.MaxValue(1.0f)
+			.MinSliderValue(0.0f)
+			.MaxSliderValue(1.0f)
+			.Delta(0.01f)
+			.Value_Lambda([this, ParameterName, ChannelIndex, DefaultValue]()
+			{
+				return GetEditableMaterialVectorChannel(ParameterName, ChannelIndex, DefaultValue);
+			})
+			.OnValueCommitted_Lambda([this, ParameterName, ChannelIndex, DefaultValue](float NewValue, ETextCommit::Type)
+			{
+				CommitEditableMaterialVectorChannel(ParameterName, ChannelIndex, NewValue, DefaultValue);
+			});
+	};
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 3)
+		[
+			SNew(STextBlock)
+			.Text(Label)
+			.Font(FAppStyle::GetFontStyle("SmallFont"))
+			.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0, 0, 4, 0)
+			[
+				MakeChannelBox(0)
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0, 0, 4, 0)
+			[
+				MakeChannelBox(1)
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.0f)
+			[
+				MakeChannelBox(2)
 			]
 		];
 }
@@ -3928,6 +4251,20 @@ TSharedRef<ITableRow> SPBRMagicOutlinerWindow::GenerateSelectedMaterialRow(TShar
 							.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Text"))); })
 						]
 					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
+					[
+						SNew(SButton)
+						.ButtonStyle(FAppStyle::Get(), "FlatButton")
+						.ContentPadding(FMargin(7, 4))
+						.ButtonColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("DropZone"))); })
+						.OnClicked(this, &SPBRMagicOutlinerWindow::OnEditSelectedMaterialSlot, Item)
+						[
+							SNew(STextBlock)
+							.Text(PBRText(TEXT("AdjustSelectedMaterialSmall"), TEXT("调参"), TEXT("Adjust")))
+							.Font(FAppStyle::GetFontStyle("SmallFont"))
+							.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Text"))); })
+						]
+					]
 					+ SVerticalBox::Slot().AutoHeight()
 					[
 						SNew(SButton)
@@ -3949,6 +4286,246 @@ TSharedRef<ITableRow> SPBRMagicOutlinerWindow::GenerateSelectedMaterialRow(TShar
 				]
 			]
 		];
+}
+
+FReply SPBRMagicOutlinerWindow::OnEditSelectedMaterialSlot(TSharedPtr<FPBRMagicOutlinerItem> Item)
+{
+	if (!Item.IsValid() || Item->MaterialSlots.IsEmpty())
+	{
+		StatusMessage = TEXT("没有可调节的材质槽");
+		return FReply::Handled();
+	}
+
+	const FPBRMaterialSlotReference* PreferredSlot = nullptr;
+	for (const FPBRMaterialSlotReference& SlotRef : Item->MaterialSlots)
+	{
+		if (SlotRef.MeshComponent.IsValid() && IsActorSelectedInEditor(SlotRef.Actor.Get()))
+		{
+			PreferredSlot = &SlotRef;
+			break;
+		}
+	}
+	if (!PreferredSlot)
+	{
+		for (const FPBRMaterialSlotReference& SlotRef : Item->MaterialSlots)
+		{
+			if (SlotRef.MeshComponent.IsValid())
+			{
+				PreferredSlot = &SlotRef;
+				break;
+			}
+		}
+	}
+	if (!PreferredSlot || !PreferredSlot->MeshComponent.IsValid() || PreferredSlot->SlotIndex == INDEX_NONE)
+	{
+		StatusMessage = TEXT("当前材质行没有有效的网格体槽位");
+		return FReply::Handled();
+	}
+
+	UPrimitiveComponent* Component = PreferredSlot->MeshComponent.Get();
+	const int32 SlotIndex = PreferredSlot->SlotIndex;
+	FPBRSceneEditableMaterialResult Result = FPBRSceneMaterialReplacer::EnsureEditableMaterialForSlot(Component, SlotIndex);
+	if (!Result.Instance)
+	{
+		EditableMaterialComponent.Reset();
+		EditableMaterialSlotIndex = INDEX_NONE;
+		StatusMessage = Result.Message.IsEmpty() ? TEXT("接管材质失败") : Result.Message;
+		return FReply::Handled();
+	}
+
+	EditableMaterialComponent = Component;
+	EditableMaterialSlotIndex = SlotIndex;
+	StatusMessage = Result.Message;
+	RebuildItems();
+	Invalidate(EInvalidateWidgetReason::LayoutAndVolatility);
+	return FReply::Handled();
+}
+
+bool SPBRMagicOutlinerWindow::ResolveEditableMaterialSlot(UPrimitiveComponent*& OutComponent, int32& OutSlotIndex) const
+{
+	OutComponent = EditableMaterialComponent.Get();
+	OutSlotIndex = EditableMaterialSlotIndex;
+	return OutComponent && OutSlotIndex >= 0 && OutSlotIndex < OutComponent->GetNumMaterials();
+}
+
+UMaterialInstanceConstant* SPBRMagicOutlinerWindow::GetEditableMaterialInstance() const
+{
+	UPrimitiveComponent* Component = nullptr;
+	int32 SlotIndex = INDEX_NONE;
+	if (!ResolveEditableMaterialSlot(Component, SlotIndex))
+	{
+		return nullptr;
+	}
+
+	UMaterialInterface* Material = Component->GetMaterial(SlotIndex);
+	UMaterialInstanceConstant* Instance = Cast<UMaterialInstanceConstant>(Material);
+	return Instance && FPBRSceneMaterialReplacer::IsPBRStudioGeneratedMaterial(Instance) ? Instance : nullptr;
+}
+
+FText SPBRMagicOutlinerWindow::GetEditableMaterialNameText() const
+{
+	UPrimitiveComponent* Component = nullptr;
+	int32 SlotIndex = INDEX_NONE;
+	if (!ResolveEditableMaterialSlot(Component, SlotIndex))
+	{
+		return PBRText(TEXT("MagicNoEditableMaterial"), TEXT("未选择可编辑材质槽"), TEXT("No editable material slot selected"));
+	}
+
+	UMaterialInterface* Material = Component->GetMaterial(SlotIndex);
+	return FText::FromString(Material ? Material->GetName() : TEXT("None"));
+}
+
+FText SPBRMagicOutlinerWindow::GetEditableMaterialSlotText() const
+{
+	UPrimitiveComponent* Component = nullptr;
+	int32 SlotIndex = INDEX_NONE;
+	if (!ResolveEditableMaterialSlot(Component, SlotIndex))
+	{
+		return FText::GetEmpty();
+	}
+
+	const AActor* Owner = Component->GetOwner();
+	return FText::FromString(FString::Printf(
+		TEXT("%s / %s / Slot %d"),
+		Owner ? *ActorLabel(const_cast<AActor*>(Owner)) : TEXT("Actor"),
+		*Component->GetName(),
+		SlotIndex));
+}
+
+FText SPBRMagicOutlinerWindow::GetEditableMaterialTypeText() const
+{
+	UPrimitiveComponent* Component = nullptr;
+	int32 SlotIndex = INDEX_NONE;
+	if (!ResolveEditableMaterialSlot(Component, SlotIndex))
+	{
+		return PBRText(TEXT("MagicMaterialTypeUnset"), TEXT("未设置"), TEXT("Unset"));
+	}
+
+	return GetMagicMaterialTypeLabel(GuessMagicMaterialTypeFromMaterial(Component->GetMaterial(SlotIndex)));
+}
+
+TOptional<float> SPBRMagicOutlinerWindow::GetEditableMaterialScalar(const FName& ParameterName, float DefaultValue) const
+{
+	if (UMaterialInstanceConstant* Instance = GetEditableMaterialInstance())
+	{
+		float Value = DefaultValue;
+		if (Instance->GetScalarParameterValue(FMaterialParameterInfo(ParameterName), Value))
+		{
+			return Value;
+		}
+	}
+	return DefaultValue;
+}
+
+TOptional<float> SPBRMagicOutlinerWindow::GetEditableMaterialVectorChannel(const FName& ParameterName, int32 ChannelIndex, const FLinearColor& DefaultValue) const
+{
+	FLinearColor Value = DefaultValue;
+	if (UMaterialInstanceConstant* Instance = GetEditableMaterialInstance())
+	{
+		Instance->GetVectorParameterValue(FMaterialParameterInfo(ParameterName), Value);
+	}
+
+	switch (ChannelIndex)
+	{
+	case 0:
+		return Value.R;
+	case 1:
+		return Value.G;
+	case 2:
+		return Value.B;
+	default:
+		return 0.0f;
+	}
+}
+
+void SPBRMagicOutlinerWindow::CommitEditableMaterialScalar(const FName& ParameterName, float Value, float MinValue, float MaxValue)
+{
+	UPrimitiveComponent* Component = nullptr;
+	int32 SlotIndex = INDEX_NONE;
+	if (!ResolveEditableMaterialSlot(Component, SlotIndex))
+	{
+		StatusMessage = TEXT("没有可编辑的材质槽");
+		return;
+	}
+
+	FString Message;
+	const float ClampedValue = FMath::Clamp(Value, MinValue, MaxValue);
+	if (FPBRSceneMaterialReplacer::SetScalarParameterForSlot(Component, SlotIndex, ParameterName, ClampedValue, Message))
+	{
+		StatusMessage = Message;
+		Invalidate(EInvalidateWidgetReason::Paint);
+	}
+	else
+	{
+		StatusMessage = Message.IsEmpty() ? TEXT("参数更新失败") : Message;
+	}
+}
+
+void SPBRMagicOutlinerWindow::CommitEditableMaterialVectorChannel(const FName& ParameterName, int32 ChannelIndex, float Value, const FLinearColor& DefaultValue)
+{
+	UPrimitiveComponent* Component = nullptr;
+	int32 SlotIndex = INDEX_NONE;
+	if (!ResolveEditableMaterialSlot(Component, SlotIndex))
+	{
+		StatusMessage = TEXT("没有可编辑的材质槽");
+		return;
+	}
+
+	FLinearColor NewColor = DefaultValue;
+	if (UMaterialInstanceConstant* Instance = GetEditableMaterialInstance())
+	{
+		Instance->GetVectorParameterValue(FMaterialParameterInfo(ParameterName), NewColor);
+	}
+
+	const float ClampedValue = FMath::Clamp(Value, 0.0f, 1.0f);
+	switch (ChannelIndex)
+	{
+	case 0:
+		NewColor.R = ClampedValue;
+		break;
+	case 1:
+		NewColor.G = ClampedValue;
+		break;
+	case 2:
+		NewColor.B = ClampedValue;
+		break;
+	default:
+		break;
+	}
+	NewColor.A = 1.0f;
+
+	FString Message;
+	if (FPBRSceneMaterialReplacer::SetVectorParameterForSlot(Component, SlotIndex, ParameterName, NewColor, Message))
+	{
+		StatusMessage = Message;
+		Invalidate(EInvalidateWidgetReason::Paint);
+	}
+	else
+	{
+		StatusMessage = Message.IsEmpty() ? TEXT("颜色更新失败") : Message;
+	}
+}
+
+void SPBRMagicOutlinerWindow::SelectEditableMaterialType(EPBRMaterialType MaterialType)
+{
+	UPrimitiveComponent* Component = nullptr;
+	int32 SlotIndex = INDEX_NONE;
+	if (!ResolveEditableMaterialSlot(Component, SlotIndex))
+	{
+		StatusMessage = TEXT("没有可切换类型的材质槽");
+		return;
+	}
+
+	FString Message;
+	if (FPBRSceneMaterialReplacer::SetMaterialTypeForSlot(Component, SlotIndex, MaterialType, Message))
+	{
+		StatusMessage = Message;
+		Invalidate(EInvalidateWidgetReason::Paint);
+	}
+	else
+	{
+		StatusMessage = Message.IsEmpty() ? TEXT("材质类型切换失败") : Message;
+	}
 }
 
 TSharedRef<ITableRow> SPBRMagicOutlinerWindow::GenerateNameCheckRow(TSharedPtr<FPBRNameCheckListItem> Item, const TSharedRef<STableViewBase>& OwnerTable)
@@ -4078,18 +4655,31 @@ void SPBRMagicOutlinerWindow::GetItemChildren(TSharedPtr<FPBRMagicOutlinerItem> 
 
 void SPBRMagicOutlinerWindow::OnTreeSelectionChanged(TSharedPtr<FPBRMagicOutlinerItem> Item, ESelectInfo::Type SelectInfo)
 {
-	ActiveTreeItem = Item;
-	DetailsActor = (Item.IsValid() && Item->Actor.IsValid()) ? Item->Actor : nullptr;
 	if (SelectInfo != ESelectInfo::Direct)
 	{
-		SelectItemActors(Item, false);
-		if (Item.IsValid() && Item->Material.IsValid())
-		{
-			SyncMaterialListSelectionFromEditor();
-		}
+		HandleTreeItemClicked(Item, false);
+	}
+}
+
+void SPBRMagicOutlinerWindow::HandleTreeItemClicked(TSharedPtr<FPBRMagicOutlinerItem> Item, bool bAddToSelection)
+{
+	ActiveTreeItem = Item;
+	DetailsActor = (Item.IsValid() && Item->Actor.IsValid()) ? Item->Actor : nullptr;
+	SelectItemActors(Item, bAddToSelection);
+	if (Item.IsValid() && Item->Material.IsValid())
+	{
+		SyncMaterialListSelectionFromEditor();
 	}
 	if (TreeView.IsValid())
 	{
+		if (!bAddToSelection)
+		{
+			TreeView->ClearSelection();
+		}
+		if (Item.IsValid())
+		{
+			TreeView->SetItemSelection(Item, true, ESelectInfo::Direct);
+		}
 		TreeView->RequestTreeRefresh();
 	}
 }
@@ -4130,36 +4720,10 @@ EActiveTimerReturnType SPBRMagicOutlinerWindow::SyncMaterialSelectionTimer(doubl
 	if (CurrentSelectionSignature != LastEditorSelectionSignature)
 	{
 		LastEditorSelectionSignature = CurrentSelectionSignature;
+		FocusFirstEditorSelectedActor(SelectedActors);
 		if (TreeView.IsValid())
 		{
 			TreeView->RequestTreeRefresh();
-			TSharedPtr<FPBRMagicOutlinerItem> FirstItemToFocus;
-			for (const TSharedPtr<FPBRMagicOutlinerItem>& Root : RootItems)
-			{
-				if (!IsItemRepresentedInEditorSelection(Root))
-				{
-					continue;
-				}
-
-				TreeView->SetItemExpansion(Root, true);
-				if (!FirstItemToFocus.IsValid())
-				{
-					FirstItemToFocus = Root;
-				}
-				for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Root->Children)
-				{
-					if (IsItemRepresentedInEditorSelection(Child))
-					{
-						FirstItemToFocus = Child;
-						break;
-					}
-				}
-				break;
-			}
-			if (FirstItemToFocus.IsValid())
-			{
-				TreeView->RequestScrollIntoView(FirstItemToFocus);
-			}
 		}
 		if (CheckedListView.IsValid())
 		{
@@ -4199,6 +4763,36 @@ void SPBRMagicOutlinerWindow::RefreshSelectedMaterialItems(const TSet<TWeakObjec
 		}
 		return A->DisplayName < B->DisplayName;
 	});
+
+	if (EditableMaterialComponent.IsValid())
+	{
+		bool bStillSelected = false;
+		for (const TSharedPtr<FPBRMagicOutlinerItem>& Item : SelectedMaterialItems)
+		{
+			if (!Item.IsValid())
+			{
+				continue;
+			}
+			for (const FPBRMaterialSlotReference& SlotRef : Item->MaterialSlots)
+			{
+				if (SlotRef.MeshComponent.Get() == EditableMaterialComponent.Get() && SlotRef.SlotIndex == EditableMaterialSlotIndex)
+				{
+					bStillSelected = true;
+					break;
+				}
+			}
+			if (bStillSelected)
+			{
+				break;
+			}
+		}
+		if (!bStillSelected)
+		{
+			EditableMaterialComponent.Reset();
+			EditableMaterialSlotIndex = INDEX_NONE;
+		}
+	}
+
 	if (SelectedMaterialListView.IsValid())
 	{
 		SelectedMaterialListView->RequestListRefresh();
@@ -4304,9 +4898,22 @@ void SPBRMagicOutlinerWindow::RebuildItems()
 	if (TreeView.IsValid())
 	{
 		TreeView->RequestTreeRefresh();
+		TFunction<void(const TSharedPtr<FPBRMagicOutlinerItem>&)> SyncExpansion =
+			[this, &SyncExpansion](const TSharedPtr<FPBRMagicOutlinerItem>& Item)
+		{
+			if (!Item.IsValid())
+			{
+				return;
+			}
+			TreeView->SetItemExpansion(Item, Item->bExpanded);
+			for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Item->Children)
+			{
+				SyncExpansion(Child);
+			}
+		};
 		for (const TSharedPtr<FPBRMagicOutlinerItem>& Root : RootItems)
 		{
-			TreeView->SetItemExpansion(Root, Root->bExpandedByDefault);
+			SyncExpansion(Root);
 		}
 	}
 
@@ -4556,21 +5163,144 @@ void SPBRMagicOutlinerWindow::GatherActors(TArray<AActor*>& OutActors) const
 
 void SPBRMagicOutlinerWindow::GetDisplayedActors(TArray<AActor*>& OutActors) const
 {
-	TSet<TWeakObjectPtr<AActor>> AddedActors;
+	TSet<AActor*> AddedActors;
 	for (const TSharedPtr<FPBRMagicOutlinerItem>& Root : RootItems)
 	{
-		if (!Root.IsValid())
+		CollectItemActors(Root, OutActors, AddedActors);
+	}
+}
+
+void SPBRMagicOutlinerWindow::CollectItemActors(TSharedPtr<FPBRMagicOutlinerItem> Item, TArray<AActor*>& OutActors, TSet<AActor*>& AddedActors) const
+{
+	if (!Item.IsValid())
+	{
+		return;
+	}
+	if (AActor* Actor = Item->Actor.Get())
+	{
+		if (!AddedActors.Contains(Actor))
+		{
+			AddedActors.Add(Actor);
+			OutActors.Add(Actor);
+		}
+	}
+	for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Item->Children)
+	{
+		CollectItemActors(Child, OutActors, AddedActors);
+	}
+}
+
+TSharedPtr<FPBRMagicOutlinerItem> SPBRMagicOutlinerWindow::FindFirstItemForActor(AActor* Actor, TArray<TSharedPtr<FPBRMagicOutlinerItem>>* OutAncestors) const
+{
+	if (!Actor)
+	{
+		return nullptr;
+	}
+
+	TSharedPtr<FPBRMagicOutlinerItem> FallbackItem;
+	TArray<TSharedPtr<FPBRMagicOutlinerItem>> FallbackAncestors;
+	TSharedPtr<FPBRMagicOutlinerItem> FoundItem;
+	TArray<TSharedPtr<FPBRMagicOutlinerItem>> FoundAncestors;
+	TArray<TSharedPtr<FPBRMagicOutlinerItem>> CurrentAncestors;
+	TFunction<bool(const TSharedPtr<FPBRMagicOutlinerItem>&)> VisitItem =
+		[Actor, &FallbackItem, &FallbackAncestors, &FoundItem, &FoundAncestors, &CurrentAncestors, &VisitItem](const TSharedPtr<FPBRMagicOutlinerItem>& Item)
+	{
+		if (!Item.IsValid())
+		{
+			return false;
+		}
+
+		if (Item->Actor.Get() == Actor)
+		{
+			if (!Item->MeshComponent.IsValid())
+			{
+				FoundItem = Item;
+				FoundAncestors = CurrentAncestors;
+				return true;
+			}
+			if (!FallbackItem.IsValid())
+			{
+				FallbackItem = Item;
+				FallbackAncestors = CurrentAncestors;
+			}
+		}
+
+		CurrentAncestors.Add(Item);
+		for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Item->Children)
+		{
+			if (VisitItem(Child))
+			{
+				return true;
+			}
+		}
+		CurrentAncestors.Pop();
+		return false;
+	};
+
+	for (const TSharedPtr<FPBRMagicOutlinerItem>& Root : RootItems)
+	{
+		if (VisitItem(Root))
+		{
+			break;
+		}
+	}
+
+	if (FoundItem.IsValid())
+	{
+		if (OutAncestors)
+		{
+			*OutAncestors = FoundAncestors;
+		}
+		return FoundItem;
+	}
+
+	if (OutAncestors && FallbackItem.IsValid())
+	{
+		*OutAncestors = FallbackAncestors;
+	}
+	return FallbackItem;
+}
+
+void SPBRMagicOutlinerWindow::FocusFirstEditorSelectedActor(const TArray<AActor*>& SelectedActors)
+{
+	if (SelectedActors.IsEmpty())
+	{
+		return;
+	}
+
+	for (AActor* Actor : SelectedActors)
+	{
+		if (!Actor)
 		{
 			continue;
 		}
-		for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Root->Children)
+
+		TArray<TSharedPtr<FPBRMagicOutlinerItem>> Ancestors;
+		TSharedPtr<FPBRMagicOutlinerItem> ItemToFocus = FindFirstItemForActor(Actor, &Ancestors);
+		if (!ItemToFocus.IsValid())
 		{
-			if (Child.IsValid() && Child->Actor.IsValid() && !AddedActors.Contains(Child->Actor))
+			continue;
+		}
+
+		for (const TSharedPtr<FPBRMagicOutlinerItem>& Ancestor : Ancestors)
+		{
+			if (Ancestor.IsValid())
 			{
-				AddedActors.Add(Child->Actor);
-				OutActors.Add(Child->Actor.Get());
+				Ancestor->bExpanded = true;
+				if (TreeView.IsValid())
+				{
+					TreeView->SetItemExpansion(Ancestor, true);
+				}
 			}
 		}
+
+		ActiveTreeItem = ItemToFocus;
+		DetailsActor = Actor;
+		if (TreeView.IsValid())
+		{
+			TreeView->RequestScrollIntoView(ItemToFocus);
+		}
+		return;
 	}
 }
 
@@ -4933,6 +5663,48 @@ FString SPBRMagicOutlinerWindow::GetActorDetailText(AActor* Actor) const
 	return Actor->GetLevel() ? Actor->GetLevel()->GetOuter()->GetName() : FString();
 }
 
+void SPBRMagicOutlinerWindow::AddModelMeshChildren(TSharedPtr<FPBRMagicOutlinerItem> ActorItem, AActor* Actor)
+{
+	if (!ActorItem.IsValid() || !Actor || ActiveCategory != EPBRMagicOutlinerCategory::Models)
+	{
+		return;
+	}
+
+	TArray<UMeshComponent*> MeshComponents;
+	Actor->GetComponents<UMeshComponent>(MeshComponents);
+	MeshComponents.RemoveAll([](UMeshComponent* MeshComponent)
+	{
+		return MeshComponent == nullptr;
+	});
+	MeshComponents.Sort([](const UMeshComponent& A, const UMeshComponent& B)
+	{
+		return A.GetName() < B.GetName();
+	});
+
+	for (UMeshComponent* MeshComponent : MeshComponents)
+	{
+		TSharedPtr<FPBRMagicOutlinerItem> MeshItem = MakeShared<FPBRMagicOutlinerItem>();
+		MeshItem->Actor = Actor;
+		MeshItem->MeshComponent = MeshComponent;
+		MeshItem->bChecked = Actor && GetActiveCheckedActors().Contains(Actor);
+		MeshItem->ActorCount = 1;
+		MeshItem->TypeText = MeshComponent->GetClass() ? MeshComponent->GetClass()->GetName() : TEXT("MeshComponent");
+		MeshItem->DisplayName = MeshComponent->GetName();
+		MeshItem->DetailText = FString::Printf(TEXT("%d 个材质槽"), MeshComponent->GetNumMaterials());
+
+		if (UStaticMeshComponent* StaticMeshComponent = Cast<UStaticMeshComponent>(MeshComponent))
+		{
+			if (UStaticMesh* StaticMesh = StaticMeshComponent->GetStaticMesh())
+			{
+				MeshItem->DisplayName = FString::Printf(TEXT("%s / %s"), *MeshComponent->GetName(), *StaticMesh->GetName());
+				MeshItem->DetailText = StaticMesh->GetPathName();
+			}
+		}
+
+		ActorItem->Children.Add(MeshItem);
+	}
+}
+
 void SPBRMagicOutlinerWindow::AddActorToGroup(const FString& GroupKey, AActor* Actor, TMap<FString, TSharedPtr<FPBRMagicOutlinerItem>>& GroupMap)
 {
 	TSharedPtr<FPBRMagicOutlinerItem>& Group = GroupMap.FindOrAdd(GroupKey);
@@ -4942,7 +5714,7 @@ void SPBRMagicOutlinerWindow::AddActorToGroup(const FString& GroupKey, AActor* A
 		Group->DisplayName = GroupKey.IsEmpty() ? TEXT("未分组") : GroupKey;
 		Group->TypeText = TEXT("组");
 		Group->bGroup = true;
-		Group->bExpandedByDefault = RootItems.Num() < 12;
+		Group->bExpandedByDefault = GroupMap.Num() <= 12;
 	}
 
 	TSharedPtr<FPBRMagicOutlinerItem> Item = MakeShared<FPBRMagicOutlinerItem>();
@@ -4952,6 +5724,9 @@ void SPBRMagicOutlinerWindow::AddActorToGroup(const FString& GroupKey, AActor* A
 	Item->Actor = Actor;
 	Item->bChecked = Actor && GetActiveCheckedActors().Contains(Actor);
 	Item->ActorCount = 1;
+	Item->bExpandedByDefault = ActiveCategory == EPBRMagicOutlinerCategory::Models;
+	Item->bExpanded = Item->bExpandedByDefault;
+	AddModelMeshChildren(Item, Actor);
 	Group->Children.Add(Item);
 	Group->ActorCount = Group->Children.Num();
 	Group->DetailText = FString::Printf(TEXT("%d 个对象"), Group->ActorCount);
@@ -5111,21 +5886,28 @@ void SPBRMagicOutlinerWindow::SetItemChecked(TSharedPtr<FPBRMagicOutlinerItem> I
 	{
 		return;
 	}
-	Item->bChecked = bChecked;
-	if (Item->Actor.IsValid())
+	if (Item->MeshComponent.IsValid() && Item->Actor.IsValid())
 	{
-		if (bChecked)
-		{
-			GetActiveCheckedActors().Add(Item->Actor);
-		}
-		else
-		{
-			GetActiveCheckedActors().Remove(Item->Actor);
-		}
+		SetActorChecked(Item->Actor.Get(), bChecked);
 	}
-	for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Item->Children)
+	else
 	{
-		SetItemChecked(Child, bChecked);
+		Item->bChecked = bChecked;
+		if (Item->Actor.IsValid())
+		{
+			if (bChecked)
+			{
+				GetActiveCheckedActors().Add(Item->Actor);
+			}
+			else
+			{
+				GetActiveCheckedActors().Remove(Item->Actor);
+			}
+		}
+		for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Item->Children)
+		{
+			SetItemChecked(Child, bChecked);
+		}
 	}
 	UpdateCachedCheckedCount();
 	RefreshNameCheckList();
@@ -5153,17 +5935,23 @@ void SPBRMagicOutlinerWindow::SetActorChecked(AActor* Actor, bool bChecked)
 	}
 	for (const TSharedPtr<FPBRMagicOutlinerItem>& Root : RootItems)
 	{
-		if (!Root.IsValid())
+		TFunction<void(const TSharedPtr<FPBRMagicOutlinerItem>&)> UpdateItem =
+			[Actor, bChecked, &UpdateItem](const TSharedPtr<FPBRMagicOutlinerItem>& Item)
 		{
-			continue;
-		}
-		for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Root->Children)
-		{
-			if (Child.IsValid() && Child->Actor.Get() == Actor)
+			if (!Item.IsValid())
 			{
-				Child->bChecked = bChecked;
+				return;
 			}
-		}
+			if (Item->Actor.Get() == Actor)
+			{
+				Item->bChecked = bChecked;
+			}
+			for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Item->Children)
+			{
+				UpdateItem(Child);
+			}
+		};
+		UpdateItem(Root);
 	}
 }
 
@@ -5288,29 +6076,22 @@ void SPBRMagicOutlinerWindow::SelectItemActors(TSharedPtr<FPBRMagicOutlinerItem>
 	TArray<AActor*> Actors;
 	if (Item.IsValid())
 	{
+		TSet<AActor*> AddedActors;
 		if (Item->Material.IsValid())
 		{
-			TSet<TWeakObjectPtr<AActor>> AddedActors;
 			for (const FPBRMaterialSlotReference& SlotRef : Item->MaterialSlots)
 			{
-				if (SlotRef.Actor.IsValid() && !AddedActors.Contains(SlotRef.Actor))
+				if (AActor* SlotActor = SlotRef.Actor.Get())
 				{
-					AddedActors.Add(SlotRef.Actor);
-					Actors.Add(SlotRef.Actor.Get());
+					if (!AddedActors.Contains(SlotActor))
+					{
+						AddedActors.Add(SlotActor);
+						Actors.Add(SlotActor);
+					}
 				}
 			}
 		}
-		if (Item->Actor.IsValid())
-		{
-			Actors.Add(Item->Actor.Get());
-		}
-		for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Item->Children)
-		{
-			if (Child.IsValid() && Child->Actor.IsValid())
-			{
-				Actors.Add(Child->Actor.Get());
-			}
-		}
+		CollectItemActors(Item, Actors, AddedActors);
 	}
 	SelectActors(Actors, bAddToSelection);
 }
@@ -5334,41 +6115,6 @@ void SPBRMagicOutlinerWindow::GetModelToolTargetActors(TArray<AActor*>& OutActor
 		return;
 	}
 
-	auto AddItemActors = [&OutActors, &AddedActors](const TSharedPtr<FPBRMagicOutlinerItem>& Item)
-	{
-		if (!Item.IsValid())
-		{
-			return;
-		}
-		if (AActor* Actor = Item->Actor.Get())
-		{
-			if (!AddedActors.Contains(Actor))
-			{
-				AddedActors.Add(Actor);
-				OutActors.Add(Actor);
-			}
-		}
-		for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Item->Children)
-		{
-			if (Child.IsValid())
-			{
-				if (AActor* ChildActor = Child->Actor.Get())
-				{
-					if (!AddedActors.Contains(ChildActor))
-					{
-						AddedActors.Add(ChildActor);
-						OutActors.Add(ChildActor);
-					}
-				}
-			}
-		}
-	};
-	AddItemActors(ActiveTreeItem);
-	if (!OutActors.IsEmpty())
-	{
-		return;
-	}
-
 	TArray<AActor*> SelectedActors;
 	GetEditorSelectedActors(SelectedActors);
 	for (AActor* Actor : SelectedActors)
@@ -5379,6 +6125,12 @@ void SPBRMagicOutlinerWindow::GetModelToolTargetActors(TArray<AActor*>& OutActor
 			OutActors.Add(Actor);
 		}
 	}
+	if (!OutActors.IsEmpty())
+	{
+		return;
+	}
+
+	CollectItemActors(ActiveTreeItem, OutActors, AddedActors);
 }
 
 bool SPBRMagicOutlinerWindow::IsActorSelectedInEditor(AActor* Actor) const
@@ -5558,20 +6310,8 @@ FReply SPBRMagicOutlinerWindow::OnModelReplacementDrop(const FGeometry& Geometry
 	TArray<AActor*> Actors;
 	if (Item.IsValid())
 	{
-		if (AActor* Actor = Item->Actor.Get())
-		{
-			Actors.Add(Actor);
-		}
-		for (const TSharedPtr<FPBRMagicOutlinerItem>& Child : Item->Children)
-		{
-			if (Child.IsValid())
-			{
-				if (AActor* ChildActor = Child->Actor.Get())
-				{
-					Actors.AddUnique(ChildActor);
-				}
-			}
-		}
+		TSet<AActor*> AddedActors;
+		CollectItemActors(Item, Actors, AddedActors);
 	}
 	if (Actors.IsEmpty())
 	{
@@ -5870,6 +6610,86 @@ int32 SPBRMagicOutlinerWindow::MoveActorsToFolder(const TArray<AActor*>& Actors,
 	return MovedRoots.Num();
 }
 
+int32 SPBRMagicOutlinerWindow::MoveActorsToNewParentActor(const TArray<AActor*>& Actors, const FString& NewActorName)
+{
+	TArray<AActor*> ValidActors;
+	for (AActor* Actor : Actors)
+	{
+		if (Actor && !ValidActors.Contains(Actor))
+		{
+			ValidActors.Add(Actor);
+		}
+	}
+	if (ValidActors.IsEmpty())
+	{
+		return 0;
+	}
+
+	UWorld* World = ValidActors[0]->GetWorld();
+	if (!World)
+	{
+		return 0;
+	}
+
+	FString SafeActorName = NewActorName;
+	SafeActorName.TrimStartAndEndInline();
+	if (SafeActorName.IsEmpty())
+	{
+		SafeActorName = TEXT("MagicOutliner_GroupActor");
+	}
+
+	FVector Center = FVector::ZeroVector;
+	for (AActor* Actor : ValidActors)
+	{
+		Center += Actor->GetActorLocation();
+	}
+	Center /= static_cast<float>(ValidActors.Num());
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Name = MakeUniqueObjectName(World, AActor::StaticClass(), FName(TEXT("MagicOutliner_GroupActor")));
+	SpawnParams.ObjectFlags = RF_Transactional;
+	SpawnParams.OverrideLevel = ValidActors[0]->GetLevel();
+	AActor* ParentActor = World->SpawnActor<AActor>(AActor::StaticClass(), Center, FRotator::ZeroRotator, SpawnParams);
+	if (!ParentActor)
+	{
+		return 0;
+	}
+
+	ParentActor->SetFlags(RF_Transactional);
+	ParentActor->Modify();
+	USceneComponent* RootComponent = NewObject<USceneComponent>(ParentActor, USceneComponent::StaticClass(), TEXT("Root"));
+	if (RootComponent)
+	{
+		RootComponent->SetFlags(RF_Transactional);
+		ParentActor->SetRootComponent(RootComponent);
+		ParentActor->AddInstanceComponent(RootComponent);
+		RootComponent->RegisterComponent();
+	}
+	ParentActor->SetActorLocation(Center);
+	ParentActor->SetActorLabel(SafeActorName, true);
+
+	int32 AttachedCount = 0;
+	for (AActor* Actor : ValidActors)
+	{
+		if (!Actor || Actor == ParentActor)
+		{
+			continue;
+		}
+		Actor->SetFlags(RF_Transactional);
+		Actor->Modify();
+		if (Actor->AttachToActor(ParentActor, FAttachmentTransformRules::KeepWorldTransform))
+		{
+			++AttachedCount;
+		}
+	}
+
+	if (GEditor && AttachedCount > 0)
+	{
+		GEditor->RedrawLevelEditingViewports();
+	}
+	return AttachedCount;
+}
+
 void SPBRMagicOutlinerWindow::MoveModelTargetsToFolder(const FString& FolderName)
 {
 	TArray<AActor*> Actors;
@@ -5881,17 +6701,17 @@ void SPBRMagicOutlinerWindow::MoveModelTargetsToFolder(const FString& FolderName
 	}
 
 	const FScopedTransaction Transaction(FText::FromString(TEXT("Move magic outliner models to folder")));
-	const int32 MovedRoots = MoveActorsToFolder(Actors, FolderName, true);
+	const int32 MovedRoots = MoveActorsToFolder(Actors, FolderName, false);
 	if (MovedRoots <= 0)
 	{
 		StatusMessage = TEXT("文件夹名称无效，未移动模型");
 		return;
 	}
-	StatusMessage = FString::Printf(TEXT("已将 %d 个模型目标移动到文件夹: %s"), MovedRoots, *FolderName);
+	StatusMessage = FString::Printf(TEXT("已将 %d 个所选模型移动到文件夹: %s"), MovedRoots, *FolderName);
 	RebuildItems();
 }
 
-void SPBRMagicOutlinerWindow::ApplyModelBatchRename(const FString& Prefix, int32 StartIndex, bool bKeepOriginalName, bool bMoveToFolder, const FString& FolderName)
+void SPBRMagicOutlinerWindow::ApplyModelBatchRename(const FString& Prefix, int32 StartIndex, bool bKeepOriginalName, bool bMoveToFolder, const FString& FolderName, bool bMoveToNewActor, const FString& NewActorName)
 {
 	TArray<AActor*> Actors;
 	GetModelToolTargetActors(Actors);
@@ -5918,14 +6738,36 @@ void SPBRMagicOutlinerWindow::ApplyModelBatchRename(const FString& Prefix, int32
 		Actor->Modify();
 		Actor->SetActorLabel(NewLabel, true);
 	}
+	int32 AttachedActors = 0;
+	if (bMoveToNewActor)
+	{
+		AttachedActors = MoveActorsToNewParentActor(Actors, NewActorName);
+	}
 	int32 MovedRoots = 0;
 	if (bMoveToFolder)
 	{
-		MovedRoots = MoveActorsToFolder(Actors, FolderName, true);
+		MovedRoots = MoveActorsToFolder(Actors, FolderName, false);
 	}
-	StatusMessage = bMoveToFolder
-		? FString::Printf(TEXT("已批量重命名 %d 个模型，并移动 %d 个大纲层级到文件夹: %s"), Actors.Num(), MovedRoots, *FolderName)
-		: FString::Printf(TEXT("已批量重命名 %d 个模型"), Actors.Num());
+	if (bMoveToFolder && bMoveToNewActor)
+	{
+		StatusMessage = FString::Printf(TEXT("已批量重命名 %d 个模型，挂到新 Actor %d 个，并移动 %d 个所选模型到文件夹: %s"),
+			Actors.Num(),
+			AttachedActors,
+			MovedRoots,
+			*FolderName);
+	}
+	else if (bMoveToNewActor)
+	{
+		StatusMessage = FString::Printf(TEXT("已批量重命名 %d 个模型，并挂到新 Actor %d 个"), Actors.Num(), AttachedActors);
+	}
+	else if (bMoveToFolder)
+	{
+		StatusMessage = FString::Printf(TEXT("已批量重命名 %d 个模型，并移动 %d 个所选模型到文件夹: %s"), Actors.Num(), MovedRoots, *FolderName);
+	}
+	else
+	{
+		StatusMessage = FString::Printf(TEXT("已批量重命名 %d 个模型"), Actors.Num());
+	}
 	RebuildItems();
 }
 
@@ -5941,16 +6783,18 @@ FReply SPBRMagicOutlinerWindow::OnModelBatchRenameClicked()
 
 	TSharedRef<SWindow> Dialog = SNew(SWindow)
 		.Title(PBRText(TEXT("ModelBatchRenameWindow"), TEXT("模型批量重命名"), TEXT("Model Batch Rename")))
-		.ClientSize(FVector2D(420.0f, 250.0f))
+		.ClientSize(FVector2D(500.0f, 390.0f))
 		.SupportsMaximize(false)
 		.SupportsMinimize(false);
 
 	TSharedPtr<SEditableTextBox> PrefixBox;
 	TSharedPtr<SEditableTextBox> FolderBox;
+	TSharedPtr<SEditableTextBox> NewActorBox;
 	struct FModelRenameDialogState
 	{
 		bool bKeepOriginalName = false;
 		bool bMoveToFolder = false;
+		bool bMoveToNewActor = false;
 		int32 StartIndex = 1;
 	};
 	TSharedRef<FModelRenameDialogState> DialogState = MakeShared<FModelRenameDialogState>();
@@ -6004,6 +6848,31 @@ FReply SPBRMagicOutlinerWindow::OnModelBatchRenameClicked()
 				.Text(FText::FromString(TEXT("MagicOutliner_Group")))
 				.HintText(PBRText(TEXT("RenameFolderHint"), TEXT("文件夹名称"), TEXT("Folder Name")))
 			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+			[
+				SNew(SCheckBox)
+				.IsChecked(ECheckBoxState::Unchecked)
+				.OnCheckStateChanged_Lambda([DialogState](ECheckBoxState State) { DialogState->bMoveToNewActor = State == ECheckBoxState::Checked; })
+				[
+					SNew(STextBlock).Text(PBRText(TEXT("RenameMoveNewActor"), TEXT("同时移动到新的 Actor 父级"), TEXT("Move under new parent Actor")))
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+			[
+				SAssignNew(NewActorBox, SEditableTextBox)
+				.Text(FText::FromString(TEXT("MagicOutliner_GroupActor")))
+				.HintText(PBRText(TEXT("RenameNewActorHint"), TEXT("新的 Actor 名称"), TEXT("New Actor Name")))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
+			[
+				SNew(STextBlock)
+				.AutoWrapText(true)
+				.Text(PBRText(
+					TEXT("RenameDatasmithWarning"),
+					TEXT("Datasmith 提示：移动到文件夹只整理所选模型 Actor；创建新的 Actor 父级会改变所选模型的附加层级，后续 Datasmith 重新同步可能按源文件层级恢复或覆盖这类层级调整。"),
+					TEXT("Datasmith note: moving to a folder only organizes the selected model Actors; a new parent Actor changes their attachment hierarchy and may be restored or overwritten by later Datasmith re-sync.")))
+				.ColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.72f, 0.32f)))
+			]
 			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)
 			[
 				SNew(SHorizontalBox)
@@ -6017,14 +6886,29 @@ FReply SPBRMagicOutlinerWindow::OnModelBatchRenameClicked()
 				[
 					SNew(SButton)
 					.Text(PBRText(TEXT("Apply"), TEXT("应用"), TEXT("Apply")))
-					.OnClicked_Lambda([this, Dialog, PrefixBox, FolderBox, DialogState]()
+					.OnClicked_Lambda([this, Dialog, PrefixBox, FolderBox, NewActorBox, DialogState]()
 					{
+						if (DialogState->bMoveToNewActor)
+						{
+							const EAppReturnType::Type ConfirmResult = FMessageDialog::Open(
+								EAppMsgType::YesNo,
+								PBRText(
+									TEXT("ConfirmDatasmithHierarchyChange"),
+									TEXT("创建新的 Actor 父级会把所选模型直接重新挂到这个 Actor 下。Datasmith 重新同步时可能按源文件层级恢复或覆盖这个层级调整。仍然继续吗？"),
+									TEXT("Creating a new parent Actor directly reparents the selected model Actors under it. A Datasmith re-sync may restore or overwrite this hierarchy change. Continue?")));
+							if (ConfirmResult != EAppReturnType::Yes)
+							{
+								return FReply::Handled();
+							}
+						}
 						ApplyModelBatchRename(
 							PrefixBox.IsValid() ? PrefixBox->GetText().ToString() : FString(),
 							DialogState->StartIndex,
 							DialogState->bKeepOriginalName,
 							DialogState->bMoveToFolder,
-							FolderBox.IsValid() ? FolderBox->GetText().ToString() : FString());
+							FolderBox.IsValid() ? FolderBox->GetText().ToString() : FString(),
+							DialogState->bMoveToNewActor,
+							NewActorBox.IsValid() ? NewActorBox->GetText().ToString() : FString());
 						Dialog->RequestDestroyWindow();
 						return FReply::Handled();
 					})
@@ -6813,6 +7697,13 @@ EVisibility SPBRMagicOutlinerWindow::GetCheckedActionsVisibility() const
 EVisibility SPBRMagicOutlinerWindow::GetSelectedMaterialVisibility() const
 {
 	return ActiveCategory == EPBRMagicOutlinerCategory::Materials ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
+EVisibility SPBRMagicOutlinerWindow::GetEditableMaterialPanelVisibility() const
+{
+	return ActiveCategory == EPBRMagicOutlinerCategory::Materials && GetEditableMaterialInstance()
+		? EVisibility::Visible
+		: EVisibility::Collapsed;
 }
 
 EVisibility SPBRMagicOutlinerWindow::GetStandardControlsVisibility() const

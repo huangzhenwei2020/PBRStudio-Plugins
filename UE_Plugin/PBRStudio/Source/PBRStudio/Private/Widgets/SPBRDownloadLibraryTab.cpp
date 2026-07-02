@@ -9,6 +9,7 @@
 #include "HAL/PlatformApplicationMisc.h"
 #include "IDesktopPlatform.h"
 #include "Input/DragAndDrop.h"
+#include "Misc/Guid.h"
 #include "Styling/AppStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
@@ -27,6 +28,27 @@
 
 #define LOCTEXT_NAMESPACE "SPBRDownloadLibraryTab"
 
+namespace
+{
+	const TCHAR* PBRDownloadBridgeTokenConfigKey = TEXT("download_bridge_token");
+
+	FString GenerateDownloadBridgeToken()
+	{
+		return FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	}
+
+	void SaveDownloadBridgeToken(const FString& Token)
+	{
+		TSharedPtr<FJsonObject> Config;
+		if (!FPBRDataStore::LoadConfig(Config) || !Config.IsValid())
+		{
+			Config = MakeShareable(new FJsonObject);
+		}
+		Config->SetStringField(PBRDownloadBridgeTokenConfigKey, Token);
+		FPBRDataStore::SaveConfig(Config);
+	}
+}
+
 void SPBRDownloadLibraryTab::Construct(const FArguments& InArgs)
 {
 	OnLibrarySentToTextureSuite = InArgs._OnLibrarySentToTextureSuite;
@@ -43,6 +65,13 @@ void SPBRDownloadLibraryTab::Construct(const FArguments& InArgs)
 		{
 			DownloadManager->SetMaterialLibraryDir(LastFolder);
 		}
+		Config->TryGetStringField(PBRDownloadBridgeTokenConfigKey, BridgeToken);
+	}
+	BridgeToken = BridgeToken.TrimStartAndEnd();
+	if (BridgeToken.IsEmpty())
+	{
+		BridgeToken = GenerateDownloadBridgeToken();
+		SaveDownloadBridgeToken(BridgeToken);
 	}
 
 	HttpServer->OnPBRPush.BindLambda([this](const TArray<FString>& URLs, bool bAutoStart)
@@ -128,6 +157,14 @@ void SPBRDownloadLibraryTab::Construct(const FArguments& InArgs)
 				.MaxValue(65535)
 				.Value(19528)
 				.MinDesiredWidth(80)
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+			[ SNew(STextBlock).Text(LOCTEXT("BridgeToken", "Token")) ]
+			+ SHorizontalBox::Slot().FillWidth(0.4f).Padding(0, 0, 8, 0)
+			[
+				SAssignNew(BridgeTokenBox, SEditableTextBox)
+				.Text(FText::FromString(BridgeToken))
+				.MinDesiredWidth(180)
 			]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
 			[
@@ -639,7 +676,25 @@ void SPBRDownloadLibraryTab::RefreshSites()
 
 FReply SPBRDownloadLibraryTab::OnStartServer()
 {
-	HttpServer->Start(PortSpin->GetValue());
+	BridgeToken = BridgeTokenBox.IsValid() ? BridgeTokenBox->GetText().ToString().TrimStartAndEnd() : BridgeToken.TrimStartAndEnd();
+	if (BridgeToken.IsEmpty())
+	{
+		BridgeToken = GenerateDownloadBridgeToken();
+		if (BridgeTokenBox.IsValid())
+		{
+			BridgeTokenBox->SetText(FText::FromString(BridgeToken));
+		}
+	}
+	SaveDownloadBridgeToken(BridgeToken);
+	LastServerError.Empty();
+	if (HttpServer->IsRunning())
+	{
+		HttpServer->Stop();
+	}
+	if (!HttpServer->Start(PortSpin->GetValue(), BridgeToken))
+	{
+		LastServerError = TEXT("启动失败：请检查端口和 Token");
+	}
 	return FReply::Handled();
 }
 
@@ -654,6 +709,10 @@ FText SPBRDownloadLibraryTab::GetServerStatus() const
 	if (HttpServer->IsRunning())
 	{
 		return FText::Format(LOCTEXT("ServerRunning", "运行中，端口 {0}"), FText::AsNumber(HttpServer->GetPort()));
+	}
+	if (!LastServerError.IsEmpty())
+	{
+		return FText::FromString(LastServerError);
 	}
 	return LOCTEXT("ServerStopped", "已停止");
 }

@@ -49,8 +49,10 @@ public:
 	FOnDownloadComplete OnComplete;
 
 private:
-	void UpdateDownloadProgress(FHttpRequestPtr Request, uint64 BytesSent, uint64 BytesReceived, int32 Index);
-	void OnDownloadFinished(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded, int32 Index);
+	void UpdateDownloadProgress(FHttpRequestPtr Request, uint64 BytesSent, uint64 BytesReceived, FString URL);
+	void OnDownloadFinished(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded, FString URL);
+	int32 FindQueueIndexByURL(const FString& URL) const;
+	void RemoveActiveRequest(FHttpRequestPtr Request);
 	void ExtractZipIfNeeded(int32 Index);
 	void RunPBRAnalysis(int32 Index);
 

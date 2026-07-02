@@ -7873,12 +7873,39 @@ _pbr_push_server_instance = None
 _pbr_push_server_thread = None
 _pbr_push_callback = None  # callable(url_list)
 _pbr_push_server_port = None
+_pbr_push_bridge_token = ""
 _pbr_push_callback_lock = None
 _pbr_push_ui_instance = None
+PBR_BRIDGE_TOKEN_HEADER = "X-PBRStudio-Token"
 
 
 def _json_response_bytes(data):
     return _json_mod.dumps(data, ensure_ascii=False).encode("utf-8")
+
+
+def _json_script_literal(data):
+    return _json_mod.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+
+
+def normalize_pbr_bridge_token(token):
+    return safe_str(token, "").strip()
+
+
+def generate_pbr_bridge_token():
+    try:
+        import secrets
+        return secrets.token_hex(16)
+    except Exception:
+        try:
+            import uuid
+            return uuid.uuid4().hex
+        except Exception:
+            return str(int(time.time() * 1000))
+
+
+def ensure_pbr_bridge_token(token=""):
+    token = normalize_pbr_bridge_token(token)
+    return token or generate_pbr_bridge_token()
 
 
 def _safe_html_text(text):
@@ -8340,6 +8367,7 @@ def _web_ai_html():
 </div>
 <script src="/vendor/katex/katex.min.js"></script>
 <script>
+const BRIDGE_TOKEN = __PBR_BRIDGE_TOKEN__;
 const els = {
   provider: document.getElementById('provider'),
   apiType: document.getElementById('api_type'),
@@ -8615,9 +8643,12 @@ function syncForm() {
   renderMessages();
 }
 async function api(url, payload) {
+  const headers = {};
+  if (payload) headers['Content-Type'] = 'application/json';
+  if (BRIDGE_TOKEN) headers['X-PBRStudio-Token'] = BRIDGE_TOKEN;
   const resp = await fetch(url, {
     method: payload ? 'POST' : 'GET',
-    headers: payload ? { 'Content-Type': 'application/json' } : undefined,
+    headers,
     body: payload ? JSON.stringify(payload) : undefined
   });
   const data = await resp.json().catch(() => ({}));
@@ -8747,7 +8778,7 @@ resizePrompt();
 loadState().catch((e) => setActionStatus(String(e), 'error'));
 </script>
 </body>
-</html>"""
+</html>""".replace("__PBR_BRIDGE_TOKEN__", _json_script_literal(normalize_pbr_bridge_token(_pbr_push_bridge_token)))
 
 
 def validate_local_service_port(port):
@@ -8793,11 +8824,22 @@ class _PBRPushHandler(_http_server.BaseHTTPRequestHandler if _HAS_HTTP_SERVER el
         self.send_header("Content-Type", content_type)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, {}".format(PBR_BRIDGE_TOKEN_HEADER))
         self.end_headers()
 
     def _ui(self):
         return _pbr_push_ui_instance
+
+    def _is_authorized(self):
+        expected = normalize_pbr_bridge_token(_pbr_push_bridge_token)
+        provided = normalize_pbr_bridge_token(self.headers.get(PBR_BRIDGE_TOKEN_HEADER, ""))
+        return bool(expected) and provided == expected
+
+    def _require_authorized(self):
+        if self._is_authorized():
+            return True
+        self._send_json(401, {"ok": False, "error": "Unauthorized"})
+        return False
 
     def _read_json_body(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -8823,6 +8865,8 @@ class _PBRPushHandler(_http_server.BaseHTTPRequestHandler if _HAS_HTTP_SERVER el
 
     def do_GET(self):
         if self.path == "/ping":
+            if not self._require_authorized():
+                return
             self._send_json(200, {"status": "ok", "service": "PBRPushServer"})
         elif self.path in ("/ai", "/webai", "/web-ai"):
             self._send_html(_web_ai_html())
@@ -8833,6 +8877,8 @@ class _PBRPushHandler(_http_server.BaseHTTPRequestHandler if _HAS_HTTP_SERVER el
                 return
             self._send_bytes(200, data, content_type)
         elif self.path.startswith("/api/ai/state"):
+            if not self._require_authorized():
+                return
             ui = self._ui()
             if not ui:
                 self._send_json(503, {"ok": False, "error": "3ds Max 插件实例不可用"})
@@ -8843,6 +8889,8 @@ class _PBRPushHandler(_http_server.BaseHTTPRequestHandler if _HAS_HTTP_SERVER el
 
     def do_POST(self):
         if self.path == "/push":
+            if not self._require_authorized():
+                return
             try:
                 data = self._read_json_body()
                 urls = data.get("urls", [])
@@ -8855,6 +8903,8 @@ class _PBRPushHandler(_http_server.BaseHTTPRequestHandler if _HAS_HTTP_SERVER el
             except Exception as e:
                 self._send_json(400, {"error": str(e)})
         elif self.path.startswith("/api/ai/"):
+            if not self._require_authorized():
+                return
             ui = self._ui()
             if not ui:
                 self._send_json(503, {"ok": False, "error": "3ds Max 插件实例不可用"})
@@ -8887,14 +8937,18 @@ class _PBRPushHandler(_http_server.BaseHTTPRequestHandler if _HAS_HTTP_SERVER el
             self._send_json(404, {"error": "not found"})
 
 
-def start_pbr_push_server(port=19527, callback=None):
-    global _pbr_push_server_instance, _pbr_push_server_thread, _pbr_push_callback, _pbr_push_server_port, _pbr_push_callback_lock
+def start_pbr_push_server(port=19527, callback=None, token=""):
+    global _pbr_push_server_instance, _pbr_push_server_thread, _pbr_push_callback, _pbr_push_server_port, _pbr_push_callback_lock, _pbr_push_bridge_token
     if not _HAS_HTTP_SERVER:
         return False, "http.server 模块不可用"
+    token = ensure_pbr_bridge_token(token)
     ok, msg = validate_local_service_port(port)
     if not ok:
         return False, msg
     if _pbr_push_server_instance is not None:
+        _pbr_push_bridge_token = token
+        if callback is not None:
+            _pbr_push_callback = callback
         return True, "已在运行（端口 {}）".format(_pbr_push_server_port or port)
     if _pbr_push_callback_lock is None:
         try:
@@ -8903,6 +8957,7 @@ def start_pbr_push_server(port=19527, callback=None):
         except Exception:
             _pbr_push_callback_lock = None
     _pbr_push_callback = callback
+    _pbr_push_bridge_token = token
     try:
         server_cls = getattr(_http_server, "ThreadingHTTPServer", _http_server.HTTPServer)
         srv = server_cls(("127.0.0.1", port), _PBRPushHandler)
@@ -8918,7 +8973,7 @@ def start_pbr_push_server(port=19527, callback=None):
 
 
 def stop_pbr_push_server():
-    global _pbr_push_server_instance, _pbr_push_server_thread, _pbr_push_server_port, _pbr_push_callback
+    global _pbr_push_server_instance, _pbr_push_server_thread, _pbr_push_server_port, _pbr_push_callback, _pbr_push_bridge_token
     if _pbr_push_server_instance is None:
         return False, "服务未运行"
     try:
@@ -8931,6 +8986,7 @@ def stop_pbr_push_server():
         _pbr_push_server_thread = None
         _pbr_push_server_port = None
         _pbr_push_callback = None
+        _pbr_push_bridge_token = ""
         return True, "已停止"
     except Exception as e:
         return False, "停止失败：{}".format(e)
@@ -10668,6 +10724,7 @@ class InteriorSceneStudioPro(QtWidgets.QDialog):
                                         flatten_redundant=self.chk_pbr_flatten_redundant_folder.isChecked() if hasattr(self, "chk_pbr_flatten_redundant_folder") else True,
                                         watch_clipboard=self.chk_pbr_watch_clipboard.isChecked() if hasattr(self, "chk_pbr_watch_clipboard") else False,
                                         push_port=self.pbr_push_port_spin.value() if hasattr(self, "pbr_push_port_spin") else 19527,
+                                        bridge_token=self.pbr_current_bridge_token() if hasattr(self, "pbr_bridge_token") else "",
                                         no_overwrite=self.chk_pbr_download_no_overwrite.isChecked(),
                                         allowed_types={k: v.isChecked() for k, v in self.pbr_download_type_checks.items()} if hasattr(self, "pbr_download_type_checks") else {})
             try:
@@ -10692,7 +10749,8 @@ class InteriorSceneStudioPro(QtWidgets.QDialog):
                 robot_name=getattr(self, "_ai_robot_name", "AI小助手"),
                 user_name=getattr(self, "_ai_user_name", "用户"),
                 config_collapsed=bool(getattr(self, "_ai_config_collapsed", False)),
-                image_edit_mode=bool(getattr(self, "_ai_image_edit_mode", False))
+                image_edit_mode=bool(getattr(self, "_ai_image_edit_mode", False)),
+                auto_exec_code=self.chk_ai_auto_exec_code.isChecked() if hasattr(self, "chk_ai_auto_exec_code") else False
             )
         except Exception: pass
         try:
@@ -10843,6 +10901,8 @@ class InteriorSceneStudioPro(QtWidgets.QDialog):
                 self.chk_pbr_watch_clipboard.setChecked(bool(pd.get("watch_clipboard", self.chk_pbr_watch_clipboard.isChecked())))
             if hasattr(self, "pbr_push_port_spin"):
                 self.pbr_push_port_spin.setValue(int(pd.get("push_port", 19527)))
+            if hasattr(self, "pbr_bridge_token"):
+                self.pbr_bridge_token.setText(ensure_pbr_bridge_token(pd.get("bridge_token", "")))
             self.chk_pbr_download_no_overwrite.setChecked(bool(pd.get("no_overwrite", self.chk_pbr_download_no_overwrite.isChecked())))
             allowed = pd.get("allowed_types", {})
             if isinstance(allowed, dict) and hasattr(self, "pbr_download_type_checks"):
@@ -10914,6 +10974,11 @@ class InteriorSceneStudioPro(QtWidgets.QDialog):
                 self._ai_image_edit_mode = bool(ai.get("image_edit_mode", False))
             except Exception:
                 self._ai_image_edit_mode = False
+            try:
+                if hasattr(self, "chk_ai_auto_exec_code"):
+                    self.chk_ai_auto_exec_code.setChecked(bool(ai.get("auto_exec_code", False)))
+            except Exception:
+                pass
             idx = self.ai_template_combo.findText(ai.get("template", self.ai_template_combo.currentText()))
             if idx >= 0:
                 self.ai_template_combo.setCurrentIndex(idx)
@@ -11894,11 +11959,35 @@ class InteriorSceneStudioPro(QtWidgets.QDialog):
         for i in range(5):
             self.pbr_download_tree.resizeColumnToContents(i)
 
+    def pbr_current_bridge_token(self):
+        token = ""
+        try:
+            token = self.pbr_bridge_token.text().strip() if hasattr(self, "pbr_bridge_token") else ""
+        except Exception:
+            token = ""
+        token = ensure_pbr_bridge_token(token)
+        try:
+            if hasattr(self, "pbr_bridge_token") and self.pbr_bridge_token.text().strip() != token:
+                self.pbr_bridge_token.setText(token)
+        except Exception:
+            pass
+        return token
+
+    def pbr_copy_bridge_token(self):
+        token = self.pbr_current_bridge_token()
+        try:
+            QtWidgets.QApplication.clipboard().setText(token)
+            self.log("本地桥接 Token 已复制")
+            self.lbl_pbr_push_server_status.setText("本地桥接服务：Token 已复制，请粘贴到 Chrome 扩展。")
+        except Exception:
+            pass
+
     def pbr_start_push_server(self, force_restart=False):
         try:
             port = int(self.pbr_push_port_spin.value()) if hasattr(self, "pbr_push_port_spin") else 19527
         except Exception:
             port = 19527
+        token = self.pbr_current_bridge_token()
         ok_port, msg_port = validate_local_service_port(port)
         if not ok_port:
             self.log("本地桥接服务：{}".format(msg_port))
@@ -11933,7 +12022,7 @@ class InteriorSceneStudioPro(QtWidgets.QDialog):
             except Exception:
                 pass
 
-        ok, msg = start_pbr_push_server(port=port, callback=_cb)
+        ok, msg = start_pbr_push_server(port=port, callback=_cb, token=token)
         self.log("本地桥接服务：{}".format(msg))
         try:
             self.lbl_pbr_push_server_status.setText("本地桥接服务：{}".format(msg))
@@ -11972,9 +12061,9 @@ class InteriorSceneStudioPro(QtWidgets.QDialog):
             return
         free_ok, free_msg = is_local_port_available(port)
         if _pbr_push_server_instance is not None and int(_pbr_push_server_port or 0) == int(port):
-            text = "端口 {} 当前正被本插件使用。浏览器插件端口也要改成 {}。".format(port, port)
+            text = "端口 {} 当前正被本插件使用。浏览器插件端口和 Token 都要保持一致。".format(port)
         elif free_ok:
-            text = "端口 {} 可用。修改浏览器插件时请填同一个端口。".format(port)
+            text = "端口 {} 可用。修改浏览器插件时请填同一个端口和 Token。".format(port)
         else:
             text = "端口 {} 已被其他程序占用，请换一个端口，并同步修改浏览器插件。{}".format(port, " 原因：" + free_msg if free_msg else "")
         self.log(text)
@@ -13461,6 +13550,11 @@ class InteriorSceneStudioPro(QtWidgets.QDialog):
         self.pbr_push_port_hint = QtWidgets.QLabel("本地桥接端口。Chrome 扩展、PBR 推送和 Web AI 都使用同一个端口。")
         self.pbr_push_port_hint.setObjectName("hintLabel")
         self.pbr_push_port_hint.setWordWrap(True)
+        self.pbr_bridge_token = QtWidgets.QLineEdit(ensure_pbr_bridge_token())
+        self.pbr_bridge_token.setPlaceholderText("本地桥接 Token")
+        self.pbr_bridge_token.setToolTip("Chrome 扩展连接 Max 时必须填写同一个 Token。")
+        self.btn_pbr_bridge_token_copy = QtWidgets.QPushButton("复制Token")
+        self.btn_pbr_bridge_token_copy.clicked.connect(self.pbr_copy_bridge_token)
 
         self.btn_pbr_push_server_start = QtWidgets.QPushButton("启动本地桥接服务")
         self.btn_pbr_push_server_start.setObjectName("primaryButton")
@@ -13497,12 +13591,15 @@ class InteriorSceneStudioPro(QtWidgets.QDialog):
         site_lay.addWidget(self.pbr_push_port_spin, 5, 1)
         site_lay.addWidget(self.btn_pbr_push_port_check, 5, 2)
         site_lay.addWidget(self.pbr_push_port_hint, 5, 3, 1, 2)
-        site_lay.addWidget(self.btn_pbr_push_server_start, 6, 0, 1, 2)
-        site_lay.addWidget(self.btn_pbr_push_server_stop, 6, 2)
-        site_lay.addWidget(self.lbl_pbr_push_server_status, 6, 3, 1, 2)
-        site_lay.addWidget(self.btn_pbr_open_ext_dir, 7, 0, 1, 2)
-        site_lay.addWidget(self.btn_pbr_open_ext_page, 7, 2)
-        site_lay.addWidget(self.pbr_extension_install_hint, 7, 3, 1, 2)
+        site_lay.addWidget(QtWidgets.QLabel("通信Token"), 6, 0)
+        site_lay.addWidget(self.pbr_bridge_token, 6, 1, 1, 3)
+        site_lay.addWidget(self.btn_pbr_bridge_token_copy, 6, 4)
+        site_lay.addWidget(self.btn_pbr_push_server_start, 7, 0, 1, 2)
+        site_lay.addWidget(self.btn_pbr_push_server_stop, 7, 2)
+        site_lay.addWidget(self.lbl_pbr_push_server_status, 7, 3, 1, 2)
+        site_lay.addWidget(self.btn_pbr_open_ext_dir, 8, 0, 1, 2)
+        site_lay.addWidget(self.btn_pbr_open_ext_page, 8, 2)
+        site_lay.addWidget(self.pbr_extension_install_hint, 8, 3, 1, 2)
         self.pbr_download_pages.addTab(site_page, "网站 / 剪贴板")
 
         # 页面2：下载队列
@@ -16153,6 +16250,26 @@ class InteriorSceneStudioPro(QtWidgets.QDialog):
             if _blocks:
                 _code, _lang = _blocks[-1]
                 if _code:
+                    if self.ai_image_edit_mode():
+                        self.log("当前处于图片编辑模式，已禁止自动执行脚本。")
+                        self.ai_append_diagnosis_line("图片编辑模式：已拦截本轮自动脚本执行。")
+                        return
+                    auto_exec = False
+                    try:
+                        auto_exec = bool(self.chk_ai_auto_exec_code.isChecked())
+                    except Exception:
+                        auto_exec = False
+                    if not auto_exec:
+                        try:
+                            self.btn_ai_run_script.setEnabled(True)
+                        except Exception:
+                            pass
+                        if len(_blocks) > 1:
+                            self.log("AI返回了多个代码块，已等待手动执行最后一个可执行代码块。")
+                        else:
+                            self.log("AI返回了可执行代码块，已等待手动执行。")
+                        self.ai_append_diagnosis_line("脚本执行：自动执行已关闭，请确认后点击“执行脚本”。")
+                        return
                     try:
                         self.btn_ai_run_script.setEnabled(False)
                     except Exception:
@@ -16161,10 +16278,6 @@ class InteriorSceneStudioPro(QtWidgets.QDialog):
                         self.log("AI返回了多个代码块，已自动采用最后一个可执行代码块。")
                     else:
                         self.log("AI返回了可执行代码块，正在自动执行。")
-                    if self.ai_image_edit_mode():
-                        self.log("当前处于图片编辑模式，已禁止自动执行脚本。")
-                        self.ai_append_diagnosis_line("图片编辑模式：已拦截本轮自动脚本执行。")
-                        return
                     self._ai_auto_exec_and_interpret(_code, _lang)
                     return
             self.log("AI回答完成")
@@ -16907,6 +17020,9 @@ class InteriorSceneStudioPro(QtWidgets.QDialog):
         self.btn_ai_copy_action_value.setFixedHeight(30)
         self.btn_ai_copy_action_value.setEnabled(False)
         self.btn_ai_copy_action_value.clicked.connect(self.ai_copy_action_value)
+        self.chk_ai_auto_exec_code = QtWidgets.QCheckBox("自动执行代码")
+        self.chk_ai_auto_exec_code.setChecked(False)
+        self.chk_ai_auto_exec_code.setToolTip("开启后，AI回答中的最后一段MAXScript或Python代码会自动执行。默认关闭。")
         self.btn_ai_run_script = QtWidgets.QPushButton("▶ 执行脚本")
         self.btn_ai_run_script.setFixedHeight(30)
         self.btn_ai_run_script.setObjectName("primaryButton")
@@ -16918,6 +17034,7 @@ class InteriorSceneStudioPro(QtWidgets.QDialog):
         action_lay.addWidget(self.btn_ai_run_action)
         action_lay.addWidget(self.btn_ai_open_url)
         action_lay.addWidget(self.btn_ai_copy_action_value)
+        action_lay.addWidget(self.chk_ai_auto_exec_code)
         action_lay.addWidget(self.btn_ai_run_script)
         try:
             action_bar.setStyleSheet("QFrame#aiSmartActionBar { background: transparent; } QPushButton, QComboBox { min-height: 28px; }")

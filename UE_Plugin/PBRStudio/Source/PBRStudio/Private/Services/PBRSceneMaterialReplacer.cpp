@@ -10,18 +10,26 @@
 #include "EditorFramework/AssetImportData.h"
 #include "EngineUtils.h"
 #include "Engine/TextureDefines.h"
+#include "Factories/MaterialInstanceConstantFactoryNew.h"
 #include "FileHelpers.h"
 #include "ImageUtils.h"
 #include "IImageWrapperModule.h"
+#include "IMaterialBakingModule.h"
+#include "MaterialBakingStructures.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionAdd.h"
 #include "Materials/MaterialExpressionAppendVector.h"
+#include "Materials/MaterialExpressionComponentMask.h"
 #include "Materials/MaterialExpressionComment.h"
 #include "Materials/MaterialExpressionConstant.h"
+#include "Materials/MaterialExpressionConstant2Vector.h"
 #include "Materials/MaterialExpressionConstant3Vector.h"
+#include "Materials/MaterialExpressionConstant4Vector.h"
 #include "Materials/MaterialExpressionDivide.h"
 #include "Materials/MaterialExpressionLinearInterpolate.h"
 #include "Materials/MaterialExpressionMultiply.h"
+#include "Materials/MaterialExpressionNamedReroute.h"
+#include "Materials/MaterialExpressionReroute.h"
 #include "Materials/MaterialExpressionRotator.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialExpressionStaticSwitchParameter.h"
@@ -32,15 +40,18 @@
 #include "Materials/MaterialInstance.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Materials/MaterialInterface.h"
+#include "MaterialUtilities.h"
 #include "MaterialShared.h"
 #include "MaterialEditingLibrary.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Modules/ModuleManager.h"
 #include "RenderingThread.h"
+#include "Components/MeshComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Services/PBRMaterialFactory.h"
 #include "Services/PBRMaterialInstanceFactory.h"
+#include "Services/PBRMaterialTemplateManager.h"
 #include "ScopedTransaction.h"
 #include "UObject/UObjectIterator.h"
 
@@ -769,6 +780,919 @@ static FLinearColor GetInheritedBaseColor(UMaterialInterface* Material)
 	}
 
 	return Color;
+}
+
+struct FPBRSceneTextureParameterBinding
+{
+	FName TextureParameterName;
+	FName SwitchParameterName;
+};
+
+struct FPBRSceneSourceChannelState
+{
+	bool bHasPropertyChain = false;
+	bool bHasTexture = false;
+	bool bShouldBake = false;
+	UTexture* Texture = nullptr;
+	bool bHasColor = false;
+	FLinearColor Color = FLinearColor::White;
+	bool bHasScalar = false;
+	float Scalar = 0.0f;
+};
+
+static TArray<FPBRSceneTextureParameterBinding> GetSceneTextureParameterBindings()
+{
+	return {
+		{ FPBRMaterialParameters::BaseColorTexture, FPBRMaterialParameters::UseBaseColorTexture },
+		{ FPBRMaterialParameters::NormalTexture, FPBRMaterialParameters::UseNormalTexture },
+		{ FPBRMaterialParameters::RoughnessTexture, FPBRMaterialParameters::UseRoughnessTexture },
+		{ FPBRMaterialParameters::SpecularTexture, FPBRMaterialParameters::UseSpecularTexture },
+		{ FPBRMaterialParameters::MetallicTexture, FPBRMaterialParameters::UseMetallicTexture },
+		{ FPBRMaterialParameters::AOTexture, FPBRMaterialParameters::UseAOTexture },
+		{ FPBRMaterialParameters::OpacityTexture, FPBRMaterialParameters::UseOpacityTexture },
+		{ FPBRMaterialParameters::HeightTexture, FPBRMaterialParameters::UseHeightTexture },
+		{ FPBRMaterialParameters::EmissiveTexture, FPBRMaterialParameters::UseEmissiveTexture },
+		{ FPBRMaterialParameters::WaterRippleTexture, FPBRMaterialParameters::UseWaterRippleTexture },
+		{ FPBRMaterialParameters::GlassDirtTexture, FPBRMaterialParameters::UseGlassDirtTexture },
+		{ FPBRMaterialParameters::GlassDistortionTexture, FPBRMaterialParameters::UseGlassDistortionTexture },
+		{ FPBRMaterialParameters::GlassFrostedTexture, FPBRMaterialParameters::UseGlassFrostedTexture }
+	};
+}
+
+static bool ReadSceneStaticSwitchParameter(const UMaterialInstanceConstant* Instance, const FName& ParameterName, bool bDefaultValue)
+{
+	if (!Instance)
+	{
+		return bDefaultValue;
+	}
+
+	bool bValue = bDefaultValue;
+	FGuid ExpressionGuid;
+	return Instance->GetStaticSwitchParameterValue(FMaterialParameterInfo(ParameterName), bValue, ExpressionGuid) ? bValue : bDefaultValue;
+}
+
+static TArray<FName> GetSceneMaterialUVChannels()
+{
+	return {
+		TEXT("基础色"),
+		TEXT("法线"),
+		TEXT("粗糙度"),
+		TEXT("高光"),
+		TEXT("金属度"),
+		TEXT("环境遮蔽"),
+		TEXT("透明"),
+		TEXT("高度"),
+		TEXT("自发光"),
+		TEXT("水纹")
+	};
+}
+
+static FName GetSceneTextureSwitchParameterName(const FName& TextureParameterName)
+{
+	for (const FPBRSceneTextureParameterBinding& Binding : GetSceneTextureParameterBindings())
+	{
+		if (Binding.TextureParameterName == TextureParameterName)
+		{
+			return Binding.SwitchParameterName;
+		}
+	}
+	return NAME_None;
+}
+
+static EMaterialSamplerType GetSceneSamplerTypeForTextureParameter(const FName& TextureParameterName)
+{
+	if (TextureParameterName == FPBRMaterialParameters::NormalTexture)
+	{
+		return EMaterialSamplerType::SAMPLERTYPE_Normal;
+	}
+	if (TextureParameterName == FPBRMaterialParameters::RoughnessTexture ||
+		TextureParameterName == FPBRMaterialParameters::SpecularTexture ||
+		TextureParameterName == FPBRMaterialParameters::MetallicTexture ||
+		TextureParameterName == FPBRMaterialParameters::AOTexture ||
+		TextureParameterName == FPBRMaterialParameters::OpacityTexture ||
+		TextureParameterName == FPBRMaterialParameters::HeightTexture ||
+		TextureParameterName == FPBRMaterialParameters::WaterRippleTexture ||
+		TextureParameterName == FPBRMaterialParameters::GlassDirtTexture ||
+		TextureParameterName == FPBRMaterialParameters::GlassDistortionTexture ||
+		TextureParameterName == FPBRMaterialParameters::GlassFrostedTexture)
+	{
+		return EMaterialSamplerType::SAMPLERTYPE_Masks;
+	}
+	return EMaterialSamplerType::SAMPLERTYPE_Color;
+}
+
+static UTexture2D* LoadSceneEngineDefaultTexture(EMaterialSamplerType SamplerType)
+{
+	switch (SamplerType)
+	{
+	case EMaterialSamplerType::SAMPLERTYPE_Normal:
+		return LoadObject<UTexture2D>(nullptr, TEXT("/Engine/EngineMaterials/DefaultNormal.DefaultNormal"));
+	case EMaterialSamplerType::SAMPLERTYPE_Masks:
+	case EMaterialSamplerType::SAMPLERTYPE_LinearColor:
+		return LoadObject<UTexture2D>(nullptr, TEXT("/Engine/EngineMaterials/DefaultDiffuse_TC_Masks.DefaultDiffuse_TC_Masks"));
+	case EMaterialSamplerType::SAMPLERTYPE_Color:
+	default:
+		return LoadObject<UTexture2D>(nullptr, TEXT("/Engine/EngineMaterials/T_Default_BaseColor.T_Default_BaseColor"));
+	}
+}
+
+static bool IsSceneSourceTemplateDefaultTexture(const UTexture* Texture)
+{
+	if (!Texture)
+	{
+		return false;
+	}
+
+	const FString TexturePath = Texture->GetPathName();
+	return TexturePath.StartsWith(TEXT("/Game/PBRStudio/Templates/DemoTextures/")) ||
+		TexturePath.StartsWith(TEXT("/PBRStudio/Templates/DemoTextures/")) ||
+		TexturePath.StartsWith(TEXT("/Engine/EngineMaterials/")) ||
+		TexturePath.Contains(TEXT("/DemoTextures/"), ESearchCase::IgnoreCase);
+}
+
+static bool IsValidSceneSourceMigrationTexture(const UTexture* Texture)
+{
+	return Texture && !IsSceneSourceTemplateDefaultTexture(Texture);
+}
+
+static bool SceneNameContainsAnyToken(const FString& Name, const TArray<FString>& Tokens)
+{
+	for (const FString& Token : Tokens)
+	{
+		if (Name.Contains(Token, ESearchCase::IgnoreCase, ESearchDir::FromStart))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool IsSceneExplicitEmissiveName(const FString& Name)
+{
+	return Name.Contains(TEXT("emissive"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("emission"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("selfillum"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("self_illum"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("glow"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("neon"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("led"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("lamp"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("bulb"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("lightbox"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("light_box"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("发光"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("自发光"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("霓虹"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("灯带"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("灯箱"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("灯管"), ESearchCase::IgnoreCase) ||
+		Name.Contains(TEXT("灯泡"), ESearchCase::IgnoreCase);
+}
+
+static TArray<FString> GetSceneTextureParameterSearchTokens(const FName& TargetParameterName)
+{
+	if (TargetParameterName == FPBRMaterialParameters::BaseColorTexture)
+	{
+		return { TEXT("BaseColor"), TEXT("Base Color"), TEXT("Diffuse"), TEXT("Albedo"), TEXT("Color"), TEXT("基础色"), TEXT("基础颜色"), TEXT("漫反射"), TEXT("颜色") };
+	}
+	if (TargetParameterName == FPBRMaterialParameters::NormalTexture)
+	{
+		return { TEXT("Normal"), TEXT("Bump"), TEXT("法线") };
+	}
+	if (TargetParameterName == FPBRMaterialParameters::RoughnessTexture)
+	{
+		return { TEXT("Roughness"), TEXT("Rough"), TEXT("Glossiness"), TEXT("Gloss"), TEXT("粗糙") };
+	}
+	if (TargetParameterName == FPBRMaterialParameters::SpecularTexture)
+	{
+		return { TEXT("Specular"), TEXT("Spec"), TEXT("Reflection"), TEXT("高光"), TEXT("镜面") };
+	}
+	if (TargetParameterName == FPBRMaterialParameters::MetallicTexture)
+	{
+		return { TEXT("Metallic"), TEXT("Metalness"), TEXT("Metal"), TEXT("金属") };
+	}
+	if (TargetParameterName == FPBRMaterialParameters::AOTexture)
+	{
+		return { TEXT("AmbientOcclusion"), TEXT("Ambient Occlusion"), TEXT("Occlusion"), TEXT("AO"), TEXT("环境遮蔽") };
+	}
+	if (TargetParameterName == FPBRMaterialParameters::OpacityTexture)
+	{
+		return { TEXT("Opacity"), TEXT("Alpha"), TEXT("Transparency"), TEXT("透明") };
+	}
+	if (TargetParameterName == FPBRMaterialParameters::HeightTexture)
+	{
+		return { TEXT("Height"), TEXT("Displacement"), TEXT("Bump"), TEXT("高度"), TEXT("置换") };
+	}
+	if (TargetParameterName == FPBRMaterialParameters::EmissiveTexture)
+	{
+		return { TEXT("Emissive"), TEXT("Emission"), TEXT("Glow"), TEXT("SelfIllum"), TEXT("Neon"), TEXT("LED"), TEXT("自发光"), TEXT("发光"), TEXT("霓虹") };
+	}
+	return {};
+}
+
+static EMaterialProperty GetSceneMaterialPropertyForTextureParameter(const FName& TargetParameterName)
+{
+	if (TargetParameterName == FPBRMaterialParameters::BaseColorTexture) { return MP_BaseColor; }
+	if (TargetParameterName == FPBRMaterialParameters::NormalTexture) { return MP_Normal; }
+	if (TargetParameterName == FPBRMaterialParameters::RoughnessTexture) { return MP_Roughness; }
+	if (TargetParameterName == FPBRMaterialParameters::SpecularTexture) { return MP_Specular; }
+	if (TargetParameterName == FPBRMaterialParameters::MetallicTexture) { return MP_Metallic; }
+	if (TargetParameterName == FPBRMaterialParameters::AOTexture) { return MP_AmbientOcclusion; }
+	if (TargetParameterName == FPBRMaterialParameters::OpacityTexture) { return MP_Opacity; }
+	if (TargetParameterName == FPBRMaterialParameters::HeightTexture) { return MP_WorldPositionOffset; }
+	if (TargetParameterName == FPBRMaterialParameters::EmissiveTexture) { return MP_EmissiveColor; }
+	return MP_MAX;
+}
+
+static bool IsSimpleSceneValueMigrationExpression(const UMaterialExpression* Expression)
+{
+	return Cast<UMaterialExpressionScalarParameter>(Expression) ||
+		Cast<UMaterialExpressionVectorParameter>(Expression) ||
+		Cast<UMaterialExpressionConstant>(Expression) ||
+		Cast<UMaterialExpressionConstant2Vector>(Expression) ||
+		Cast<UMaterialExpressionConstant3Vector>(Expression) ||
+		Cast<UMaterialExpressionConstant4Vector>(Expression) ||
+		Cast<UMaterialExpressionReroute>(Expression) ||
+		Cast<UMaterialExpressionNamedRerouteDeclaration>(Expression) ||
+		Cast<UMaterialExpressionNamedRerouteUsage>(Expression);
+}
+
+static bool IsSceneColorTargetParameter(const FName& TargetParameterName)
+{
+	return TargetParameterName == FPBRMaterialParameters::BaseColorTexture ||
+		TargetParameterName == FPBRMaterialParameters::EmissiveTexture;
+}
+
+static bool IsSceneScalarTargetParameter(const FName& TargetParameterName)
+{
+	return TargetParameterName == FPBRMaterialParameters::RoughnessTexture ||
+		TargetParameterName == FPBRMaterialParameters::SpecularTexture ||
+		TargetParameterName == FPBRMaterialParameters::MetallicTexture ||
+		TargetParameterName == FPBRMaterialParameters::OpacityTexture ||
+		TargetParameterName == FPBRMaterialParameters::HeightTexture;
+}
+
+static bool ResolveSceneScalarExpressionValue(UMaterialInterface* SourceMaterial, const UMaterialExpression* Expression, float& OutValue)
+{
+	if (!Expression)
+	{
+		return false;
+	}
+
+	if (const UMaterialExpressionScalarParameter* ScalarParameter = Cast<UMaterialExpressionScalarParameter>(Expression))
+	{
+		return SourceMaterial && SourceMaterial->GetScalarParameterValue(FMaterialParameterInfo(ScalarParameter->ParameterName), OutValue);
+	}
+	if (const UMaterialExpressionConstant* Constant = Cast<UMaterialExpressionConstant>(Expression))
+	{
+		OutValue = Constant->R;
+		return true;
+	}
+	if (const UMaterialExpressionConstant2Vector* Constant2 = Cast<UMaterialExpressionConstant2Vector>(Expression))
+	{
+		OutValue = Constant2->R;
+		return true;
+	}
+	if (const UMaterialExpressionConstant3Vector* Constant3 = Cast<UMaterialExpressionConstant3Vector>(Expression))
+	{
+		OutValue = Constant3->Constant.R;
+		return true;
+	}
+	if (const UMaterialExpressionConstant4Vector* Constant4 = Cast<UMaterialExpressionConstant4Vector>(Expression))
+	{
+		OutValue = Constant4->Constant.R;
+		return true;
+	}
+	if (const UMaterialExpressionVectorParameter* VectorParameter = Cast<UMaterialExpressionVectorParameter>(Expression))
+	{
+		FLinearColor Color;
+		if (SourceMaterial && SourceMaterial->GetVectorParameterValue(FMaterialParameterInfo(VectorParameter->ParameterName), Color))
+		{
+			OutValue = Color.R;
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool ResolveSceneColorExpressionValue(UMaterialInterface* SourceMaterial, const UMaterialExpression* Expression, FLinearColor& OutColor)
+{
+	if (!Expression)
+	{
+		return false;
+	}
+
+	if (const UMaterialExpressionVectorParameter* VectorParameter = Cast<UMaterialExpressionVectorParameter>(Expression))
+	{
+		return SourceMaterial && SourceMaterial->GetVectorParameterValue(FMaterialParameterInfo(VectorParameter->ParameterName), OutColor);
+	}
+	if (const UMaterialExpressionConstant3Vector* Constant3 = Cast<UMaterialExpressionConstant3Vector>(Expression))
+	{
+		OutColor = Constant3->Constant;
+		OutColor.A = 1.0f;
+		return true;
+	}
+	if (const UMaterialExpressionConstant4Vector* Constant4 = Cast<UMaterialExpressionConstant4Vector>(Expression))
+	{
+		OutColor = Constant4->Constant;
+		return true;
+	}
+	if (const UMaterialExpressionConstant2Vector* Constant2 = Cast<UMaterialExpressionConstant2Vector>(Expression))
+	{
+		OutColor = FLinearColor(Constant2->R, Constant2->G, 0.0f, 1.0f);
+		return true;
+	}
+
+	float ScalarValue = 0.0f;
+	if (ResolveSceneScalarExpressionValue(SourceMaterial, Expression, ScalarValue))
+	{
+		OutColor = FLinearColor(ScalarValue, ScalarValue, ScalarValue, 1.0f);
+		return true;
+	}
+	return false;
+}
+
+static FPBRSceneSourceChannelState AnalyzeSceneSourceMaterialChannel(UMaterialInterface* SourceMaterial, const FName& TargetParameterName)
+{
+	FPBRSceneSourceChannelState State;
+	if (!SourceMaterial)
+	{
+		return State;
+	}
+
+	const EMaterialProperty MaterialProperty = GetSceneMaterialPropertyForTextureParameter(TargetParameterName);
+	UMaterial* SourceBaseMaterial = SourceMaterial->GetMaterial();
+	if (!SourceBaseMaterial || MaterialProperty == MP_MAX)
+	{
+		return State;
+	}
+
+	FStaticParameterSet StaticParameters;
+	SourceMaterial->GetStaticParameterValues(StaticParameters);
+
+	TArray<UTexture*> ChainTextures;
+	TArray<FName> TextureParameterNames;
+	SourceMaterial->GetTexturesInPropertyChain(MaterialProperty, ChainTextures, &TextureParameterNames, &StaticParameters, ERHIFeatureLevel::Num, EMaterialQualityLevel::Num);
+
+	TArray<UTexture*> UniqueTextures;
+	bool bSawAnyChainTexture = false;
+	for (int32 TextureIndex = 0; TextureIndex < ChainTextures.Num(); ++TextureIndex)
+	{
+		UTexture* ResolvedTexture = ChainTextures[TextureIndex];
+		if (TextureParameterNames.IsValidIndex(TextureIndex) && !TextureParameterNames[TextureIndex].IsNone())
+		{
+			UTexture* ParameterTexture = nullptr;
+			if (SourceMaterial->GetTextureParameterValue(FMaterialParameterInfo(TextureParameterNames[TextureIndex]), ParameterTexture))
+			{
+				ResolvedTexture = ParameterTexture;
+			}
+		}
+
+		if (ResolvedTexture)
+		{
+			bSawAnyChainTexture = true;
+		}
+		if (IsValidSceneSourceMigrationTexture(ResolvedTexture))
+		{
+			UniqueTextures.AddUnique(ResolvedTexture);
+		}
+	}
+
+	TArray<UMaterialExpression*> ChainExpressions;
+	SourceBaseMaterial->GetExpressionsInPropertyChain(MaterialProperty, ChainExpressions, &StaticParameters, ERHIFeatureLevel::Num, EMaterialQualityLevel::Num, ERHIShadingPath::Num, true);
+	State.bHasPropertyChain = ChainExpressions.Num() > 0 || UniqueTextures.Num() > 0;
+	State.bHasTexture = UniqueTextures.Num() > 0;
+
+	bool bValueChainIsSimple = UniqueTextures.IsEmpty() && ChainExpressions.Num() > 0;
+	for (const UMaterialExpression* Expression : ChainExpressions)
+	{
+		if (!Expression)
+		{
+			continue;
+		}
+		bValueChainIsSimple = bValueChainIsSimple && IsSimpleSceneValueMigrationExpression(Expression);
+	}
+
+	if (UniqueTextures.Num() == 1)
+	{
+		State.Texture = UniqueTextures[0];
+		return State;
+	}
+	if (bSawAnyChainTexture && UniqueTextures.IsEmpty())
+	{
+		return State;
+	}
+	if (UniqueTextures.Num() > 1)
+	{
+		State.bShouldBake = true;
+		return State;
+	}
+
+	if (bValueChainIsSimple)
+	{
+		for (const UMaterialExpression* Expression : ChainExpressions)
+		{
+			if (IsSceneColorTargetParameter(TargetParameterName) && ResolveSceneColorExpressionValue(SourceMaterial, Expression, State.Color))
+			{
+				State.bHasColor = true;
+				return State;
+			}
+			if (IsSceneScalarTargetParameter(TargetParameterName) && ResolveSceneScalarExpressionValue(SourceMaterial, Expression, State.Scalar))
+			{
+				State.bHasScalar = true;
+				return State;
+			}
+		}
+	}
+
+	return State;
+}
+
+static void ApplySceneTextureMigrationDefaults(UMaterialInstanceConstant* TargetInstance, const FName& TargetParameterName)
+{
+	if (!TargetInstance)
+	{
+		return;
+	}
+
+	if (TargetParameterName == FPBRMaterialParameters::BaseColorTexture)
+	{
+		TargetInstance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::BaseColorTint, FLinearColor::White);
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::BaseColorIntensity, 1.0f);
+	}
+	else if (TargetParameterName == FPBRMaterialParameters::NormalTexture)
+	{
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, 1.0f);
+	}
+	else if (TargetParameterName == FPBRMaterialParameters::RoughnessTexture)
+	{
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+	}
+	else if (TargetParameterName == FPBRMaterialParameters::SpecularTexture)
+	{
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 1.0f);
+	}
+	else if (TargetParameterName == FPBRMaterialParameters::MetallicTexture)
+	{
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 1.0f);
+	}
+	else if (TargetParameterName == FPBRMaterialParameters::OpacityTexture)
+	{
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
+	}
+	else if (TargetParameterName == FPBRMaterialParameters::EmissiveTexture)
+	{
+		TargetInstance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::EmissiveColor, FLinearColor::White);
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::EmissiveIntensity, 1.0f);
+	}
+}
+
+static bool ApplySimpleSceneSourceChannelValue(UMaterialInstanceConstant* TargetInstance, const FName& TargetParameterName, const FPBRSceneSourceChannelState& State)
+{
+	if (!TargetInstance)
+	{
+		return false;
+	}
+
+	if (TargetParameterName == FPBRMaterialParameters::BaseColorTexture && State.bHasColor)
+	{
+		TargetInstance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::BaseColorTint, State.Color);
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::BaseColorIntensity, 1.0f);
+		TargetInstance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseBaseColorTexture), false);
+		return true;
+	}
+	if (TargetParameterName == FPBRMaterialParameters::RoughnessTexture && State.bHasScalar)
+	{
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, FMath::Clamp(State.Scalar, 0.0f, 1.0f));
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		TargetInstance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseRoughnessTexture), false);
+		return true;
+	}
+	if (TargetParameterName == FPBRMaterialParameters::SpecularTexture && State.bHasScalar)
+	{
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, FMath::Clamp(State.Scalar, 0.0f, 1.0f));
+		TargetInstance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseSpecularTexture), false);
+		return true;
+	}
+	if (TargetParameterName == FPBRMaterialParameters::MetallicTexture && State.bHasScalar)
+	{
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, FMath::Clamp(State.Scalar, 0.0f, 1.0f));
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 1.0f);
+		TargetInstance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseMetallicTexture), false);
+		return true;
+	}
+	if (TargetParameterName == FPBRMaterialParameters::OpacityTexture && State.bHasScalar)
+	{
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, FMath::Clamp(State.Scalar, 0.0f, 1.0f));
+		TargetInstance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseOpacityTexture), false);
+		return true;
+	}
+	if (TargetParameterName == FPBRMaterialParameters::EmissiveTexture && State.bHasColor)
+	{
+		const float EmissiveStrength = FMath::Max3(State.Color.R, State.Color.G, State.Color.B);
+		const float SafeStrength = FMath::Max(EmissiveStrength, 1.0f);
+		const FLinearColor NormalizedColor = EmissiveStrength > 1.0f
+			? FLinearColor(State.Color.R / SafeStrength, State.Color.G / SafeStrength, State.Color.B / SafeStrength, State.Color.A)
+			: State.Color;
+		TargetInstance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::EmissiveColor, NormalizedColor);
+		TargetInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::EmissiveIntensity, EmissiveStrength > UE_SMALL_NUMBER ? SafeStrength : 0.0f);
+		TargetInstance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseEmissiveTexture), false);
+		return true;
+	}
+
+	return false;
+}
+
+static UTexture* FindBestSceneSourceTextureParameter(UMaterialInterface* SourceMaterial, const FName& TargetParameterName)
+{
+	if (!SourceMaterial)
+	{
+		return nullptr;
+	}
+
+	TMap<FMaterialParameterInfo, FMaterialParameterMetadata> TextureParameters;
+	SourceMaterial->GetAllParametersOfType(EMaterialParameterType::Texture, TextureParameters);
+	if (TextureParameters.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	const TArray<FString> SearchTokens = GetSceneTextureParameterSearchTokens(TargetParameterName);
+	for (const TPair<FMaterialParameterInfo, FMaterialParameterMetadata>& Pair : TextureParameters)
+	{
+		UTexture* Texture = Cast<UTexture>(Pair.Value.Value.AsTextureObject());
+		if (!IsValidSceneSourceMigrationTexture(Texture))
+		{
+			continue;
+		}
+
+		if (Pair.Key.Name == TargetParameterName || SceneNameContainsAnyToken(Pair.Key.Name.ToString(), SearchTokens))
+		{
+			return Texture;
+		}
+	}
+
+	if (TextureParameters.Num() == 1)
+	{
+		const TPair<FMaterialParameterInfo, FMaterialParameterMetadata>& Pair = *TextureParameters.CreateConstIterator();
+		UTexture* Texture = Cast<UTexture>(Pair.Value.Value.AsTextureObject());
+		return IsValidSceneSourceMigrationTexture(Texture) ? Texture : nullptr;
+	}
+
+	return nullptr;
+}
+
+static FString BuildSceneBakedTexturePackagePath(const UPrimitiveComponent* Component, int32 SlotIndex, const FName& TargetParameterName, const FString& OutputRoot)
+{
+	const AActor* Owner = Component ? Component->GetOwner() : nullptr;
+	const FString ActorName = FPBRMaterialInstanceFactory::SanitizeAssetName(Owner ? Owner->GetActorLabel() : TEXT("Actor"));
+	const FString ComponentName = FPBRMaterialInstanceFactory::SanitizeAssetName(Component ? Component->GetName() : TEXT("Component"));
+	const FString ParameterName = FPBRMaterialInstanceFactory::SanitizeAssetName(TargetParameterName.ToString());
+	FString Root = OutputRoot.IsEmpty() ? FString(TEXT("/Game/PBRStudio/SceneReplaced")) : OutputRoot;
+	Root.RemoveFromEnd(TEXT("/"));
+	return Root / TEXT("_Baked") / FString::Printf(TEXT("T_PBRSR_%s_%s_Slot%d_%s"), *ActorName, *ComponentName, SlotIndex, *ParameterName);
+}
+
+static UTexture2D* BakeSceneSourceMaterialPropertyTexture(
+	UMaterialInterface* SourceMaterial,
+	const UPrimitiveComponent* Component,
+	int32 SlotIndex,
+	const FName& TargetParameterName,
+	const FString& OutputRoot)
+{
+	if (!SourceMaterial)
+	{
+		return nullptr;
+	}
+
+	const EMaterialProperty MaterialProperty = GetSceneMaterialPropertyForTextureParameter(TargetParameterName);
+	if (MaterialProperty == MP_MAX || !FMaterialUtilities::SupportsExport(IsOpaqueBlendMode(*SourceMaterial), MaterialProperty))
+	{
+		return nullptr;
+	}
+
+	const FString PackagePath = BuildSceneBakedTexturePackagePath(Component, SlotIndex, TargetParameterName, OutputRoot);
+	if (UTexture2D* ExistingTexture = Cast<UTexture2D>(UEditorAssetLibrary::LoadAsset(PackagePath)))
+	{
+		return ExistingTexture;
+	}
+
+	FIntPoint TextureSize = FMaterialUtilities::FindMaxTextureSize(SourceMaterial, FIntPoint(512, 512));
+	TextureSize.X = FMath::Clamp(TextureSize.X, 256, 2048);
+	TextureSize.Y = FMath::Clamp(TextureSize.Y, 256, 2048);
+
+	FMeshData MeshSettings;
+	MeshSettings.MeshDescription = nullptr;
+	MeshSettings.TextureCoordinateBox = FBox2D(FVector2D(0.0f, 0.0f), FVector2D(1.0f, 1.0f));
+	MeshSettings.TextureCoordinateIndex = 0;
+	if (const UMeshComponent* MeshComponent = Cast<UMeshComponent>(Component))
+	{
+		MeshSettings.PrimitiveData = FPrimitiveData(MeshComponent);
+	}
+
+	FMaterialData MaterialSettings;
+	MaterialSettings.Material = SourceMaterial;
+	MaterialSettings.PropertySizes.Add(MaterialProperty, TextureSize);
+	MaterialSettings.bTangentSpaceNormal = TargetParameterName == FPBRMaterialParameters::NormalTexture;
+	MaterialSettings.BlendMode = SourceMaterial->GetBlendMode();
+	MaterialSettings.BackgroundColor = TargetParameterName == FPBRMaterialParameters::NormalTexture
+		? FColor(128, 128, 255, 255)
+		: FColor::Black;
+
+	TArray<FMeshData*> MeshSettingPtrs{ &MeshSettings };
+	TArray<FMaterialData*> MaterialSettingPtrs{ &MaterialSettings };
+	TArray<FBakeOutput> BakeOutputs;
+	IMaterialBakingModule& BakingModule = FModuleManager::Get().LoadModuleChecked<IMaterialBakingModule>(TEXT("MaterialBaking"));
+	BakingModule.BakeMaterials(MaterialSettingPtrs, MeshSettingPtrs, BakeOutputs);
+	if (BakeOutputs.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	TArray<FColor>* Samples = BakeOutputs[0].PropertyData.Find(MaterialProperty);
+	FIntPoint* BakedSize = BakeOutputs[0].PropertySizes.Find(MaterialProperty);
+	if (!Samples || !BakedSize || Samples->Num() != BakedSize->X * BakedSize->Y)
+	{
+		return nullptr;
+	}
+
+	const EMaterialSamplerType SamplerType = GetSceneSamplerTypeForTextureParameter(TargetParameterName);
+	const TextureCompressionSettings CompressionSettings = SamplerType == EMaterialSamplerType::SAMPLERTYPE_Normal
+		? TC_Normalmap
+		: (SamplerType == EMaterialSamplerType::SAMPLERTYPE_Color ? TC_Default : TC_Masks);
+	const bool bSRGB = TargetParameterName == FPBRMaterialParameters::BaseColorTexture ||
+		TargetParameterName == FPBRMaterialParameters::EmissiveTexture;
+
+	UPackage* Package = CreatePackage(*PackagePath);
+	UTexture2D* Texture = FMaterialUtilities::CreateTexture(Package, PackagePath, *BakedSize, *Samples, CompressionSettings, TEXTUREGROUP_World, RF_Public | RF_Standalone, bSRGB);
+	if (!Texture)
+	{
+		return nullptr;
+	}
+
+	Texture->MarkPackageDirty();
+	FAssetRegistryModule::AssetCreated(Texture);
+	UEditorLoadingAndSavingUtils::SavePackages({ Texture->GetPackage() }, true);
+	return Texture;
+}
+
+static void ApplySceneManagedMaterialDefaults(UMaterialInstanceConstant* Instance)
+{
+	if (!Instance)
+	{
+		return;
+	}
+
+	Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::BaseColorTint, FLinearColor::White);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::BaseColorIntensity, 1.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, 1.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.5f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.5f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::AOValue, 1.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::AOMultiplier, 1.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
+	Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::EmissiveColor, FLinearColor::Black);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::EmissiveIntensity, 0.0f);
+	Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseEmissiveTemperature), false);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::EmissiveTemperatureKelvin, 6500.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::HeightStrength, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::PixelDepthOffsetStrength, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::ClearCoat, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::ClearCoatRoughness, 0.25f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Anisotropy, 0.0f);
+	Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::FabricFuzzColor, FLinearColor::White);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::FabricFuzzStrength, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.45f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassOpacityFresnelStrength, 0.35f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassFresnelBaseReflection, 0.02f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassFresnelExp, 5.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassFrostedStrength, 0.0f);
+	Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::GlassAbsorptionColor, FLinearColor(0.78f, 0.92f, 1.0f, 1.0f));
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassAbsorptionStrength, 0.15f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassEdgeTintStrength, 0.25f);
+	Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::GlassDirtColor, FLinearColor(0.35f, 0.32f, 0.26f, 1.0f));
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassDirtIntensity, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassDirtOpacity, 0.35f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassDirtRoughness, 0.65f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassDistortionIntensity, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassDistortionIORIntensity, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassShadowOpacity, 0.55f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassShadowHighlightClamp, 0.85f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassShadowNormalIntensity, 0.25f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassCausticsIntensity, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassCausticsScale, 24.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassCausticsSpeed, 0.12f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassRTOpacity, 0.35f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassRTRefractionAmount, 1.45f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassRTFrostedStrength, 0.0f);
+	Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::WaterColor, FLinearColor(0.12f, 0.42f, 0.72f, 1.0f));
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedU, 0.18f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedV, 0.09f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleScale, 18.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleStrength, 0.8f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::FlakeScale, 35.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::FlakeIntensity, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::UVUTiling, 1.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::UVVTiling, 1.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::UVUOffset, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::UVVOffset, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::UVRotationDegrees, 0.0f);
+
+	for (const FPBRSceneTextureParameterBinding& Binding : GetSceneTextureParameterBindings())
+	{
+		UTexture* DefaultTexture = LoadSceneEngineDefaultTexture(GetSceneSamplerTypeForTextureParameter(Binding.TextureParameterName));
+		if (DefaultTexture)
+		{
+			Instance->SetTextureParameterValueEditorOnly(Binding.TextureParameterName, DefaultTexture);
+		}
+		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(Binding.SwitchParameterName), false);
+	}
+
+	for (const FName& ChannelName : GetSceneMaterialUVChannels())
+	{
+		const FPBRChannelUVParameterNames ChannelUV = FPBRMaterialParameters::GetChannelUVNames(ChannelName);
+		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(ChannelUV.UseIndependentUV), false);
+		Instance->SetScalarParameterValueEditorOnly(ChannelUV.UTiling, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(ChannelUV.VTiling, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(ChannelUV.UOffset, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(ChannelUV.VOffset, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(ChannelUV.RotationDegrees, 0.0f);
+	}
+}
+
+static void MigrateSceneSourceMaterialToManagedInstance(
+	UMaterialInterface* SourceMaterial,
+	UMaterialInstanceConstant* TargetInstance,
+	const UPrimitiveComponent* Component,
+	int32 SlotIndex,
+	const FString& OutputRoot)
+{
+	if (!SourceMaterial || !TargetInstance)
+	{
+		return;
+	}
+
+	const TArray<FName> CandidateTextureParameters = {
+		FPBRMaterialParameters::BaseColorTexture,
+		FPBRMaterialParameters::NormalTexture,
+		FPBRMaterialParameters::RoughnessTexture,
+		FPBRMaterialParameters::SpecularTexture,
+		FPBRMaterialParameters::MetallicTexture,
+		FPBRMaterialParameters::AOTexture,
+		FPBRMaterialParameters::OpacityTexture,
+		FPBRMaterialParameters::HeightTexture,
+		FPBRMaterialParameters::EmissiveTexture
+	};
+
+	for (const FName& TargetParameterName : CandidateTextureParameters)
+	{
+		FPBRSceneSourceChannelState ChannelState = AnalyzeSceneSourceMaterialChannel(SourceMaterial, TargetParameterName);
+		if (!ChannelState.bHasPropertyChain)
+		{
+			UTexture* SourceTexture = FindBestSceneSourceTextureParameter(SourceMaterial, TargetParameterName);
+			if (!SourceTexture)
+			{
+				continue;
+			}
+			ChannelState.bHasTexture = true;
+			ChannelState.Texture = SourceTexture;
+		}
+
+		UTexture* SourceTexture = ChannelState.Texture;
+		if (!SourceTexture && ChannelState.bShouldBake)
+		{
+			SourceTexture = BakeSceneSourceMaterialPropertyTexture(SourceMaterial, Component, SlotIndex, TargetParameterName, OutputRoot);
+		}
+
+		if (SourceTexture)
+		{
+			TargetInstance->SetTextureParameterValueEditorOnly(TargetParameterName, SourceTexture);
+			const FName SwitchParameterName = GetSceneTextureSwitchParameterName(TargetParameterName);
+			if (!SwitchParameterName.IsNone())
+			{
+				TargetInstance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(SwitchParameterName), true);
+			}
+			ApplySceneTextureMigrationDefaults(TargetInstance, TargetParameterName);
+			continue;
+		}
+
+		ApplySimpleSceneSourceChannelValue(TargetInstance, TargetParameterName, ChannelState);
+	}
+}
+
+static FString BuildSceneManagedInstancePackagePath(const FString& OutputRoot, const FString& OutputName)
+{
+	FString Root = OutputRoot.IsEmpty() ? FString(TEXT("/Game/PBRStudio/SceneReplaced")) : OutputRoot;
+	Root.RemoveFromEnd(TEXT("/"));
+	const FString CleanName = FPBRMaterialInstanceFactory::SanitizeAssetName(OutputName);
+	return Root / CleanName / CleanName;
+}
+
+static EPBRMaterialType ResolveSceneManagedMaterialType(const FPBRSceneMaterialCandidate& Candidate, UMaterialInterface* SourceMaterial)
+{
+	if (Candidate.ReplacementKind == EPBRSceneReplacementKind::Glass)
+	{
+		return EPBRMaterialType::Glass;
+	}
+	if (Candidate.ReplacementKind == EPBRSceneReplacementKind::Emissive)
+	{
+		return EPBRMaterialType::Emissive;
+	}
+	if (Candidate.bLooksTransparent || (SourceMaterial && !IsOpaqueBlendMode(*SourceMaterial)))
+	{
+		return EPBRMaterialType::Transparent;
+	}
+	return EPBRMaterialType::Standard;
+}
+
+static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
+	const FPBRSceneMaterialCandidate& Candidate,
+	const FString& OutputName,
+	const FPBRSceneReplaceSettings& Settings,
+	UMaterialInterface* SourceMaterial,
+	FString& OutMessage)
+{
+	OutMessage.Empty();
+	const EPBRMaterialType MaterialType = ResolveSceneManagedMaterialType(Candidate, SourceMaterial);
+	FString ParentMessage;
+	UMaterial* ParentMaterial = FPBRMaterialTemplateManager::EnsureTemplateMaterial(MaterialType, ParentMessage);
+	if (!ParentMaterial)
+	{
+		OutMessage = ParentMessage.IsEmpty() ? TEXT("无法确定 PBRStudio 母材质") : ParentMessage;
+		return nullptr;
+	}
+
+	const FString InstancePackagePath = BuildSceneManagedInstancePackagePath(Settings.OutputRoot, OutputName);
+	const FString InstanceAssetName = FPackageName::GetLongPackageAssetName(InstancePackagePath);
+	UMaterialInstanceConstant* Instance = Cast<UMaterialInstanceConstant>(UEditorAssetLibrary::LoadAsset(InstancePackagePath));
+
+	if (!Instance)
+	{
+		UPackage* Package = CreatePackage(*InstancePackagePath);
+		if (!Package)
+		{
+			OutMessage = FString::Printf(TEXT("无法创建资源包 %s"), *InstancePackagePath);
+			return nullptr;
+		}
+
+		UMaterialInstanceConstantFactoryNew* Factory = NewObject<UMaterialInstanceConstantFactoryNew>();
+		Factory->InitialParent = ParentMaterial;
+		UObject* CreatedObject = Factory->FactoryCreateNew(
+			UMaterialInstanceConstant::StaticClass(),
+			Package,
+			FName(*InstanceAssetName),
+			RF_Public | RF_Standalone,
+			nullptr,
+			GWarn);
+		Instance = Cast<UMaterialInstanceConstant>(CreatedObject);
+		if (!Instance)
+		{
+			OutMessage = TEXT("材质实例创建失败");
+			return nullptr;
+		}
+		FAssetRegistryModule::AssetCreated(Instance);
+		Package->SetDirtyFlag(true);
+	}
+
+	Instance->Modify();
+	Instance->SetParentEditorOnly(ParentMaterial);
+	ApplySceneManagedMaterialDefaults(Instance);
+
+	if (MaterialType == EPBRMaterialType::Glass)
+	{
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.45f);
+	}
+	else if (Candidate.ReplacementKind == EPBRSceneReplacementKind::Emissive || Candidate.bLooksEmissive)
+	{
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::EmissiveIntensity, 1.0f);
+		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseEmissiveTemperature), false);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
+	}
+
+	MigrateSceneSourceMaterialToManagedInstance(
+		SourceMaterial,
+		Instance,
+		Candidate.Slots.Num() > 0 ? Candidate.Slots[0].Component.Get() : nullptr,
+		Candidate.Slots.Num() > 0 ? Candidate.Slots[0].MaterialIndex : INDEX_NONE,
+		Settings.OutputRoot);
+
+	if (!ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseBaseColorTexture, false))
+	{
+		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::BaseColorTint, Candidate.InheritedBaseColor);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::BaseColorIntensity, 1.0f);
+	}
+
+	Instance->PostEditChange();
+	Instance->MarkPackageDirty();
+	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
+	UEditorLoadingAndSavingUtils::SavePackages({ Instance->GetPackage() }, true);
+
+	OutMessage = FString::Printf(TEXT("已按 ARM 算法转换材质实例：%s"), *Instance->GetName());
+	return Instance;
 }
 
 static void RefreshSceneMaterialInstance(UMaterialInterface* Material)
@@ -1942,7 +2866,7 @@ UTexture2D* FPBRSceneMaterialReplacer::FindEmissiveTexture(UMaterialInterface* M
 	static const TArray<FName> PreferredParams = {
 		TEXT("Emissive"), TEXT("EmissiveTexture"), TEXT("Emissive Color"),
 		TEXT("SelfIllumination"), TEXT("SelfIlluminationTexture"), TEXT("Glow"),
-		TEXT("LightMap"), TEXT("自发光"), TEXT("发光贴图")
+		TEXT("Neon"), TEXT("LED"), TEXT("自发光"), TEXT("发光贴图")
 	};
 
 	if (UTexture2D* Texture = FindTextureInInstanceOverrides(Material, PreferredParams, OutSourcePath))
@@ -1951,7 +2875,7 @@ UTexture2D* FPBRSceneMaterialReplacer::FindEmissiveTexture(UMaterialInterface* M
 	}
 	if (UTexture2D* Texture = FindTextureInInstanceOverridesByTokens(
 		Material,
-		{ TEXT("emissive"), TEXT("emission"), TEXT("emit"), TEXT("selfillum"), TEXT("self_illum"), TEXT("glow"), TEXT("light") },
+		{ TEXT("emissive"), TEXT("emission"), TEXT("emit"), TEXT("selfillum"), TEXT("self_illum"), TEXT("glow"), TEXT("neon"), TEXT("led") },
 		{ TEXT("normal"), TEXT("rough"), TEXT("metal"), TEXT("opacity"), TEXT("base"), TEXT("diffuse"), TEXT("albedo") },
 		OutSourcePath))
 	{
@@ -2007,12 +2931,7 @@ UTexture2D* FPBRSceneMaterialReplacer::FindEmissiveTexture(UMaterialInterface* M
 			continue;
 		}
 		const FString Name = Texture2D->GetName().ToLower();
-		const bool bLooksEmissive =
-			Name.Contains(TEXT("emissive")) || Name.Contains(TEXT("emission")) ||
-			Name.Contains(TEXT("emit")) || Name.Contains(TEXT("selfillum")) ||
-			Name.Contains(TEXT("self_illum")) || Name.Contains(TEXT("glow")) ||
-			Name.Contains(TEXT("light"));
-		if (bLooksEmissive)
+		if (IsSceneExplicitEmissiveName(Name))
 		{
 			OutSourcePath = TextureSourceFilename(Texture2D);
 			if (OutSourcePath.IsEmpty() || IsSupportedImagePath(OutSourcePath))
@@ -2129,13 +3048,10 @@ bool FPBRSceneMaterialReplacer::IsEmissiveMaterial(UMaterialInterface* Material,
 		return false;
 	}
 
-	const FString Name = Material->GetName().ToLower();
-	if (Name.Contains(TEXT("light")) || Name.Contains(TEXT("emissive")) ||
-		Name.Contains(TEXT("emission")) || Name.Contains(TEXT("selfillum")) ||
-		Name.Contains(TEXT("glow")) || Name.Contains(TEXT("neon")) ||
-		Name.Contains(TEXT("灯")) || Name.Contains(TEXT("发光")))
+	const FString Name = (Material->GetName() + TEXT(" ") + Material->GetPathName()).ToLower();
+	if (!IsSceneExplicitEmissiveName(Name))
 	{
-		return true;
+		return false;
 	}
 
 	if (EmissiveTexture)
@@ -2158,27 +3074,400 @@ bool FPBRSceneMaterialReplacer::IsTransparentMaterial(UMaterialInterface* Materi
 		return false;
 	}
 
-	const EBlendMode BlendMode = Material->GetBlendMode();
-	if (BlendMode == BLEND_Translucent ||
-		BlendMode == BLEND_Additive ||
-		BlendMode == BLEND_AlphaComposite ||
-		BlendMode == BLEND_AlphaHoldout ||
-		BlendMode == BLEND_TranslucentColoredTransmittance)
-	{
-		return true;
-	}
-
-	const FString Name = Material->GetName().ToLower();
-	if (Name.Contains(TEXT("glass")) || Name.Contains(TEXT("window")) ||
-		Name.Contains(TEXT("transparent")) || Name.Contains(TEXT("translucent")) ||
-		Name.Contains(TEXT("crystal")) || Name.Contains(TEXT("acrylic")) ||
-		Name.Contains(TEXT("pane")) || Name.Contains(TEXT("玻璃")) ||
-		Name.Contains(TEXT("透明")) || Name.Contains(TEXT("窗")))
+	if (!IsOpaqueBlendMode(*Material))
 	{
 		return true;
 	}
 
 	return OpacityTexture != nullptr;
+}
+
+static bool IsSceneGlassMaterial(UMaterialInterface* Material)
+{
+	if (!Material)
+	{
+		return false;
+	}
+
+	const FString Name = (Material->GetName() + TEXT(" ") + Material->GetPathName()).ToLower();
+	return Name.Contains(TEXT("glass")) ||
+		Name.Contains(TEXT("window")) ||
+		Name.Contains(TEXT("crystal")) ||
+		Name.Contains(TEXT("acrylic")) ||
+		Name.Contains(TEXT("pane")) ||
+		Name.Contains(TEXT("glazing")) ||
+		Name.Contains(TEXT("玻璃")) ||
+		Name.Contains(TEXT("窗"));
+}
+
+static FString BuildSelectionEditableMaterialOutputName(UPrimitiveComponent* Component, int32 MaterialIndex, UMaterialInterface* SourceMaterial)
+{
+	const AActor* Owner = Component ? Component->GetOwner() : nullptr;
+	const FString ActorName = FPBRMaterialInstanceFactory::SanitizeAssetName(Owner ? Owner->GetActorLabel() : TEXT("Actor"));
+	const FString ComponentName = FPBRMaterialInstanceFactory::SanitizeAssetName(Component ? Component->GetName() : TEXT("Component"));
+	const FString MaterialName = FPBRMaterialInstanceFactory::SanitizeAssetName(SourceMaterial ? SourceMaterial->GetName() : TEXT("Material"));
+	return FString::Printf(TEXT("MI_%s_%s_Slot%d_%s"), *ActorName, *ComponentName, MaterialIndex, *MaterialName).Left(180);
+}
+
+static void FillSelectionEditableCandidate(
+	FPBRSceneMaterialCandidate& Candidate,
+	UPrimitiveComponent* Component,
+	int32 MaterialIndex,
+	UMaterialInterface* SourceMaterial)
+{
+	Candidate.Material = SourceMaterial;
+	Candidate.MaterialName = SourceMaterial ? SourceMaterial->GetName() : TEXT("Material");
+	Candidate.OutputMaterialName = BuildSelectionEditableMaterialOutputName(Component, MaterialIndex, SourceMaterial);
+	Candidate.MaterialPath = SourceMaterial ? SourceMaterial->GetPathName() : FString();
+	Candidate.InheritedBaseColor = GetInheritedBaseColor(SourceMaterial);
+
+	FLinearColor DiffuseOverrideColor;
+	if (TryGetDiffuseColorFromInstanceOverrides(SourceMaterial, DiffuseOverrideColor))
+	{
+		Candidate.InheritedBaseColor = DiffuseOverrideColor;
+	}
+
+	Candidate.bIsPBRStudioMaterial = FPBRSceneMaterialReplacer::IsPBRStudioGeneratedMaterial(SourceMaterial);
+	Candidate.bCanReplace = true;
+	Candidate.bChecked = true;
+	Candidate.bUseBPRReplacement = false;
+
+	if (IsSceneGlassMaterial(SourceMaterial))
+	{
+		Candidate.ReplacementKind = EPBRSceneReplacementKind::Glass;
+	}
+	else
+	{
+		Candidate.ReplacementKind = EPBRSceneReplacementKind::Simple;
+	}
+
+	FPBRSceneMaterialSlot Slot;
+	Slot.Component = Component;
+	Slot.ComponentPath = FSoftObjectPath(Component);
+	Slot.MaterialIndex = MaterialIndex;
+	Slot.OriginalMaterial = SourceMaterial;
+	Slot.OriginalMaterialPath = FSoftObjectPath(SourceMaterial);
+	Candidate.Slots.Add(Slot);
+}
+
+static void ApplySelectionMaterialTypeDefaults(UMaterialInstanceConstant* Instance, EPBRMaterialType MaterialType)
+{
+	if (!Instance)
+	{
+		return;
+	}
+
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, 1.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::AOValue, 1.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::AOMultiplier, 1.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.5f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::HeightStrength, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::PixelDepthOffsetStrength, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::ClearCoat, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::ClearCoatRoughness, 0.25f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Anisotropy, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::FabricFuzzStrength, 0.0f);
+	Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseEmissiveTemperature), false);
+
+	switch (MaterialType)
+	{
+	case EPBRMaterialType::Wood:
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.46f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
+		break;
+	case EPBRMaterialType::Stone:
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.58f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::HeightStrength, 0.02f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
+		break;
+	case EPBRMaterialType::Tile:
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.34f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.65f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::HeightStrength, 0.04f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
+		break;
+	case EPBRMaterialType::Fabric:
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.82f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::FabricFuzzColor, FLinearColor(0.6f, 0.58f, 0.52f, 1.0f));
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::FabricFuzzStrength, 0.12f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
+		break;
+	case EPBRMaterialType::Leather:
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.42f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::ClearCoat, 0.35f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::ClearCoatRoughness, 0.28f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
+		break;
+	case EPBRMaterialType::Plastic:
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.38f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
+		break;
+	case EPBRMaterialType::Metal:
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.28f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
+		break;
+	case EPBRMaterialType::Transparent:
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.18f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 0.55f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.05f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.8f);
+		break;
+	case EPBRMaterialType::Glass:
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.05f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 0.22f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.52f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.8f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassOpacityFresnelStrength, 0.35f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassFrostedStrength, 0.0f);
+		break;
+	case EPBRMaterialType::Water:
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.02f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 0.65f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.33f);
+		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::WaterColor, FLinearColor(0.12f, 0.42f, 0.72f, 1.0f));
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedU, 0.18f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedV, 0.09f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleScale, 18.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleStrength, 0.8f);
+		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseWaterRippleTexture), false);
+		break;
+	case EPBRMaterialType::Emissive:
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.45f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::EmissiveColor, FLinearColor::White);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::EmissiveIntensity, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
+		break;
+	case EPBRMaterialType::Standard:
+	default:
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.5f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
+		break;
+	}
+}
+
+FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMaterialForSlot(UPrimitiveComponent* Component, int32 MaterialIndex)
+{
+	FPBRSceneEditableMaterialResult Result;
+	if (!Component)
+	{
+		Result.Message = TEXT("没有可编辑的网格组件");
+		return Result;
+	}
+	if (MaterialIndex < 0 || MaterialIndex >= Component->GetNumMaterials())
+	{
+		Result.Message = TEXT("材质槽索引无效");
+		return Result;
+	}
+
+	UMaterialInterface* CurrentMaterial = Component->GetMaterial(MaterialIndex);
+	if (!CurrentMaterial)
+	{
+		Result.Message = TEXT("当前槽位没有材质");
+		return Result;
+	}
+
+	if (UMaterialInstanceConstant* ExistingInstance = Cast<UMaterialInstanceConstant>(CurrentMaterial))
+	{
+		if (IsPBRStudioGeneratedMaterial(ExistingInstance))
+		{
+			Result.Instance = ExistingInstance;
+			Result.Message = FString::Printf(TEXT("当前槽位已经是可编辑材质实例：%s"), *ExistingInstance->GetName());
+			return Result;
+		}
+	}
+
+	FPBRSceneMaterialCandidate Candidate;
+	FillSelectionEditableCandidate(Candidate, Component, MaterialIndex, CurrentMaterial);
+	FString SourcePath;
+	Candidate.BaseColorTexture = FindBaseColorTexture(CurrentMaterial, SourcePath);
+	Candidate.BaseColorSourcePath = SourcePath;
+	Candidate.NormalTexture = FindNormalTexture(CurrentMaterial, Candidate.NormalSourcePath);
+	Candidate.RoughnessTexture = FindRoughnessTexture(CurrentMaterial, Candidate.RoughnessSourcePath);
+	Candidate.MetallicTexture = FindMetallicTexture(CurrentMaterial, Candidate.MetallicSourcePath);
+	Candidate.AOTexture = FindAOTexture(CurrentMaterial, Candidate.AOSourcePath);
+	Candidate.SpecularTexture = FindSpecularTexture(CurrentMaterial, Candidate.SpecularSourcePath);
+	Candidate.HeightTexture = FindHeightTexture(CurrentMaterial, Candidate.HeightSourcePath);
+	Candidate.EmissiveTexture = FindEmissiveTexture(CurrentMaterial, Candidate.EmissiveSourcePath);
+	Candidate.OpacityTexture = FindOpacityTexture(CurrentMaterial, Candidate.OpacitySourcePath);
+	Candidate.bLooksEmissive = IsEmissiveMaterial(CurrentMaterial, Candidate.EmissiveTexture.Get());
+	Candidate.bLooksTransparent = IsTransparentMaterial(CurrentMaterial, Candidate.OpacityTexture.Get());
+	if (Candidate.bLooksEmissive)
+	{
+		Candidate.ReplacementKind = EPBRSceneReplacementKind::Emissive;
+	}
+	else if (IsSceneGlassMaterial(CurrentMaterial))
+	{
+		Candidate.ReplacementKind = EPBRSceneReplacementKind::Glass;
+	}
+	else
+	{
+		Candidate.ReplacementKind = EPBRSceneReplacementKind::Simple;
+	}
+
+	FPBRSceneReplaceSettings Settings;
+	Settings.OutputRoot = TEXT("/Game/PBRStudio/SelectedMaterials");
+	Settings.bGenerateOpacity = true;
+	Settings.bGenerateEmissive = true;
+
+	FString ConvertMessage;
+	UMaterialInstanceConstant* Instance = nullptr;
+	{
+		const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRMakeSelectedMaterialEditable", "PBRStudio Make Selected Material Editable"));
+		if (AActor* Owner = Component->GetOwner())
+		{
+			Owner->Modify();
+		}
+		Component->Modify();
+		Instance = CreateOrUpdateSceneManagedReplacementInstance(Candidate, Candidate.OutputMaterialName, Settings, CurrentMaterial, ConvertMessage);
+		if (!Instance)
+		{
+			Result.Message = ConvertMessage.IsEmpty() ? TEXT("创建可编辑材质实例失败") : ConvertMessage;
+			return Result;
+		}
+
+		Component->SetMaterial(MaterialIndex, Instance);
+		RefreshPrimitiveAfterMaterialChange(Component, true);
+	}
+
+	Result.Instance = Instance;
+	Result.Message = ConvertMessage.IsEmpty() ? FString::Printf(TEXT("已接管材质槽：%s"), *Instance->GetName()) : ConvertMessage;
+	Result.bCreatedOrUpdatedInstance = true;
+	Result.bAssignedToSlot = true;
+	return Result;
+}
+
+bool FPBRSceneMaterialReplacer::SetMaterialTypeForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, EPBRMaterialType MaterialType, FString& OutMessage)
+{
+	FPBRSceneEditableMaterialResult EditableResult = EnsureEditableMaterialForSlot(Component, MaterialIndex);
+	UMaterialInstanceConstant* Instance = EditableResult.Instance;
+	if (!Instance)
+	{
+		OutMessage = EditableResult.Message;
+		return false;
+	}
+
+	FString ParentMessage;
+	UMaterial* ParentMaterial = FPBRMaterialTemplateManager::EnsureTemplateMaterial(MaterialType, ParentMessage);
+	if (!ParentMaterial)
+	{
+		OutMessage = ParentMessage.IsEmpty() ? TEXT("无法确定目标母材质") : ParentMessage;
+		return false;
+	}
+
+	{
+		const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRSetSelectedMaterialType", "PBRStudio Set Selected Material Type"));
+		Instance->Modify();
+		Instance->SetParentEditorOnly(ParentMaterial);
+		ApplySelectionMaterialTypeDefaults(Instance, MaterialType);
+		Instance->InitStaticPermutation();
+		UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
+		Instance->PostEditChange();
+		Instance->MarkPackageDirty();
+		RefreshPrimitiveAfterMaterialChange(Component, true);
+	}
+
+	OutMessage = FString::Printf(TEXT("已切换材质类型：%s"), *Instance->GetName());
+	return true;
+}
+
+bool FPBRSceneMaterialReplacer::SetScalarParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, float Value, FString& OutMessage)
+{
+	FPBRSceneEditableMaterialResult EditableResult = EnsureEditableMaterialForSlot(Component, MaterialIndex);
+	UMaterialInstanceConstant* Instance = EditableResult.Instance;
+	if (!Instance)
+	{
+		OutMessage = EditableResult.Message;
+		return false;
+	}
+
+	const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRSetSelectedMaterialScalar", "PBRStudio Set Selected Material Scalar"));
+	Instance->Modify();
+	Instance->SetScalarParameterValueEditorOnly(ParameterName, Value);
+	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
+	Instance->PostEditChange();
+	Instance->MarkPackageDirty();
+	RefreshPrimitiveAfterMaterialChange(Component, false);
+	OutMessage = FString::Printf(TEXT("已更新参数：%s"), *ParameterName.ToString());
+	return true;
+}
+
+bool FPBRSceneMaterialReplacer::SetVectorParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, const FLinearColor& Value, FString& OutMessage)
+{
+	FPBRSceneEditableMaterialResult EditableResult = EnsureEditableMaterialForSlot(Component, MaterialIndex);
+	UMaterialInstanceConstant* Instance = EditableResult.Instance;
+	if (!Instance)
+	{
+		OutMessage = EditableResult.Message;
+		return false;
+	}
+
+	const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRSetSelectedMaterialVector", "PBRStudio Set Selected Material Vector"));
+	Instance->Modify();
+	Instance->SetVectorParameterValueEditorOnly(ParameterName, Value);
+	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
+	Instance->PostEditChange();
+	Instance->MarkPackageDirty();
+	RefreshPrimitiveAfterMaterialChange(Component, false);
+	OutMessage = FString::Printf(TEXT("已更新颜色：%s"), *ParameterName.ToString());
+	return true;
+}
+
+bool FPBRSceneMaterialReplacer::SetStaticSwitchParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, bool bValue, FString& OutMessage)
+{
+	FPBRSceneEditableMaterialResult EditableResult = EnsureEditableMaterialForSlot(Component, MaterialIndex);
+	UMaterialInstanceConstant* Instance = EditableResult.Instance;
+	if (!Instance)
+	{
+		OutMessage = EditableResult.Message;
+		return false;
+	}
+
+	const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRSetSelectedMaterialSwitch", "PBRStudio Set Selected Material Switch"));
+	Instance->Modify();
+	Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(ParameterName), bValue);
+	Instance->InitStaticPermutation();
+	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
+	Instance->PostEditChange();
+	Instance->MarkPackageDirty();
+	RefreshPrimitiveAfterMaterialChange(Component, true);
+	OutMessage = FString::Printf(TEXT("已更新开关：%s"), *ParameterName.ToString());
+	return true;
 }
 
 void FPBRSceneMaterialReplacer::ScanCurrentLevel(TArray<TSharedPtr<FPBRSceneMaterialCandidate>>& OutCandidates)
@@ -2264,6 +3553,7 @@ void FPBRSceneMaterialReplacer::ScanCurrentLevel(TArray<TSharedPtr<FPBRSceneMate
 					Candidate->OpacitySourcePath = OpacitySourcePath;
 					Candidate->bLooksEmissive = IsEmissiveMaterial(Material, Candidate->EmissiveTexture.Get());
 					Candidate->bLooksTransparent = IsTransparentMaterial(Material, Candidate->OpacityTexture.Get());
+					const bool bLooksGlass = IsSceneGlassMaterial(Material);
 					if (Candidate->bIsPBRStudioMaterial)
 					{
 						Candidate->ReplacementKind = EPBRSceneReplacementKind::NotReplaceable;
@@ -2278,13 +3568,21 @@ void FPBRSceneMaterialReplacer::ScanCurrentLevel(TArray<TSharedPtr<FPBRSceneMate
 						Candidate->ReplaceMode = TEXT("普通替换");
 						Candidate->Status = TEXT("普通替换: 自发光");
 					}
-					else if (Candidate->bLooksTransparent)
+					else if (bLooksGlass)
 					{
 						Candidate->ReplacementKind = EPBRSceneReplacementKind::Glass;
 						Candidate->bCanReplace = true;
 						Candidate->bUseBPRReplacement = false;
 						Candidate->ReplaceMode = TEXT("普通替换");
-						Candidate->Status = TEXT("普通替换: 普通玻璃");
+						Candidate->Status = TEXT("普通替换: 玻璃");
+					}
+					else if (Candidate->bLooksTransparent)
+					{
+						Candidate->ReplacementKind = EPBRSceneReplacementKind::Simple;
+						Candidate->bCanReplace = true;
+						Candidate->bUseBPRReplacement = false;
+						Candidate->ReplaceMode = TEXT("普通替换");
+						Candidate->Status = TEXT("普通替换: 半透明");
 					}
 					else if (!Candidate->BaseColorTexture.IsValid())
 					{
@@ -2859,141 +4157,34 @@ bool FPBRSceneMaterialReplacer::ReplaceCandidates(
 		OutResult.ReplaceableMaterials++;
 		const int32 CurrentIndex = Processed + 1;
 		ReportProgress(Processed, TotalToReplace, FString::Printf(TEXT("正在处理 %d/%d: %s"), CurrentIndex, TotalToReplace, *Candidate->MaterialName));
-		UTexture2D* BaseTexture = Candidate->BaseColorTexture.Get();
-		if (Candidate->bUseBPRReplacement && !BaseTexture)
+		UMaterialInterface* SourceMaterial = Candidate->Material.Get();
+		if (!SourceMaterial)
 		{
-			Candidate->ReplaceMode = TEXT("不可替换");
-			Candidate->Status = TEXT("不可替换: 未找到基础颜色贴图");
-			OutResult.Messages.Add(Candidate->MaterialName + TEXT(": 未找到基础颜色贴图"));
+			Candidate->Status = TEXT("不可替换: 原材质无效");
+			OutResult.Messages.Add(Candidate->MaterialName + TEXT(": 原材质无效"));
 			Processed++;
-			ReportProgress(Processed, TotalToReplace, FString::Printf(TEXT("跳过 %d/%d: %s 缺少基础颜色贴图"), Processed, TotalToReplace, *Candidate->MaterialName));
+			ReportProgress(Processed, TotalToReplace, FString::Printf(TEXT("跳过 %d/%d: 原材质无效"), Processed, TotalToReplace));
 			continue;
 		}
 
-		FPBRMaterialSet GeneratedSet;
-		FString GenerateMessage;
 		const FString OutputName = Candidate->OutputMaterialName.TrimStartAndEnd().IsEmpty()
 			? Candidate->MaterialName
 			: Candidate->OutputMaterialName.TrimStartAndEnd();
-		FPBRSceneReplaceSettings EffectiveSettings = Settings;
-		if (!Candidate->bUseBPRReplacement)
-		{
-			EffectiveSettings.bGenerateNormal = false;
-			EffectiveSettings.bGenerateRoughness = false;
-			EffectiveSettings.bGenerateMetallic = false;
-			EffectiveSettings.bGenerateAO = false;
-			EffectiveSettings.bGenerateSpecular = false;
-			EffectiveSettings.bGenerateOpacity = Candidate->ReplacementKind == EPBRSceneReplacementKind::Glass && Candidate->OpacityTexture.IsValid();
-			EffectiveSettings.bGenerateHeight = false;
-			EffectiveSettings.bGenerateORM = false;
-		}
-		if (Candidate->ReplacementKind == EPBRSceneReplacementKind::Emissive)
-		{
-			EffectiveSettings.bGenerateEmissive = true;
-		}
-		ReportProgress(Processed, TotalToReplace, FString::Printf(TEXT("生成贴图 %d/%d: %s"), CurrentIndex, TotalToReplace, *OutputName));
-		if (!GeneratePBRSetFromTexture(
-			BaseTexture,
-			OutputName,
-			EffectiveSettings,
+
+		FString ConvertMessage;
+		ReportProgress(Processed, TotalToReplace, FString::Printf(TEXT("转换材质实例 %d/%d: %s"), CurrentIndex, TotalToReplace, *OutputName));
+		UMaterialInterface* NewMaterial = CreateOrUpdateSceneManagedReplacementInstance(
 			*Candidate,
-			GeneratedSet,
-			GenerateMessage))
-		{
-			OutResult.Messages.Add(Candidate->MaterialName + TEXT(": ") + GenerateMessage);
-			Processed++;
-			ReportProgress(Processed, TotalToReplace, FString::Printf(TEXT("跳过 %d/%d: %s"), Processed, TotalToReplace, *GenerateMessage));
-			continue;
-		}
-
-		FString MasterMessage;
-		UMaterial* SceneReplaceMaster = nullptr;
-		if (Candidate->ReplacementKind == EPBRSceneReplacementKind::Glass)
-		{
-			SceneReplaceMaster = EnsureSceneGlassMasterMaterial(MasterMessage);
-		}
-		else if (Candidate->ReplacementKind == EPBRSceneReplacementKind::Emissive)
-		{
-			SceneReplaceMaster = EnsureSceneEmissiveMasterMaterial(MasterMessage);
-		}
-		else
-		{
-			SceneReplaceMaster = EnsureSceneReplaceMasterMaterial(MasterMessage);
-		}
-		if (!SceneReplaceMaster)
-		{
-			OutResult.Messages.Add(Candidate->MaterialName + TEXT(": ") + MasterMessage);
-			Processed++;
-			ReportProgress(Processed, TotalToReplace, FString::Printf(TEXT("跳过 %d/%d: %s"), Processed, TotalToReplace, *MasterMessage));
-			continue;
-		}
-
-		FPBRMaterialCreateOptions Options;
-		Options.PackageRoot = Settings.OutputRoot;
-		Options.MaterialInstancePrefix = TEXT("");
-		Options.MaterialType = Candidate->ReplacementKind == EPBRSceneReplacementKind::Glass
-			? EPBRMaterialType::Glass
-			: (Candidate->ReplacementKind == EPBRSceneReplacementKind::Emissive ? EPBRMaterialType::Emissive : EPBRMaterialType::Standard);
-		Options.NormalPreference = TEXT("DirectX");
-		Options.bCreateIsolatedMaterialFolder = true;
-		Options.bImportTextures = true;
-		Options.ParentMaterialOverride = SceneReplaceMaster;
-		Options.bEnsureExampleMaterial = false;
-		Options.bAllowExistingAssets = true;
-
-		FPBRMaterialCreateResult CreateResult;
-		ReportProgress(Processed, TotalToReplace, FString::Printf(TEXT("创建材质实例 %d/%d: %s"), CurrentIndex, TotalToReplace, *OutputName));
-		if (!FPBRMaterialInstanceFactory::CreateInstanceFromSet(GeneratedSet, Options, CreateResult))
-		{
-			OutResult.Messages.Add(Candidate->MaterialName + TEXT(": ") + CreateResult.Message);
-			Processed++;
-			ReportProgress(Processed, TotalToReplace, FString::Printf(TEXT("跳过 %d/%d: %s"), Processed, TotalToReplace, *CreateResult.Message));
-			continue;
-		}
-
-		UMaterialInterface* NewMaterial = CreateResult.MaterialInstance.LoadSynchronous();
+			OutputName,
+			Settings,
+			SourceMaterial,
+			ConvertMessage);
 		if (!NewMaterial)
 		{
-			OutResult.Messages.Add(Candidate->MaterialName + TEXT(": 新材质加载失败"));
+			OutResult.Messages.Add(Candidate->MaterialName + TEXT(": ") + ConvertMessage);
 			Processed++;
-			ReportProgress(Processed, TotalToReplace, FString::Printf(TEXT("跳过 %d/%d: 新材质加载失败"), Processed, TotalToReplace));
+			ReportProgress(Processed, TotalToReplace, FString::Printf(TEXT("跳过 %d/%d: %s"), Processed, TotalToReplace, *ConvertMessage));
 			continue;
-		}
-		if (Candidate->bLooksEmissive)
-		{
-			if (UMaterialInstanceConstant* NewInstance = Cast<UMaterialInstanceConstant>(NewMaterial))
-			{
-				NewInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::EmissiveIntensity, 4.0f);
-				NewInstance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseEmissiveTexture), true);
-				NewInstance->MarkPackageDirty();
-			}
-		}
-		if (UMaterialInstanceConstant* NewInstance = Cast<UMaterialInstanceConstant>(NewMaterial))
-		{
-			NewInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, EffectiveSettings.NormalStrength);
-			NewInstance->MarkPackageDirty();
-		}
-		if (!Candidate->BaseColorTexture.IsValid())
-		{
-			if (UMaterialInstanceConstant* NewInstance = Cast<UMaterialInstanceConstant>(NewMaterial))
-			{
-				NewInstance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::BaseColorTint, Candidate->InheritedBaseColor);
-				NewInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::BaseColorIntensity, 1.0f);
-				NewInstance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseBaseColorTexture), false);
-				NewInstance->MarkPackageDirty();
-			}
-		}
-		if (Candidate->ReplacementKind == EPBRSceneReplacementKind::Glass)
-		{
-			if (UMaterialInstanceConstant* NewInstance = Cast<UMaterialInstanceConstant>(NewMaterial))
-			{
-				NewInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 0.35f);
-				NewInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.52f);
-				NewInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.05f);
-				NewInstance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.75f);
-				NewInstance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseOpacityTexture), Candidate->OpacityTexture.IsValid());
-				NewInstance->MarkPackageDirty();
-			}
 		}
 
 		int32 ChangedSlots = 0;

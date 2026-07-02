@@ -16,21 +16,28 @@
 #include "Materials/MaterialExpressionDistanceFieldGradient.h"
 #include "Materials/MaterialExpressionDistanceToNearestSurface.h"
 #include "Materials/MaterialExpressionFresnel.h"
+#include "Materials/MaterialExpressionLinearInterpolate.h"
 #include "Materials/MaterialExpressionMaterialFunctionCall.h"
 #include "Materials/MaterialExpressionMultiply.h"
+#include "Materials/MaterialExpressionNamedReroute.h"
 #include "Materials/MaterialExpressionOneMinus.h"
 #include "Materials/MaterialExpressionPanner.h"
 #include "Materials/MaterialExpressionDivide.h"
 #include "Materials/MaterialExpressionParticleColor.h"
+#include "Materials/MaterialExpressionRayTracingQualitySwitch.h"
+#include "Materials/MaterialExpressionReroute.h"
 #include "Materials/MaterialExpressionRotator.h"
 #include "Materials/MaterialExpressionRuntimeVirtualTextureOutput.h"
+#include "Materials/MaterialExpressionSaturate.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialExpressionSceneTexture.h"
+#include "Materials/MaterialExpressionShadowReplace.h"
 #include "Materials/MaterialExpressionSingleLayerWaterMaterialOutput.h"
 #include "Materials/MaterialExpressionStaticSwitchParameter.h"
 #include "Materials/MaterialExpressionThinTranslucentMaterialOutput.h"
 #include "Materials/MaterialExpressionTextureCoordinate.h"
 #include "Materials/MaterialExpressionTextureSampleParameter2D.h"
+#include "Materials/MaterialExpressionTime.h"
 #include "Materials/MaterialExpressionVertexNormalWS.h"
 #include "Materials/MaterialExpressionVectorParameter.h"
 #include "Materials/MaterialExpressionComment.h"
@@ -60,6 +67,11 @@ static float GetTemplateDefaultOpacity(EPBRMaterialType MaterialType);
 static float GetTemplateDefaultMetallic(EPBRMaterialType MaterialType);
 static UObject* LoadAssetIfExistsQuietly(const FString& PackagePath);
 static UTexture2D* GetDemoTextureForParameter(const FName& ParameterName);
+
+static constexpr float PBRARMDefaultWaterFlowSpeedU = 0.18f;
+static constexpr float PBRARMDefaultWaterFlowSpeedV = 0.09f;
+static constexpr float PBRARMDefaultWaterRippleScale = 18.0f;
+static constexpr float PBRARMDefaultWaterRippleStrength = 0.8f;
 
 static FString GetDemoSourceSetName(EPBRMaterialType MaterialType)
 {
@@ -147,6 +159,13 @@ static FString GetDemoChannelName(const FName& ParameterName)
 	{
 		return TEXT("NormalDX");
 	}
+	if (ParameterName == FPBRMaterialParameters::WaterRippleTexture ||
+		ParameterName == FPBRMaterialParameters::GlassDirtTexture ||
+		ParameterName == FPBRMaterialParameters::GlassDistortionTexture ||
+		ParameterName == FPBRMaterialParameters::GlassFrostedTexture)
+	{
+		return TEXT("Roughness");
+	}
 	if (ParameterName == FPBRMaterialParameters::RoughnessTexture)
 	{
 		return TEXT("Roughness");
@@ -208,6 +227,11 @@ static FString GetDemoSourceFilePath(EPBRMaterialType MaterialType, const FName&
 		if (ParameterName == FPBRMaterialParameters::NormalTexture)
 		{
 			const FString Candidate = FPaths::Combine(WaterDir, TEXT("Water_001_NORM.jpg"));
+			if (FPaths::FileExists(Candidate)) { return Candidate; }
+		}
+		if (ParameterName == FPBRMaterialParameters::WaterRippleTexture)
+		{
+			const FString Candidate = FPaths::Combine(WaterDir, TEXT("Water_001_DISP.png"));
 			if (FPaths::FileExists(Candidate)) { return Candidate; }
 		}
 		if (ParameterName == FPBRMaterialParameters::AOTexture)
@@ -907,6 +931,13 @@ static UTexture2D* CreateDemoTextureAsset(EPBRMaterialType MaterialType, const F
 				const uint8 BumpY = static_cast<uint8>(128 + (Hash01(X / 8, Y / 8, 77) - 0.5f) * 28.0f);
 				Pixel = FColor(BumpX, BumpY, 255, 255);
 			}
+			else if (ParameterName == FPBRMaterialParameters::WaterRippleTexture)
+			{
+				const float WaveA = FMath::Sin((static_cast<float>(X) / Size) * UE_TWO_PI * 8.0f);
+				const float WaveB = FMath::Sin((static_cast<float>(Y) / Size) * UE_TWO_PI * 10.96f);
+				const uint8 Ripple = static_cast<uint8>(FMath::Clamp((WaveA + WaveB) * 32.0f + 128.0f, 0.0f, 255.0f));
+				Pixel = FColor(Ripple, Ripple, Ripple, 255);
+			}
 			else if (ParameterName == FPBRMaterialParameters::RoughnessTexture)
 			{
 				const uint8 Roughness = static_cast<uint8>(FMath::Clamp(GetTemplateDefaultRoughness(MaterialType) * 255.0f + (Hash01(X / 8, Y / 8, 91) - 0.5f) * 60.0f, 0.0f, 255.0f));
@@ -983,6 +1014,10 @@ static EMaterialSamplerType GetSamplerTypeForParameter(const FName& ParameterNam
 		ParameterName == FPBRMaterialParameters::OpacityTexture ||
 		ParameterName == FPBRMaterialParameters::SpecularTexture ||
 		ParameterName == FPBRMaterialParameters::HeightTexture ||
+		ParameterName == FPBRMaterialParameters::WaterRippleTexture ||
+		ParameterName == FPBRMaterialParameters::GlassDirtTexture ||
+		ParameterName == FPBRMaterialParameters::GlassDistortionTexture ||
+		ParameterName == FPBRMaterialParameters::GlassFrostedTexture ||
 		ParameterName == FPBRMaterialParameters::ClearCoatTexture ||
 		ParameterName == FPBRMaterialParameters::ClearCoatRoughnessTexture)
 	{
@@ -1468,13 +1503,9 @@ static void AddStandardTemplateComments(UMaterial* Material, EPBRMaterialType Ma
 	if (UsesWaterColor(MaterialType) || UsesFabricFuzz(MaterialType) || UsesRefraction(MaterialType))
 	{
 		const FString SpecialTitle = UsesWaterColor(MaterialType)
-			? TEXT("10 水体 / Single Layer Water")
-			: (MaterialType == EPBRMaterialType::Glass ? TEXT("10 玻璃 / 折射输出") : TEXT("10 类型专用"));
+			? TEXT("10 水体 / DefaultLit 透明")
+			: (MaterialType == EPBRMaterialType::Glass ? TEXT("10 玻璃 / 折射") : TEXT("10 类型专用"));
 		AddMaterialGraphComment(Material, SpecialTitle, 1720, -160, 1320, UsesWaterColor(MaterialType) ? 1500 : 900, FLinearColor(0.06f, 0.16f, 0.20f, 1.0f));
-	}
-	if (MaterialType == EPBRMaterialType::Glass)
-	{
-		AddMaterialGraphComment(Material, TEXT("10 Thin Translucent 输出"), 1720, 860, 1320, 560, FLinearColor(0.08f, 0.16f, 0.22f, 1.0f));
 	}
 	AddMaterialGraphComment(Material, TEXT("11 材质输出"), 3240, -1040, 620, 900, FLinearColor(0.12f, 0.12f, 0.14f, 1.0f));
 }
@@ -1739,7 +1770,7 @@ static bool WireNormalStrength(
 
 	if (UMaterialExpressionMaterialFunctionCall* NormalStrengthFunction = AddMaterialFunctionCall(
 		Material,
-		TEXT("/Game/PBRStudio/Functions/03_Surface/MF_PBRStudio_NormalStrength.MF_PBRStudio_NormalStrength"),
+		TEXT("/Game/PBRStudio/Functions/02_Surface/MF_PBRStudio_NormalStrength.MF_PBRStudio_NormalStrength"),
 		X + 220,
 		Y))
 	{
@@ -1819,11 +1850,12 @@ static UMaterialExpression* BuildSharedUVControls(
 		-720))
 	{
 		const bool bConnected =
-			ConnectFunctionInputByIndex(UVFunction, 0, UTiling) &
-			ConnectFunctionInputByIndex(UVFunction, 1, VTiling) &
-			ConnectFunctionInputByIndex(UVFunction, 2, UOffset) &
-			ConnectFunctionInputByIndex(UVFunction, 3, VOffset) &
-			ConnectFunctionInputByIndex(UVFunction, 4, OutUVRotationDegrees);
+			ConnectFunctionInputByName(UVFunction, TEXT("UV"), TexCoord) &
+			ConnectFunctionInputByName(UVFunction, TEXT("U 平铺"), UTiling) &
+			ConnectFunctionInputByName(UVFunction, TEXT("V 平铺"), VTiling) &
+			ConnectFunctionInputByName(UVFunction, TEXT("U 偏移"), UOffset) &
+			ConnectFunctionInputByName(UVFunction, TEXT("V 偏移"), VOffset) &
+			ConnectFunctionInputByName(UVFunction, TEXT("旋转角度"), OutUVRotationDegrees);
 		if (bConnected)
 		{
 			return UVFunction;
@@ -1911,10 +1943,10 @@ static bool BuildDynamicWaterNormal(
 		return false;
 	}
 
-	UMaterialExpressionScalarParameter* FlowU = AddScalarParameter(Material, FPBRMaterialParameters::WaterFlowSpeedU, GroupSpecial, 40, 0.12f, X, Y);
-	UMaterialExpressionScalarParameter* FlowV = AddScalarParameter(Material, FPBRMaterialParameters::WaterFlowSpeedV, GroupSpecial, 50, 0.06f, X, Y + 120);
-	UMaterialExpressionScalarParameter* RippleScale = AddScalarParameter(Material, FPBRMaterialParameters::WaterRippleScale, GroupSpecial, 60, 1.0f, X, Y + 240);
-	UMaterialExpressionScalarParameter* RippleStrength = AddScalarParameter(Material, FPBRMaterialParameters::WaterRippleStrength, GroupSpecial, 70, 0.5f, X, Y + 360);
+	UMaterialExpressionScalarParameter* FlowU = AddScalarParameter(Material, FPBRMaterialParameters::WaterFlowSpeedU, GroupSpecial, 40, PBRARMDefaultWaterFlowSpeedU, X, Y);
+	UMaterialExpressionScalarParameter* FlowV = AddScalarParameter(Material, FPBRMaterialParameters::WaterFlowSpeedV, GroupSpecial, 50, PBRARMDefaultWaterFlowSpeedV, X, Y + 120);
+	UMaterialExpressionScalarParameter* RippleScale = AddScalarParameter(Material, FPBRMaterialParameters::WaterRippleScale, GroupSpecial, 60, PBRARMDefaultWaterRippleScale, X, Y + 240);
+	UMaterialExpressionScalarParameter* RippleStrength = AddScalarParameter(Material, FPBRMaterialParameters::WaterRippleStrength, GroupSpecial, 70, PBRARMDefaultWaterRippleStrength, X, Y + 360);
 
 	UMaterialExpressionAppendVector* FlowSpeed = NewObject<UMaterialExpressionAppendVector>(Material);
 	FlowSpeed->MaterialExpressionEditorX = X + 240;
@@ -1940,6 +1972,15 @@ static bool BuildDynamicWaterNormal(
 
 	NormalTexture->Coordinates.Connect(0, PannerA);
 
+	UMaterialExpressionStaticSwitchParameter* UseWaterRippleTexture = AddStaticSwitchParameter(
+		Material,
+		FPBRMaterialParameters::UseWaterRippleTexture,
+		GroupSpecial,
+		75,
+		false,
+		X + 700,
+		Y + 40);
+
 	UMaterialExpressionTextureSampleParameter2D* SecondaryNormal = AddTextureParameter(
 		Material,
 		FPBRMaterialParameters::NormalTexture,
@@ -1950,8 +1991,21 @@ static bool BuildDynamicWaterNormal(
 		EMaterialSamplerType::SAMPLERTYPE_Normal);
 	SecondaryNormal->Coordinates.Connect(0, PannerB);
 
+	UMaterialExpressionTextureSampleParameter2D* WaterRippleNormal = AddTextureParameter(
+		Material,
+		FPBRMaterialParameters::WaterRippleTexture,
+		GroupSpecial,
+		85,
+		X + 700,
+		Y + 420,
+		EMaterialSamplerType::SAMPLERTYPE_Normal);
+	WaterRippleNormal->Coordinates.Connect(0, PannerB);
+
+	UseWaterRippleTexture->A.Connect(0, WaterRippleNormal);
+	UseWaterRippleTexture->B.Connect(0, SecondaryNormal);
+
 	UMaterialExpressionMultiply* SecondaryStrength = AddMultiply(Material, X + 980, Y + 220);
-	SecondaryStrength->A.Connect(0, SecondaryNormal);
+	SecondaryStrength->A.Connect(0, UseWaterRippleTexture);
 	SecondaryStrength->B.Connect(0, RippleStrength);
 
 	UMaterialExpressionAdd* NormalBlend = AddAdd(Material, X + 1220, Y + 80);
@@ -1981,8 +2035,8 @@ static UMaterialExpression* BuildWaterFlowUV(
 		return SharedUV;
 	}
 
-	UMaterialExpressionScalarParameter* FlowU = AddScalarParameter(Material, FPBRMaterialParameters::WaterFlowSpeedU, GroupSpecial, 80, 0.12f, X, Y);
-	UMaterialExpressionScalarParameter* FlowV = AddScalarParameter(Material, FPBRMaterialParameters::WaterFlowSpeedV, GroupSpecial, 90, 0.06f, X, Y + 120);
+	UMaterialExpressionScalarParameter* FlowU = AddScalarParameter(Material, FPBRMaterialParameters::WaterFlowSpeedU, GroupSpecial, 80, PBRARMDefaultWaterFlowSpeedU, X, Y);
+	UMaterialExpressionScalarParameter* FlowV = AddScalarParameter(Material, FPBRMaterialParameters::WaterFlowSpeedV, GroupSpecial, 90, PBRARMDefaultWaterFlowSpeedV, X, Y + 120);
 	UMaterialExpressionAppendVector* FlowSpeed = NewObject<UMaterialExpressionAppendVector>(Material);
 	FlowSpeed->MaterialExpressionEditorX = X + 240;
 	FlowSpeed->MaterialExpressionEditorY = Y + 40;
@@ -2075,9 +2129,7 @@ static bool UsesRoughness(EPBRMaterialType MaterialType)
 static bool UsesMetallic(EPBRMaterialType MaterialType)
 {
 	return MaterialType == EPBRMaterialType::Standard ||
-		MaterialType == EPBRMaterialType::Metal ||
-		MaterialType == EPBRMaterialType::Plastic ||
-		MaterialType == EPBRMaterialType::Transparent;
+		MaterialType == EPBRMaterialType::Metal;
 }
 
 static bool UsesAO(EPBRMaterialType MaterialType)
@@ -2087,15 +2139,14 @@ static bool UsesAO(EPBRMaterialType MaterialType)
 
 static bool UsesOpacity(EPBRMaterialType MaterialType)
 {
-	return MaterialType == EPBRMaterialType::Standard ||
-		MaterialType == EPBRMaterialType::Transparent ||
-		MaterialType == EPBRMaterialType::Glass;
+	return MaterialType == EPBRMaterialType::Transparent ||
+		MaterialType == EPBRMaterialType::Glass ||
+		MaterialType == EPBRMaterialType::Water;
 }
 
 static bool UsesEmissive(EPBRMaterialType MaterialType)
 {
-	return MaterialType == EPBRMaterialType::Standard ||
-		MaterialType == EPBRMaterialType::Emissive;
+	return MaterialType == EPBRMaterialType::Emissive;
 }
 
 static bool UsesSpecular(EPBRMaterialType MaterialType)
@@ -2115,19 +2166,13 @@ static bool UsesSpecular(EPBRMaterialType MaterialType)
 
 static bool UsesHeight(EPBRMaterialType MaterialType)
 {
-	return MaterialType != EPBRMaterialType::Emissive &&
-		MaterialType != EPBRMaterialType::Glass &&
-		MaterialType != EPBRMaterialType::Water &&
-		MaterialType != EPBRMaterialType::Transparent;
+	return MaterialType == EPBRMaterialType::Stone ||
+		MaterialType == EPBRMaterialType::Tile;
 }
 
 static bool UsesClearCoat(EPBRMaterialType MaterialType)
 {
-	return MaterialType == EPBRMaterialType::Standard ||
-		MaterialType == EPBRMaterialType::Leather ||
-		MaterialType == EPBRMaterialType::Plastic ||
-		MaterialType == EPBRMaterialType::Wood ||
-		MaterialType == EPBRMaterialType::Metal;
+	return MaterialType == EPBRMaterialType::Leather;
 }
 
 static bool UsesFabricFuzz(EPBRMaterialType MaterialType)
@@ -2138,7 +2183,8 @@ static bool UsesFabricFuzz(EPBRMaterialType MaterialType)
 static bool UsesRefraction(EPBRMaterialType MaterialType)
 {
 	return MaterialType == EPBRMaterialType::Transparent ||
-		MaterialType == EPBRMaterialType::Glass;
+		MaterialType == EPBRMaterialType::Glass ||
+		MaterialType == EPBRMaterialType::Water;
 }
 
 static bool UsesWaterColor(EPBRMaterialType MaterialType)
@@ -2153,45 +2199,38 @@ static void ConfigureMaterialDomainForType(UMaterial* Material, EPBRMaterialType
 		return;
 	}
 
-	if (MaterialType == EPBRMaterialType::Emissive)
+	switch (MaterialType)
 	{
-		Material->SetShadingModel(EMaterialShadingModel::MSM_Unlit);
-		Material->BlendMode = BLEND_Opaque;
-		return;
-	}
-
-	if (MaterialType == EPBRMaterialType::Water)
-	{
-		Material->SetShadingModel(EMaterialShadingModel::MSM_SingleLayerWater);
-	}
-	else if (MaterialType == EPBRMaterialType::Glass)
-	{
-		Material->SetShadingModel(EMaterialShadingModel::MSM_DefaultLit);
-		Material->BlendMode = BLEND_Translucent;
-		Material->TranslucencyLightingMode = TLM_SurfacePerPixelLighting;
-		Material->bScreenSpaceReflections = true;
-		Material->RefractionMethod = RM_IndexOfRefraction;
-		Material->TwoSided = false;
-		return;
-	}
-	else if (UsesClearCoat(MaterialType))
-	{
+	case EPBRMaterialType::Fabric:
+		Material->SetShadingModel(EMaterialShadingModel::MSM_Cloth);
+		break;
+	case EPBRMaterialType::Leather:
 		Material->SetShadingModel(EMaterialShadingModel::MSM_ClearCoat);
-	}
-	else
-	{
+		break;
+	default:
 		Material->SetShadingModel(EMaterialShadingModel::MSM_DefaultLit);
+		break;
 	}
 
-	Material->BlendMode = (IsTranslucentMaterialType(MaterialType) && MaterialType != EPBRMaterialType::Water)
-		? BLEND_Translucent
-		: BLEND_Opaque;
-	if (IsTranslucentMaterialType(MaterialType))
-	{
-		Material->TranslucencyLightingMode = TLM_SurfacePerPixelLighting;
-		Material->bScreenSpaceReflections = true;
-		Material->RefractionMethod = MaterialType == EPBRMaterialType::Water ? RM_PixelNormalOffset : RM_IndexOfRefraction;
-	}
+	const bool bTranslucent = IsTranslucentMaterialType(MaterialType);
+	Material->BlendMode = bTranslucent ? BLEND_Translucent : BLEND_Opaque;
+	Material->TranslucencyLightingMode = TLM_SurfacePerPixelLighting;
+	Material->RefractionMethod = MaterialType == EPBRMaterialType::Glass ? RM_IndexOfRefraction : RM_PixelNormalOffset;
+	Material->bScreenSpaceReflections = bTranslucent;
+	Material->bContactShadows = MaterialType == EPBRMaterialType::Glass;
+	Material->bCastRayTracedShadows = MaterialType == EPBRMaterialType::Glass;
+	Material->bCastDynamicShadowAsMasked = MaterialType == EPBRMaterialType::Glass;
+	Material->bAllowTranslucentLocalLightShadow = MaterialType == EPBRMaterialType::Glass;
+	Material->TranslucentLocalLightShadowQuality = MaterialType == EPBRMaterialType::Glass ? 1.0f : 0.0f;
+	Material->TranslucentDirectionalLightShadowQuality = MaterialType == EPBRMaterialType::Glass ? 1.0f : 0.0f;
+	Material->TranslucentShadowDensityScale = MaterialType == EPBRMaterialType::Glass ? 0.65f : 0.35f;
+	Material->TranslucentSelfShadowDensityScale = MaterialType == EPBRMaterialType::Glass ? 0.5f : 0.0f;
+	Material->TranslucentSelfShadowSecondDensityScale = MaterialType == EPBRMaterialType::Glass ? 0.25f : 0.0f;
+	Material->TranslucentSelfShadowSecondOpacity = MaterialType == EPBRMaterialType::Glass ? 0.35f : 0.0f;
+	Material->TranslucentBackscatteringExponent = MaterialType == EPBRMaterialType::Glass ? 8.0f : 0.0f;
+	Material->TranslucentShadowStartOffset = 0.0f;
+	Material->SetOverrideCastShadowAsMasked(MaterialType == EPBRMaterialType::Glass);
+	Material->SetCastShadowAsMasked(MaterialType == EPBRMaterialType::Glass);
 	Material->TwoSided = MaterialType == EPBRMaterialType::Fabric || MaterialType == EPBRMaterialType::Water;
 }
 
@@ -2233,7 +2272,7 @@ static float GetTemplateDefaultOpacity(EPBRMaterialType MaterialType)
 	case EPBRMaterialType::Glass:
 		return 0.35f;
 	case EPBRMaterialType::Water:
-		return 0.55f;
+		return 0.65f;
 	case EPBRMaterialType::Transparent:
 		return 0.75f;
 	default:
@@ -2246,7 +2285,7 @@ static float GetTemplateDefaultRefraction(EPBRMaterialType MaterialType)
 	switch (MaterialType)
 	{
 	case EPBRMaterialType::Water:
-		return 1.333f;
+		return 1.33f;
 	case EPBRMaterialType::Glass:
 		return 1.52f;
 	case EPBRMaterialType::Transparent:
@@ -2803,11 +2842,12 @@ UMaterialInstanceConstant* FPBRMaterialTemplateManager::EnsureExampleMaterialIns
 	}
 	if (UsesWaterColor(MaterialType))
 	{
-		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::WaterColor, FLinearColor(0.04f, 0.35f, 0.55f));
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedU, 0.12f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedV, 0.06f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleScale, 1.0f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleStrength, 0.75f);
+		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseWaterRippleTexture), false);
+		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::WaterColor, FLinearColor(0.12f, 0.42f, 0.72f));
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedU, PBRARMDefaultWaterFlowSpeedU);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedV, PBRARMDefaultWaterFlowSpeedV);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleScale, PBRARMDefaultWaterRippleScale);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleStrength, PBRARMDefaultWaterRippleStrength);
 	}
 	if (MaterialType == EPBRMaterialType::Glass || MaterialType == EPBRMaterialType::Transparent)
 	{
@@ -2928,6 +2968,7 @@ static UMaterialInstanceConstant* EnsureWaterVariantExampleInstance(UMaterial* P
 	Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseNormalTexture), true);
 	Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseRoughnessTexture), true);
 	Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseSpecularTexture), true);
+	Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseWaterRippleTexture), false);
 	Instance->SetTextureParameterValueEditorOnly(FPBRMaterialParameters::BaseColorTexture, CreateDemoTextureAsset(EPBRMaterialType::Water, FPBRMaterialParameters::BaseColorTexture));
 	Instance->SetTextureParameterValueEditorOnly(FPBRMaterialParameters::NormalTexture, CreateDemoTextureAsset(EPBRMaterialType::Water, FPBRMaterialParameters::NormalTexture));
 	Instance->SetTextureParameterValueEditorOnly(FPBRMaterialParameters::RoughnessTexture, CreateDemoTextureAsset(EPBRMaterialType::Water, FPBRMaterialParameters::RoughnessTexture));
@@ -2939,9 +2980,9 @@ static UMaterialInstanceConstant* EnsureWaterVariantExampleInstance(UMaterial* P
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, Roughness);
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.9f);
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, RippleStrength);
-	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedU, Suffix == TEXT("深水") ? 0.05f : 0.12f);
-	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedV, Suffix == TEXT("深水") ? 0.025f : 0.06f);
-	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleScale, Suffix == TEXT("深水") ? 0.65f : 1.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedU, Suffix == TEXT("深水") ? 0.08f : PBRARMDefaultWaterFlowSpeedU);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedV, Suffix == TEXT("深水") ? 0.04f : PBRARMDefaultWaterFlowSpeedV);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleScale, Suffix == TEXT("深水") ? 12.0f : PBRARMDefaultWaterRippleScale);
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleStrength, RippleStrength);
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::UVUTiling, 1.0f);
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::UVVTiling, 1.0f);
@@ -3976,7 +4017,486 @@ static bool BuildSpecialMaterialGraph(UMaterial* Material, const FString& AssetN
 	return bBuilt;
 }
 
-static bool BuildTemplateGraph(UMaterial* Material, EPBRMaterialType MaterialType, FString& OutMessage)
+static constexpr const TCHAR* PBRARMParentGraphLayoutMarker = TEXT("ARM Parent Graph Layout v8");
+static constexpr float PBRARMDefaultWaterOpacity = 0.65f;
+
+struct FPBRARMGraphLane
+{
+	int32 Y = 0;
+	int32 Height = 0;
+};
+
+struct FPBRARMParentGraphLayout
+{
+	int32 InputX = -560;
+	int32 MaskX = -280;
+	int32 FunctionX = 40;
+	int32 SwitchX = 320;
+	int32 MidX = 640;
+	int32 SpecialInputX = 700;
+	int32 SpecialFunctionX = 1010;
+	int32 SpecialResultX = 1320;
+	int32 OutputDeclX = 1620;
+	int32 OutputUseX = 1810;
+
+	FPBRARMGraphLane BaseColor{ -620, 460 };
+	FPBRARMGraphLane Normal{ -100, 420 };
+	FPBRARMGraphLane Scalar{ 380, 1540 };
+	FPBRARMGraphLane Opacity{ 2040, 460 };
+	FPBRARMGraphLane Emissive{ 2540, 560 };
+	FPBRARMGraphLane Displacement{ 1340, 460 };
+	FPBRARMGraphLane TypeSpecific{ 1340, 900 };
+	FPBRARMGraphLane Output{ -420, 1500 };
+};
+
+static const FPBRARMParentGraphLayout PBRARMLayout{};
+
+static bool PBRARMShouldUseOpacityGraph(EPBRMaterialType MaterialType)
+{
+	return IsTranslucentMaterialType(MaterialType);
+}
+
+static bool PBRARMShouldUseEmissiveGraph(EPBRMaterialType MaterialType)
+{
+	return MaterialType == EPBRMaterialType::Emissive;
+}
+
+static bool PBRARMShouldUseMetallicGraph(EPBRMaterialType MaterialType)
+{
+	return MaterialType == EPBRMaterialType::Standard ||
+		MaterialType == EPBRMaterialType::Metal;
+}
+
+static bool PBRARMShouldUseDisplacementGraph(EPBRMaterialType MaterialType)
+{
+	return MaterialType == EPBRMaterialType::Stone ||
+		MaterialType == EPBRMaterialType::Tile;
+}
+
+static bool PBRARMShouldUseTypeSpecificGraph(EPBRMaterialType MaterialType)
+{
+	switch (MaterialType)
+	{
+	case EPBRMaterialType::Fabric:
+	case EPBRMaterialType::Leather:
+	case EPBRMaterialType::Metal:
+	case EPBRMaterialType::Water:
+	case EPBRMaterialType::Glass:
+	case EPBRMaterialType::Transparent:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static void PBRARMAddMaterialComment(UMaterial* Material, const FString& Text, const FLinearColor& Color, int32 X, int32 Y, int32 SizeX, int32 SizeY)
+{
+	UMaterialExpressionComment* Comment = NewObject<UMaterialExpressionComment>(Material);
+	Comment->Text = Text;
+	Comment->CommentColor = Color;
+	Comment->MaterialExpressionEditorX = X;
+	Comment->MaterialExpressionEditorY = Y;
+	Comment->SizeX = SizeX;
+	Comment->SizeY = SizeY;
+	Comment->FontSize = 20;
+	Comment->bGroupMode = true;
+	Material->GetExpressionCollection().AddExpression(Comment);
+}
+
+static UMaterialExpressionNamedRerouteDeclaration* PBRARMAddNamedRerouteDeclaration(UMaterial* Material, const FName& Name, UMaterialExpression* InputExpression, int32 OutputIndex, const FLinearColor& Color, int32 X, int32 Y)
+{
+	if (!Material || !InputExpression)
+	{
+		return nullptr;
+	}
+
+	UMaterialExpressionNamedRerouteDeclaration* Declaration = NewObject<UMaterialExpressionNamedRerouteDeclaration>(Material);
+	Declaration->Name = Name;
+	Declaration->NodeColor = Color;
+	Declaration->VariableGuid = FGuid::NewGuid();
+	Declaration->MaterialExpressionEditorX = X;
+	Declaration->MaterialExpressionEditorY = Y;
+	Declaration->Input.Connect(OutputIndex, InputExpression);
+	Material->GetExpressionCollection().AddExpression(Declaration);
+	return Declaration;
+}
+
+static UMaterialExpressionNamedRerouteUsage* PBRARMAddNamedRerouteUsage(UMaterial* Material, UMaterialExpressionNamedRerouteDeclaration* Declaration, int32 X, int32 Y)
+{
+	if (!Declaration)
+	{
+		return nullptr;
+	}
+
+	UMaterialExpressionNamedRerouteUsage* Usage = NewObject<UMaterialExpressionNamedRerouteUsage>(Material);
+	Usage->Declaration = Declaration;
+	Usage->DeclarationGuid = Declaration->VariableGuid;
+	Usage->MaterialExpressionEditorX = X;
+	Usage->MaterialExpressionEditorY = Y;
+	Material->GetExpressionCollection().AddExpression(Usage);
+	return Usage;
+}
+
+static UMaterialExpressionReroute* PBRARMAddReroute(UMaterial* Material, UMaterialExpression* InputExpression, int32 X, int32 Y)
+{
+	if (!InputExpression)
+	{
+		return nullptr;
+	}
+
+	UMaterialExpressionReroute* Reroute = NewObject<UMaterialExpressionReroute>(Material);
+	Reroute->MaterialExpressionEditorX = X;
+	Reroute->MaterialExpressionEditorY = Y;
+	Reroute->Input.Connect(0, InputExpression);
+	Material->GetExpressionCollection().AddExpression(Reroute);
+	return Reroute;
+}
+
+static UMaterialExpressionFresnel* PBRARMAddFresnel(UMaterial* Material, float Exponent, float BaseReflectFraction, int32 X, int32 Y)
+{
+	UMaterialExpressionFresnel* Node = NewObject<UMaterialExpressionFresnel>(Material);
+	Node->Exponent = Exponent;
+	Node->BaseReflectFraction = BaseReflectFraction;
+	Node->MaterialExpressionEditorX = X;
+	Node->MaterialExpressionEditorY = Y;
+	Material->GetExpressionCollection().AddExpression(Node);
+	return Node;
+}
+
+static UMaterialExpressionLinearInterpolate* PBRARMAddLerp(UMaterial* Material, float ConstAlpha, int32 X, int32 Y)
+{
+	UMaterialExpressionLinearInterpolate* Node = NewObject<UMaterialExpressionLinearInterpolate>(Material);
+	Node->ConstAlpha = ConstAlpha;
+	Node->MaterialExpressionEditorX = X;
+	Node->MaterialExpressionEditorY = Y;
+	Material->GetExpressionCollection().AddExpression(Node);
+	return Node;
+}
+
+static UMaterialExpressionComponentMask* PBRARMAddTextureMask(UMaterial* Material, UMaterialExpression* Input, bool bR, bool bG, bool bB, bool bA, int32 X, int32 Y)
+{
+	UMaterialExpressionComponentMask* Node = NewObject<UMaterialExpressionComponentMask>(Material);
+	Node->R = bR;
+	Node->G = bG;
+	Node->B = bB;
+	Node->A = bA;
+	Node->MaterialExpressionEditorX = X;
+	Node->MaterialExpressionEditorY = Y;
+	Node->Input.Connect(0, Input);
+	Material->GetExpressionCollection().AddExpression(Node);
+	return Node;
+}
+
+static UMaterialExpressionCustom* PBRARMAddCustom(UMaterial* Material, ECustomMaterialOutputType OutputType, const FString& Description, const FString& Code, int32 InputCount, int32 X, int32 Y)
+{
+	UMaterialExpressionCustom* Node = NewObject<UMaterialExpressionCustom>(Material);
+	Node->OutputType = OutputType;
+	Node->Description = Description;
+	Node->Code = Code;
+	Node->MaterialExpressionEditorX = X;
+	Node->MaterialExpressionEditorY = Y;
+	Node->Inputs.AddDefaulted(InputCount);
+	Material->GetExpressionCollection().AddExpression(Node);
+	return Node;
+}
+
+static UMaterialExpressionCustom* PBRARMAddFlakeMask(UMaterial* Material, UMaterialExpression* UVExpression, UMaterialExpression* ScaleExpression, int32 X, int32 Y)
+{
+	UMaterialExpressionCustom* Node = PBRARMAddCustom(
+		Material,
+		CMOT_Float1,
+		TEXT("AR Metal Flake Mask"),
+		TEXT("float flakeScale = max(Scale, 1.0);\nfloat2 cell = floor(UV * flakeScale);\nfloat sparkle = frac(sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453);\nreturn step(0.975, sparkle);"),
+		2,
+		X,
+		Y);
+	Node->Inputs[0].InputName = TEXT("UV");
+	Node->Inputs[0].Input.Connect(0, UVExpression);
+	Node->Inputs[1].InputName = TEXT("Scale");
+	Node->Inputs[1].Input.Connect(0, ScaleExpression);
+	return Node;
+}
+
+static UMaterialExpressionCustom* PBRARMAddCenteredHeightOffset(UMaterial* Material, UMaterialExpression* HeightExpression, UMaterialExpression* StrengthExpression, int32 X, int32 Y)
+{
+	UMaterialExpressionCustom* Node = PBRARMAddCustom(Material, CMOT_Float1, TEXT("AR Centered Height Offset"), TEXT("return (Height - 0.5) * Strength;"), 2, X, Y);
+	Node->Inputs[0].InputName = TEXT("Height");
+	Node->Inputs[0].Input.Connect(0, HeightExpression);
+	Node->Inputs[1].InputName = TEXT("Strength");
+	Node->Inputs[1].Input.Connect(0, StrengthExpression);
+	return Node;
+}
+
+static UMaterialExpressionCustom* PBRARMAddWaterRippleMask(
+	UMaterial* Material,
+	UMaterialExpression* UVExpression,
+	UMaterialExpression* TimeExpression,
+	UMaterialExpression* FlowUExpression,
+	UMaterialExpression* FlowVExpression,
+	UMaterialExpression* ScaleExpression,
+	UMaterialExpression* StrengthExpression,
+	int32 X,
+	int32 Y)
+{
+	UMaterialExpressionCustom* Node = PBRARMAddCustom(
+		Material,
+		CMOT_Float1,
+		TEXT("AR Water Ripple Mask"),
+		TEXT("float2 movedUV = UV + Time * float2(FlowU, FlowV);\nfloat waveScale = max(Scale, 0.01) * 6.2831853;\nfloat waves = (sin(movedUV.x * waveScale) + sin(movedUV.y * waveScale * 1.37)) * 0.25 + 0.5;\nreturn saturate(waves) * Strength * 1.5;"),
+		6,
+		X,
+		Y);
+	Node->Inputs[0].InputName = TEXT("UV");
+	Node->Inputs[0].Input.Connect(0, UVExpression);
+	Node->Inputs[1].InputName = TEXT("Time");
+	Node->Inputs[1].Input.Connect(0, TimeExpression);
+	Node->Inputs[2].InputName = TEXT("FlowU");
+	Node->Inputs[2].Input.Connect(0, FlowUExpression);
+	Node->Inputs[3].InputName = TEXT("FlowV");
+	Node->Inputs[3].Input.Connect(0, FlowVExpression);
+	Node->Inputs[4].InputName = TEXT("Scale");
+	Node->Inputs[4].Input.Connect(0, ScaleExpression);
+	Node->Inputs[5].InputName = TEXT("Strength");
+	Node->Inputs[5].Input.Connect(0, StrengthExpression);
+	return Node;
+}
+
+static UMaterialExpressionCustom* PBRARMAddWaterFlowUV(
+	UMaterial* Material,
+	UMaterialExpression* UVExpression,
+	UMaterialExpression* TimeExpression,
+	UMaterialExpression* FlowUExpression,
+	UMaterialExpression* FlowVExpression,
+	int32 X,
+	int32 Y)
+{
+	UMaterialExpressionCustom* Node = PBRARMAddCustom(Material, CMOT_Float2, TEXT("AR Water Flow UV"), TEXT("return UV + Time * float2(FlowU, FlowV);"), 4, X, Y);
+	Node->Inputs[0].InputName = TEXT("UV");
+	Node->Inputs[0].Input.Connect(0, UVExpression);
+	Node->Inputs[1].InputName = TEXT("Time");
+	Node->Inputs[1].Input.Connect(0, TimeExpression);
+	Node->Inputs[2].InputName = TEXT("FlowU");
+	Node->Inputs[2].Input.Connect(0, FlowUExpression);
+	Node->Inputs[3].InputName = TEXT("FlowV");
+	Node->Inputs[3].Input.Connect(0, FlowVExpression);
+	return Node;
+}
+
+static UMaterialExpressionCustom* PBRARMAddWaterRippleNormal(
+	UMaterial* Material,
+	UMaterialExpression* UVExpression,
+	UMaterialExpression* TimeExpression,
+	UMaterialExpression* FlowUExpression,
+	UMaterialExpression* FlowVExpression,
+	UMaterialExpression* ScaleExpression,
+	UMaterialExpression* StrengthExpression,
+	int32 X,
+	int32 Y)
+{
+	UMaterialExpressionCustom* Node = PBRARMAddCustom(
+		Material,
+		CMOT_Float3,
+		TEXT("AR Water Ripple Normal"),
+		TEXT("float2 movedUV = UV + Time * float2(FlowU, FlowV);\nfloat waveScale = max(Scale, 0.01) * 6.2831853;\nfloat dx = cos(dot(movedUV, float2(1.0, 0.32)) * waveScale) * waveScale;\ndx += cos(dot(movedUV * 1.73 + 0.19, float2(-0.56, 0.83)) * waveScale * 0.61) * waveScale * 0.61;\nfloat dy = cos(dot(movedUV, float2(-0.27, 1.0)) * waveScale * 0.87) * waveScale * 0.87;\ndy += cos(dot(movedUV * 1.31 + 0.43, float2(0.72, 0.41)) * waveScale * 0.49) * waveScale * 0.49;\nfloat normalScale = Strength * 0.006;\nreturn normalize(float3(-dx * normalScale, dy * normalScale, 1.0));"),
+		6,
+		X,
+		Y);
+	Node->Inputs[0].InputName = TEXT("UV");
+	Node->Inputs[0].Input.Connect(0, UVExpression);
+	Node->Inputs[1].InputName = TEXT("Time");
+	Node->Inputs[1].Input.Connect(0, TimeExpression);
+	Node->Inputs[2].InputName = TEXT("FlowU");
+	Node->Inputs[2].Input.Connect(0, FlowUExpression);
+	Node->Inputs[3].InputName = TEXT("FlowV");
+	Node->Inputs[3].Input.Connect(0, FlowVExpression);
+	Node->Inputs[4].InputName = TEXT("Scale");
+	Node->Inputs[4].Input.Connect(0, ScaleExpression);
+	Node->Inputs[5].InputName = TEXT("Strength");
+	Node->Inputs[5].Input.Connect(0, StrengthExpression);
+	return Node;
+}
+
+static UMaterialExpressionCustom* PBRARMAddGlassCausticsMask(UMaterial* Material, UMaterialExpression* UVExpression, UMaterialExpression* TimeExpression, UMaterialExpression* ScaleExpression, UMaterialExpression* SpeedExpression, UMaterialExpression* IntensityExpression, int32 X, int32 Y)
+{
+	UMaterialExpressionCustom* Node = PBRARMAddCustom(
+		Material,
+		CMOT_Float1,
+		TEXT("AR Glass Caustics Mask"),
+		TEXT("float causticScale = max(Scale, 0.01) * 6.2831853;\nfloat2 movedUV = UV * causticScale + Time * Speed * float2(1.17, -0.73);\nfloat waveA = sin(movedUV.x + sin(movedUV.y * 0.83));\nfloat waveB = sin(dot(movedUV, float2(-0.62, 1.21)) + Time * Speed * 1.7);\nfloat waveC = sin(dot(movedUV, float2(1.37, 0.48)) - Time * Speed * 1.31);\nfloat mask = saturate((waveA + waveB + waveC) * 0.22 + 0.52);\nmask = pow(mask, 5.0);\nreturn saturate(mask * Intensity * 3.0);"),
+		5,
+		X,
+		Y);
+	Node->Inputs[0].InputName = TEXT("UV");
+	Node->Inputs[0].Input.Connect(0, UVExpression);
+	Node->Inputs[1].InputName = TEXT("Time");
+	Node->Inputs[1].Input.Connect(0, TimeExpression);
+	Node->Inputs[2].InputName = TEXT("Scale");
+	Node->Inputs[2].Input.Connect(0, ScaleExpression);
+	Node->Inputs[3].InputName = TEXT("Speed");
+	Node->Inputs[3].Input.Connect(0, SpeedExpression);
+	Node->Inputs[4].InputName = TEXT("Intensity");
+	Node->Inputs[4].Input.Connect(0, IntensityExpression);
+	return Node;
+}
+
+static UMaterialExpressionCustom* PBRARMAddUVRotateDegrees(UMaterial* Material, UMaterialExpression* UVExpression, UMaterialExpression* RotationDegrees, int32 X, int32 Y)
+{
+	UMaterialExpressionCustom* Node = PBRARMAddCustom(
+		Material,
+		CMOT_Float2,
+		TEXT("AR UV Rotate Degrees"),
+		TEXT("float radiansValue = radians(Degrees);\nfloat s = sin(radiansValue);\nfloat c = cos(radiansValue);\nfloat2 centered = UV - float2(0.5, 0.5);\nfloat2 rotated = float2(centered.x * c - centered.y * s, centered.x * s + centered.y * c);\nreturn rotated + float2(0.5, 0.5);"),
+		2,
+		X,
+		Y);
+	Node->Inputs[0].InputName = TEXT("UV");
+	Node->Inputs[0].Input.Connect(0, UVExpression);
+	Node->Inputs[1].InputName = TEXT("Degrees");
+	Node->Inputs[1].Input.Connect(0, RotationDegrees);
+	return Node;
+}
+
+static UMaterialExpression* PBRARMBuildUVTransform(
+	UMaterial* Material,
+	const FName& GroupName,
+	UMaterialExpression* InputUV,
+	const FName& UTilingName,
+	const FName& VTilingName,
+	const FName& UOffsetName,
+	const FName& VOffsetName,
+	const FName& RotationDegreesName,
+	int32 SortPriorityBase,
+	int32 X,
+	int32 Y)
+{
+	UMaterialExpressionScalarParameter* UTiling = AddScalarParameter(Material, UTilingName, GroupName, SortPriorityBase + 10, 1.0f, X, Y + 100);
+	UMaterialExpressionScalarParameter* VTiling = AddScalarParameter(Material, VTilingName, GroupName, SortPriorityBase + 20, 1.0f, X, Y + 190);
+	UMaterialExpressionScalarParameter* UOffset = AddScalarParameter(Material, UOffsetName, GroupName, SortPriorityBase + 30, 0.0f, X, Y + 280);
+	UMaterialExpressionScalarParameter* VOffset = AddScalarParameter(Material, VOffsetName, GroupName, SortPriorityBase + 40, 0.0f, X, Y + 370);
+	UMaterialExpressionScalarParameter* RotationDegrees = AddScalarParameter(Material, RotationDegreesName, GroupName, SortPriorityBase + 50, 0.0f, X, Y + 460);
+
+	if (UMaterialExpressionMaterialFunctionCall* UVFunction = AddMaterialFunctionCall(
+		Material,
+		TEXT("/Game/PBRStudio/Functions/01_UV/MF_PBRStudio_UVControls.MF_PBRStudio_UVControls"),
+		X + 300,
+		Y + 170))
+	{
+		const bool bConnected =
+			ConnectFunctionInputByName(UVFunction, TEXT("UV"), InputUV) &
+			ConnectFunctionInputByName(UVFunction, TEXT("U 平铺"), UTiling) &
+			ConnectFunctionInputByName(UVFunction, TEXT("V 平铺"), VTiling) &
+			ConnectFunctionInputByName(UVFunction, TEXT("U 偏移"), UOffset) &
+			ConnectFunctionInputByName(UVFunction, TEXT("V 偏移"), VOffset) &
+			ConnectFunctionInputByName(UVFunction, TEXT("旋转角度"), RotationDegrees);
+		if (bConnected)
+		{
+			return UVFunction;
+		}
+	}
+
+	UMaterialExpression* UVInputExpression = InputUV;
+	if (!UVInputExpression)
+	{
+		UMaterialExpressionTextureCoordinate* FallbackTexCoord = NewObject<UMaterialExpressionTextureCoordinate>(Material);
+		FallbackTexCoord->MaterialExpressionEditorX = X;
+		FallbackTexCoord->MaterialExpressionEditorY = Y;
+		Material->GetExpressionCollection().AddExpression(FallbackTexCoord);
+		UVInputExpression = FallbackTexCoord;
+	}
+
+	UMaterialExpressionAppendVector* TilingAppend = NewObject<UMaterialExpressionAppendVector>(Material);
+	TilingAppend->MaterialExpressionEditorX = X + 270;
+	TilingAppend->MaterialExpressionEditorY = Y + 120;
+	TilingAppend->A.Connect(0, UTiling);
+	TilingAppend->B.Connect(0, VTiling);
+	Material->GetExpressionCollection().AddExpression(TilingAppend);
+
+	UMaterialExpressionAppendVector* OffsetAppend = NewObject<UMaterialExpressionAppendVector>(Material);
+	OffsetAppend->MaterialExpressionEditorX = X + 270;
+	OffsetAppend->MaterialExpressionEditorY = Y + 300;
+	OffsetAppend->A.Connect(0, UOffset);
+	OffsetAppend->B.Connect(0, VOffset);
+	Material->GetExpressionCollection().AddExpression(OffsetAppend);
+
+	UMaterialExpressionMultiply* TiledUV = AddMultiply(Material, X + 500, Y + 100);
+	TiledUV->A.Connect(0, UVInputExpression);
+	TiledUV->B.Connect(0, TilingAppend);
+
+	UMaterialExpressionAdd* OffsetUV = AddAdd(Material, X + 700, Y + 130);
+	OffsetUV->A.Connect(0, TiledUV);
+	OffsetUV->B.Connect(0, OffsetAppend);
+	return PBRARMAddUVRotateDegrees(Material, OffsetUV, RotationDegrees, X + 880, Y + 160);
+}
+
+static UMaterialExpression* PBRARMBuildSimpleUV(UMaterial* Material, const FName& GroupName)
+{
+	UMaterialExpressionTextureCoordinate* TexCoord = NewObject<UMaterialExpressionTextureCoordinate>(Material);
+	TexCoord->MaterialExpressionEditorX = -1580;
+	TexCoord->MaterialExpressionEditorY = -500;
+	Material->GetExpressionCollection().AddExpression(TexCoord);
+
+	return PBRARMBuildUVTransform(
+		Material,
+		GroupName,
+		TexCoord,
+		FPBRMaterialParameters::UVUTiling,
+		FPBRMaterialParameters::UVVTiling,
+		FPBRMaterialParameters::UVUOffset,
+		FPBRMaterialParameters::UVVOffset,
+		FPBRMaterialParameters::UVRotationDegrees,
+		10,
+		-1580,
+		-360);
+}
+
+static UMaterialExpression* PBRARMBuildChannelUV(
+	UMaterial* Material,
+	UMaterialExpressionNamedRerouteDeclaration* SharedUVDeclaration,
+	UMaterialExpression* SharedUVExpression,
+	const FName& ChannelName,
+	const FName& GroupName,
+	int32 SortPriorityBase,
+	int32 X,
+	int32 Y,
+	int32 UsageX,
+	int32 UsageY)
+{
+	PBRARMAddMaterialComment(Material, FString::Printf(TEXT("%s UV Override"), *ChannelName.ToString()), FLinearColor(0.035f, 0.035f, 0.035f, 1.0f), X - 50, Y - 70, 1180, 620);
+	const FPBRChannelUVParameterNames ChannelUV = FPBRMaterialParameters::GetChannelUVNames(ChannelName);
+	UMaterialExpression* LocalSharedUV = PBRARMAddReroute(Material, PBRARMAddNamedRerouteUsage(Material, SharedUVDeclaration, X, Y), X + 210, Y + 20);
+	if (!LocalSharedUV)
+	{
+		LocalSharedUV = SharedUVExpression;
+	}
+	UMaterialExpression* ChannelTransform = PBRARMBuildUVTransform(
+		Material,
+		GroupName,
+		LocalSharedUV,
+		ChannelUV.UTiling,
+		ChannelUV.VTiling,
+		ChannelUV.UOffset,
+		ChannelUV.VOffset,
+		ChannelUV.RotationDegrees,
+		SortPriorityBase,
+		X,
+		Y);
+
+	UMaterialExpressionStaticSwitchParameter* UseIndependentUV = AddStaticSwitchParameter(Material, ChannelUV.UseIndependentUV, GroupName, SortPriorityBase + 1, false, X + 900, Y + 220);
+	UseIndependentUV->A.Connect(0, ChannelTransform);
+	UseIndependentUV->B.Connect(0, LocalSharedUV ? LocalSharedUV : ChannelTransform);
+
+	UMaterialExpressionNamedRerouteDeclaration* ChannelUVDeclaration = PBRARMAddNamedRerouteDeclaration(
+		Material,
+		FName(*(ChannelName.ToString() + TEXT(" UV"))),
+		UseIndependentUV,
+		0,
+		FLinearColor(0.20f, 0.56f, 0.58f, 1.0f),
+		X + 1040,
+		Y + 220);
+	return PBRARMAddNamedRerouteUsage(Material, ChannelUVDeclaration, UsageX, UsageY);
+}
+
+static bool BuildARMStyleTemplateGraph(UMaterial* Material, EPBRMaterialType MaterialType, FString& OutMessage)
 {
 	if (!Material)
 	{
@@ -3985,374 +4505,804 @@ static bool BuildTemplateGraph(UMaterial* Material, EPBRMaterialType MaterialTyp
 	}
 
 	ConfigureMaterialDomainForType(Material, MaterialType);
-	Material->bEnableTessellation = UsesHeight(MaterialType);
-	Material->bEnableDisplacementFade = UsesHeight(MaterialType);
-	Material->DisplacementScaling.Magnitude = UsesHeight(MaterialType) ? 1.0f : 0.0f;
+	const bool bUseGlassGraph = MaterialType == EPBRMaterialType::Glass;
+	const bool bUseMetallicGraph = PBRARMShouldUseMetallicGraph(MaterialType);
+	const bool bUseOpacityGraph = PBRARMShouldUseOpacityGraph(MaterialType);
+	const bool bUseEmissiveGraph = PBRARMShouldUseEmissiveGraph(MaterialType);
+	const bool bUseDisplacementGraph = PBRARMShouldUseDisplacementGraph(MaterialType);
+	const bool bUseTypeSpecificGraph = PBRARMShouldUseTypeSpecificGraph(MaterialType);
+	const bool bUseWaterGraph = MaterialType == EPBRMaterialType::Water;
+
+	Material->bEnableTessellation = bUseDisplacementGraph;
+	Material->bEnableDisplacementFade = bUseDisplacementGraph;
+	Material->DisplacementScaling.Magnitude = bUseDisplacementGraph ? 1.0f : 0.0f;
 	Material->DisplacementScaling.Center = 0.5f;
+
 	UMaterialEditorOnlyData* EditorData = Material->GetEditorOnlyData();
 	if (!EditorData)
 	{
 		OutMessage = TEXT("无法访问材质编辑数据");
 		return false;
 	}
+	EditorData->ParameterGroupData.Empty();
 
-	const FName GroupBaseColor(TEXT("01 基础颜色"));
-	const FName GroupNormal(TEXT("02 法线"));
-	const FName GroupRoughness(TEXT("03 粗糙度"));
-	const FName GroupMetalAO(TEXT("04 金属和环境遮蔽"));
-	const FName GroupOpacity(TEXT("05 透明"));
+	const FName GroupBaseColor(bUseGlassGraph ? TEXT("00 - 颜色") : TEXT("01 基础颜色"));
+	const FName GroupNormal(bUseGlassGraph ? TEXT("03 - 法线") : TEXT("02 法线"));
+	const FName GroupRoughness(bUseGlassGraph ? TEXT("04 - 反射") : TEXT("03 粗糙度"));
+	const FName GroupMetallic(bUseGlassGraph ? TEXT("04 - 反射") : TEXT("04 金属"));
+	const FName GroupOpacity(bUseGlassGraph ? TEXT("01 - 透明") : TEXT("05 透明"));
 	const FName GroupEmissive(TEXT("06 自发光"));
-	const FName GroupSpecial(TEXT("07 类型专用"));
-	const FName GroupUV(TEXT("08 UV 调整"));
+	const FName GroupSpecial(bUseGlassGraph ? TEXT("02 - 折射") : TEXT("07 类型专属"));
+	const FName GroupUV(bUseGlassGraph ? TEXT("05 - UV") : TEXT("08 UV 调整"));
 
-	const FName GroupHeight(TEXT("09 高度和置换"));
-	const FName GroupClearCoat(TEXT("10 清漆"));
-
-	EditorData->ParameterGroupData.Add(FParameterGroupData(GroupBaseColor.ToString(), 10));
-	EditorData->ParameterGroupData.Add(FParameterGroupData(GroupNormal.ToString(), 20));
-	EditorData->ParameterGroupData.Add(FParameterGroupData(GroupRoughness.ToString(), 30));
-	EditorData->ParameterGroupData.Add(FParameterGroupData(GroupMetalAO.ToString(), 40));
-	EditorData->ParameterGroupData.Add(FParameterGroupData(GroupOpacity.ToString(), 50));
-	EditorData->ParameterGroupData.Add(FParameterGroupData(GroupEmissive.ToString(), 60));
-	EditorData->ParameterGroupData.Add(FParameterGroupData(GroupSpecial.ToString(), 70));
-	EditorData->ParameterGroupData.Add(FParameterGroupData(GroupUV.ToString(), 80));
-	EditorData->ParameterGroupData.Add(FParameterGroupData(GroupHeight.ToString(), 90));
-	EditorData->ParameterGroupData.Add(FParameterGroupData(GroupClearCoat.ToString(), 100));
-
-	UMaterialExpressionScalarParameter* UVRotationDegrees = nullptr;
-	UMaterialExpression* SharedUV = BuildSharedUVControls(Material, UVRotationDegrees, GroupUV);
-
-	UMaterialExpressionTextureSampleParameter2D* BaseTex = AddTextureParameter(Material, FPBRMaterialParameters::BaseColorTexture, GroupBaseColor, 10, -900, -350);
-	if (MaterialType == EPBRMaterialType::Water)
+	if (bUseGlassGraph)
 	{
-		BaseTex->Coordinates.Connect(0, BuildWaterFlowUV(Material, SharedUV, GroupSpecial, -250, 1080));
-	}
-	UMaterialExpressionVectorParameter* BaseTint = AddVectorParameter(Material, FPBRMaterialParameters::BaseColorTint, GroupBaseColor, 20, FLinearColor::White, -900, -180);
-	UMaterialExpressionScalarParameter* BaseIntensity = AddScalarParameter(Material, FPBRMaterialParameters::BaseColorIntensity, GroupBaseColor, 30, 1.0f, -900, -40);
-	UMaterialExpressionStaticSwitchParameter* UseBaseColorTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseBaseColorTexture, GroupBaseColor, 40, true, -120, -280);
-	UMaterialExpressionMultiply* SolidBaseColor = AddMultiply(Material, -360, -40);
-	SolidBaseColor->A.Connect(0, BaseTint);
-	SolidBaseColor->B.Connect(0, BaseIntensity);
-	UMaterialExpressionMaterialFunctionCall* BaseColorFunction = AddMaterialFunctionCall(
-		Material,
-		TEXT("/Game/PBRStudio/Functions/03_Surface/MF_PBRStudio_BaseColorBlend.MF_PBRStudio_BaseColorBlend"),
-		-520,
-		-280);
-	if (BaseColorFunction &&
-		ConnectFunctionInputByIndex(BaseColorFunction, 0, BaseTex) &&
-		ConnectFunctionInputByIndex(BaseColorFunction, 1, BaseTint) &&
-		ConnectFunctionInputByIndex(BaseColorFunction, 2, BaseIntensity))
-	{
-		UseBaseColorTexture->A.Connect(0, BaseColorFunction);
-		UseBaseColorTexture->B.Connect(0, SolidBaseColor);
+		EditorData->ParameterGroupData.Add(FParameterGroupData(TEXT("00 - 颜色"), 10));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(TEXT("01 - 透明"), 20));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(TEXT("02 - 折射"), 30));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(TEXT("03 - 法线"), 40));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(TEXT("04 - 反射"), 50));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(TEXT("05 - UV"), 60));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(TEXT("06 - 污渍"), 70));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(TEXT("07 - 扭曲"), 80));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(TEXT("08 - 磨砂"), 90));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(TEXT("09 - 阴影"), 100));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(TEXT("10 - 光线追踪"), 110));
 	}
 	else
 	{
-		UseBaseColorTexture->A.Connect(0, BaseTex);
-		UseBaseColorTexture->B.Connect(0, SolidBaseColor);
-	}
-	EditorData->BaseColor.Connect(0, UseBaseColorTexture);
-
-	if (UsesNormal(MaterialType))
-	{
-		UMaterialExpressionTextureSampleParameter2D* NormalTex = AddTextureParameter(
-			Material,
-			FPBRMaterialParameters::NormalTexture,
-			GroupNormal,
-			10,
-			-900,
-			20,
-			EMaterialSamplerType::SAMPLERTYPE_Normal);
-		UMaterialExpressionScalarParameter* NormalStrength = AddScalarParameter(Material, FPBRMaterialParameters::NormalStrength, GroupNormal, 20, 1.0f, -620, 60);
-		if (MaterialType == EPBRMaterialType::Water)
+		EditorData->ParameterGroupData.Add(FParameterGroupData(GroupBaseColor.ToString(), 10));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(GroupNormal.ToString(), 20));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(GroupRoughness.ToString(), 30));
+		if (bUseMetallicGraph)
 		{
-			BuildDynamicWaterNormal(Material, NormalTex, NormalStrength, SharedUV, GroupSpecial, -250, 1540);
+			EditorData->ParameterGroupData.Add(FParameterGroupData(GroupMetallic.ToString(), 40));
 		}
-		else if (!WireNormalStrength(Material, NormalTex, NormalStrength, -380, 20))
-		{
-			EditorData->Normal.Connect(0, NormalTex);
-		}
+		EditorData->ParameterGroupData.Add(FParameterGroupData(GroupOpacity.ToString(), 50));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(GroupEmissive.ToString(), 60));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(GroupSpecial.ToString(), 70));
+		EditorData->ParameterGroupData.Add(FParameterGroupData(GroupUV.ToString(), 80));
 	}
 
-	if (UsesRoughness(MaterialType))
+	PBRARMAddMaterialComment(Material, PBRARMParentGraphLayoutMarker, FLinearColor(0.04f, 0.04f, 0.04f, 1.0f), -1640, -620, 860, 600);
+	if (!bUseGlassGraph)
 	{
-		UMaterialExpressionTextureSampleParameter2D* RoughnessTex = AddTextureParameter(
-			Material,
-			FPBRMaterialParameters::RoughnessTexture,
-			GroupRoughness,
-			10,
-			-900,
-			220,
-			EMaterialSamplerType::SAMPLERTYPE_Masks);
-		const float DefaultRoughness = GetTemplateDefaultRoughness(MaterialType);
-		UMaterialExpressionScalarParameter* RoughnessMul = AddScalarParameter(Material, FPBRMaterialParameters::RoughnessMultiplier, GroupRoughness, 20, DefaultRoughness, -900, 360);
-		UMaterialExpressionScalarParameter* RoughnessValue = AddScalarParameter(Material, FPBRMaterialParameters::RoughnessValue, GroupRoughness, 30, DefaultRoughness, -900, 500);
-		UMaterialExpressionStaticSwitchParameter* UseRoughnessTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseRoughnessTexture, GroupRoughness, 40, true, -380, 260);
-		UMaterialExpressionMaterialFunctionCall* RoughnessFunction = AddMaterialFunctionCall(
-			Material,
-			TEXT("/Game/PBRStudio/Functions/04_Mask/MF_PBRStudio_ScalarTextureSwitch.MF_PBRStudio_ScalarTextureSwitch"),
-			-600,
-			260);
-		if (RoughnessFunction &&
-			ConnectFunctionInputByIndex(RoughnessFunction, 0, RoughnessTex) &&
-			ConnectFunctionInputByIndex(RoughnessFunction, 1, RoughnessMul) &&
-			ConnectFunctionInputByIndex(RoughnessFunction, 2, RoughnessValue))
-		{
-			UseRoughnessTexture->A.Connect(0, RoughnessFunction);
-			UseRoughnessTexture->B.Connect(0, RoughnessValue);
-		}
-		else
-		{
-			UseRoughnessTexture->A.Connect(0, RoughnessTex);
-			UseRoughnessTexture->B.Connect(0, RoughnessValue);
-		}
-		EditorData->Roughness.Connect(0, UseRoughnessTexture);
+		PBRARMAddMaterialComment(Material, TEXT("UV Overrides: optional per-channel controls"), FLinearColor(0.05f, 0.05f, 0.05f, 1.0f), -3640, 120, 2660, bUseWaterGraph || bUseEmissiveGraph || bUseDisplacementGraph || bUseOpacityGraph ? 2740 : 2080);
 	}
-
-	if (UsesMetallic(MaterialType))
+	PBRARMAddMaterialComment(Material, TEXT("Base Color"), FLinearColor(0.44f, 0.42f, 0.22f, 1.0f), -720, PBRARMLayout.BaseColor.Y - 80, 1140, PBRARMLayout.BaseColor.Height);
+	PBRARMAddMaterialComment(Material, TEXT("Normal"), FLinearColor(0.02f, 0.06f, 0.55f, 1.0f), -720, PBRARMLayout.Normal.Y - 80, 1140, PBRARMLayout.Normal.Height);
+	PBRARMAddMaterialComment(Material, bUseMetallicGraph ? TEXT("Surface Scalars: Roughness / Specular / Metallic / AO") : TEXT("Surface Scalars: Roughness / Specular / AO"), FLinearColor(0.56f, 0.02f, 0.12f, 1.0f), -720, PBRARMLayout.Scalar.Y - 80, 1140, PBRARMLayout.Scalar.Height);
+	if (bUseOpacityGraph)
 	{
-		UMaterialExpressionTextureSampleParameter2D* MetallicTex = AddTextureParameter(
-			Material,
-			FPBRMaterialParameters::MetallicTexture,
-			GroupMetalAO,
-			10,
-			-900,
-			500,
-			EMaterialSamplerType::SAMPLERTYPE_Masks);
-		UMaterialExpressionScalarParameter* MetallicMul = AddScalarParameter(Material, FPBRMaterialParameters::MetallicMultiplier, GroupMetalAO, 20, GetTemplateDefaultMetallic(MaterialType), -900, 640);
-		UMaterialExpressionScalarParameter* MetallicValue = AddScalarParameter(Material, FPBRMaterialParameters::MetallicValue, GroupMetalAO, 30, GetTemplateDefaultMetallic(MaterialType), -900, 700);
-		UMaterialExpressionStaticSwitchParameter* UseMetallicTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseMetallicTexture, GroupMetalAO, 40, true, -380, 540);
-		UMaterialExpressionMaterialFunctionCall* MetallicFunction = AddMaterialFunctionCall(
-			Material,
-			TEXT("/Game/PBRStudio/Functions/04_Mask/MF_PBRStudio_ScalarTextureSwitch.MF_PBRStudio_ScalarTextureSwitch"),
-			-600,
-			540);
-		if (MetallicFunction &&
-			ConnectFunctionInputByIndex(MetallicFunction, 0, MetallicTex) &&
-			ConnectFunctionInputByIndex(MetallicFunction, 1, MetallicMul) &&
-			ConnectFunctionInputByIndex(MetallicFunction, 2, MetallicValue))
-		{
-			UseMetallicTexture->A.Connect(0, MetallicFunction);
-			UseMetallicTexture->B.Connect(0, MetallicValue);
-		}
-		else
-		{
-			UseMetallicTexture->A.Connect(0, MetallicTex);
-			UseMetallicTexture->B.Connect(0, MetallicValue);
-		}
-		EditorData->Metallic.Connect(0, UseMetallicTexture);
+		PBRARMAddMaterialComment(Material, TEXT("Opacity"), FLinearColor(0.03f, 0.24f, 0.22f, 1.0f), -720, PBRARMLayout.Opacity.Y - 80, 1140, PBRARMLayout.Opacity.Height);
 	}
-
-	if (UsesAO(MaterialType))
+	if (bUseEmissiveGraph)
 	{
-		UMaterialExpressionTextureSampleParameter2D* AOTex = AddTextureParameter(
-			Material,
-			FPBRMaterialParameters::AOTexture,
-			GroupMetalAO,
-			30,
-			-900,
-			780,
-			EMaterialSamplerType::SAMPLERTYPE_Masks);
-		UMaterialExpressionScalarParameter* AOMul = AddScalarParameter(Material, FPBRMaterialParameters::AOMultiplier, GroupMetalAO, 40, 1.0f, -900, 920);
-		UMaterialExpressionScalarParameter* AOValue = AddScalarParameter(Material, FPBRMaterialParameters::AOValue, GroupMetalAO, 50, 1.0f, -900, 1060);
-		UMaterialExpressionStaticSwitchParameter* UseAOTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseAOTexture, GroupMetalAO, 60, true, -380, 820);
-		UMaterialExpressionMaterialFunctionCall* AOFunction = AddMaterialFunctionCall(
-			Material,
-			TEXT("/Game/PBRStudio/Functions/04_Mask/MF_PBRStudio_ScalarTextureSwitch.MF_PBRStudio_ScalarTextureSwitch"),
-			-600,
-			820);
-		if (AOFunction &&
-			ConnectFunctionInputByIndex(AOFunction, 0, AOTex) &&
-			ConnectFunctionInputByIndex(AOFunction, 1, AOMul) &&
-			ConnectFunctionInputByIndex(AOFunction, 2, AOValue))
-		{
-			UseAOTexture->A.Connect(0, AOFunction);
-			UseAOTexture->B.Connect(0, AOValue);
-		}
-		else
-		{
-			UseAOTexture->A.Connect(0, AOTex);
-			UseAOTexture->B.Connect(0, AOValue);
-		}
-		EditorData->AmbientOcclusion.Connect(0, UseAOTexture);
+		PBRARMAddMaterialComment(Material, TEXT("Emissive"), FLinearColor(0.03f, 0.18f, 0.28f, 1.0f), -720, PBRARMLayout.Emissive.Y - 80, 1140, PBRARMLayout.Emissive.Height);
 	}
-
-	if (UsesSpecular(MaterialType))
+	if (bUseDisplacementGraph)
 	{
-		UMaterialExpressionTextureSampleParameter2D* SpecularTex = AddTextureParameter(Material, FPBRMaterialParameters::SpecularTexture, GroupMetalAO, 50, -900, 1040, EMaterialSamplerType::SAMPLERTYPE_Masks);
-		UMaterialExpressionScalarParameter* SpecularLevel = AddScalarParameter(Material, FPBRMaterialParameters::SpecularLevel, GroupMetalAO, 60, 0.5f, -900, 1180);
-		UMaterialExpressionStaticSwitchParameter* UseSpecularTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseSpecularTexture, GroupMetalAO, 70, true, -380, 1080);
-		UMaterialExpressionMultiply* SpecularMultiply = AddMultiply(Material, -620, 1080);
-		SpecularMultiply->A.Connect(0, SpecularTex);
+		PBRARMAddMaterialComment(Material, TEXT("Displacement - Experimental"), FLinearColor(0.32f, 0.02f, 0.50f, 1.0f), 680, PBRARMLayout.Displacement.Y - 80, 1180, PBRARMLayout.Displacement.Height);
+	}
+	if (bUseTypeSpecificGraph)
+	{
+		const int32 TypeSpecificHeight = MaterialType == EPBRMaterialType::Water
+			? 900
+			: (MaterialType == EPBRMaterialType::Glass ? 1780 : 360);
+		PBRARMAddMaterialComment(Material, TEXT("Type Specific"), FLinearColor(0.12f, 0.18f, 0.20f, 1.0f), 620, PBRARMLayout.TypeSpecific.Y - 80, 1360, TypeSpecificHeight);
+	}
+	PBRARMAddMaterialComment(Material, TEXT("Material Output"), FLinearColor(0.04f, 0.04f, 0.04f, 1.0f), PBRARMLayout.OutputUseX - 70, PBRARMLayout.Output.Y - 80, 390, 1240);
+	Material->EditorX = PBRARMLayout.OutputUseX + 260;
+	Material->EditorY = PBRARMLayout.Output.Y;
+
+	UMaterialExpression* SharedUV = PBRARMBuildSimpleUV(Material, GroupUV);
+	UMaterialExpressionNamedRerouteDeclaration* SharedUVDeclaration = PBRARMAddNamedRerouteDeclaration(Material, TEXT("UVs"), SharedUV, 0, FLinearColor(0.20f, 0.56f, 0.58f, 1.0f), -820, -230);
+	constexpr int32 UVLeftX = -3580;
+	constexpr int32 UVRightX = -2260;
+	constexpr int32 UVTopY = 260;
+	constexpr int32 UVRowGap = 660;
+	UMaterialExpression* BaseColorUV = bUseGlassGraph ? SharedUV : PBRARMBuildChannelUV(Material, SharedUVDeclaration, SharedUV, TEXT("基础色"), GroupUV, 100, UVLeftX, UVTopY, PBRARMLayout.InputX - 180, PBRARMLayout.BaseColor.Y + 120);
+	UMaterialExpression* NormalUV = bUseGlassGraph ? SharedUV : PBRARMBuildChannelUV(Material, SharedUVDeclaration, SharedUV, TEXT("法线"), GroupUV, 200, UVLeftX, UVTopY + UVRowGap, PBRARMLayout.InputX - 180, PBRARMLayout.Normal.Y + 120);
+	UMaterialExpression* RoughnessUV = bUseGlassGraph ? SharedUV : PBRARMBuildChannelUV(Material, SharedUVDeclaration, SharedUV, TEXT("粗糙度"), GroupUV, 300, UVLeftX, UVTopY + UVRowGap * 2, PBRARMLayout.InputX - 180, PBRARMLayout.Scalar.Y + 140);
+	UMaterialExpression* SpecularUV = bUseGlassGraph ? SharedUV : PBRARMBuildChannelUV(Material, SharedUVDeclaration, SharedUV, TEXT("高光"), GroupUV, 400, UVRightX, UVTopY, PBRARMLayout.InputX - 180, PBRARMLayout.Scalar.Y + 520);
+	UMaterialExpression* MetallicUV = bUseMetallicGraph ? (bUseGlassGraph ? SharedUV : PBRARMBuildChannelUV(Material, SharedUVDeclaration, SharedUV, TEXT("金属度"), GroupUV, 500, UVRightX, UVTopY + UVRowGap, PBRARMLayout.InputX - 180, PBRARMLayout.Scalar.Y + 900)) : nullptr;
+	UMaterialExpression* AOUV = bUseGlassGraph ? SharedUV : PBRARMBuildChannelUV(Material, SharedUVDeclaration, SharedUV, TEXT("环境遮蔽"), GroupUV, 600, UVRightX, bUseMetallicGraph ? UVTopY + UVRowGap * 2 : UVTopY + UVRowGap, PBRARMLayout.InputX - 180, PBRARMLayout.Scalar.Y + 1280);
+	UMaterialExpression* OpacityUV = bUseOpacityGraph ? (bUseGlassGraph ? SharedUV : PBRARMBuildChannelUV(Material, SharedUVDeclaration, SharedUV, TEXT("透明"), GroupUV, 700, UVRightX, UVTopY + UVRowGap * 3, PBRARMLayout.InputX - 180, PBRARMLayout.Opacity.Y + 140)) : nullptr;
+	UMaterialExpression* HeightUV = bUseDisplacementGraph ? PBRARMBuildChannelUV(Material, SharedUVDeclaration, SharedUV, TEXT("高度"), GroupUV, 800, UVLeftX, UVTopY + UVRowGap * 3, PBRARMLayout.MidX - 180, PBRARMLayout.Displacement.Y + 120) : nullptr;
+	UMaterialExpression* EmissiveUV = bUseEmissiveGraph ? PBRARMBuildChannelUV(Material, SharedUVDeclaration, SharedUV, TEXT("自发光"), GroupUV, 900, UVLeftX, UVTopY + UVRowGap * 3, PBRARMLayout.InputX - 180, PBRARMLayout.Emissive.Y + 140) : nullptr;
+	UMaterialExpression* WaterRippleUV = bUseWaterGraph ? PBRARMBuildChannelUV(Material, SharedUVDeclaration, SharedUV, TEXT("水纹"), GroupUV, 1000, UVLeftX, UVTopY + UVRowGap * 3, PBRARMLayout.SpecialInputX - 180, PBRARMLayout.TypeSpecific.Y + 520) : nullptr;
+
+	const int32 BaseY = PBRARMLayout.BaseColor.Y;
+	const int32 NormalY = PBRARMLayout.Normal.Y;
+	const int32 RoughnessY = PBRARMLayout.Scalar.Y + 40;
+	const int32 SpecularY = PBRARMLayout.Scalar.Y + 420;
+	const int32 MetallicY = PBRARMLayout.Scalar.Y + 800;
+	const int32 AOY = PBRARMLayout.Scalar.Y + 1180;
+	const int32 OpacityY = PBRARMLayout.Opacity.Y + 40;
+	const int32 EmissiveY = PBRARMLayout.Emissive.Y + 40;
+	const int32 DisplacementY = PBRARMLayout.Displacement.Y + 40;
+	const int32 SpecialY = PBRARMLayout.TypeSpecific.Y + 40;
+	const int32 OutputY = PBRARMLayout.Output.Y + 80;
+
+	UMaterialExpressionTextureSampleParameter2D* BaseTex = AddTextureParameter(Material, FPBRMaterialParameters::BaseColorTexture, GroupBaseColor, 10, PBRARMLayout.InputX, BaseY + 80);
+	BaseTex->Coordinates.Connect(0, BaseColorUV);
+	UMaterialExpressionVectorParameter* BaseTint = AddVectorParameter(Material, FPBRMaterialParameters::BaseColorTint, GroupBaseColor, 20, FLinearColor::White, PBRARMLayout.InputX, BaseY + 220);
+	UMaterialExpressionScalarParameter* BaseIntensity = AddScalarParameter(Material, FPBRMaterialParameters::BaseColorIntensity, GroupBaseColor, 30, 1.0f, PBRARMLayout.InputX, BaseY + 340);
+	UMaterialExpression* BaseTextureIntensity = nullptr;
+	UMaterialExpression* BaseSolidIntensity = nullptr;
+	if (UMaterialExpressionMaterialFunctionCall* BaseColorFunction = AddMaterialFunctionCall(Material, TEXT("/Game/PBRStudio/Functions/02_Surface/MF_PBRStudio_BaseColor.MF_PBRStudio_BaseColor"), PBRARMLayout.FunctionX, BaseY + 120))
+	{
+		const bool bConnected =
+			ConnectFunctionInputByName(BaseColorFunction, TEXT("贴图颜色"), BaseTex) &
+			ConnectFunctionInputByName(BaseColorFunction, TEXT("调色"), BaseTint) &
+			ConnectFunctionInputByName(BaseColorFunction, TEXT("强度"), BaseIntensity);
+		if (bConnected)
+		{
+			BaseTextureIntensity = BaseColorFunction;
+			BaseSolidIntensity = BaseColorFunction;
+		}
+	}
+	if (!BaseTextureIntensity || !BaseSolidIntensity)
+	{
+		UMaterialExpressionMultiply* BaseTintMultiply = AddMultiply(Material, PBRARMLayout.MaskX, BaseY + 100);
+		BaseTintMultiply->A.Connect(0, BaseTex);
+		BaseTintMultiply->B.Connect(0, BaseTint);
+		UMaterialExpressionMultiply* FallbackBaseTextureIntensity = AddMultiply(Material, PBRARMLayout.FunctionX, BaseY + 100);
+		FallbackBaseTextureIntensity->A.Connect(0, BaseTintMultiply);
+		FallbackBaseTextureIntensity->B.Connect(0, BaseIntensity);
+		UMaterialExpressionMultiply* FallbackBaseSolidIntensity = AddMultiply(Material, PBRARMLayout.FunctionX, BaseY + 280);
+		FallbackBaseSolidIntensity->A.Connect(0, BaseTint);
+		FallbackBaseSolidIntensity->B.Connect(0, BaseIntensity);
+		BaseTextureIntensity = FallbackBaseTextureIntensity;
+		BaseSolidIntensity = FallbackBaseSolidIntensity;
+	}
+	UMaterialExpressionStaticSwitchParameter* UseBaseTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseBaseColorTexture, GroupBaseColor, 40, false, PBRARMLayout.SwitchX, BaseY + 180);
+	UseBaseTexture->A.Connect(0, BaseTextureIntensity);
+	UseBaseTexture->B.Connect(BaseTextureIntensity == BaseSolidIntensity ? 1 : 0, BaseSolidIntensity);
+	UMaterialExpression* BaseColorOutput = UseBaseTexture;
+
+	UMaterialExpressionTextureSampleParameter2D* NormalTex = AddTextureParameter(Material, FPBRMaterialParameters::NormalTexture, GroupNormal, 10, PBRARMLayout.InputX, NormalY + 80, EMaterialSamplerType::SAMPLERTYPE_Normal);
+	NormalTex->Coordinates.Connect(0, NormalUV);
+	UMaterialExpressionScalarParameter* NormalStrength = AddScalarParameter(Material, FPBRMaterialParameters::NormalStrength, GroupNormal, 20, 1.0f, PBRARMLayout.InputX, NormalY + 220);
+	UMaterialExpression* NormalOutput = nullptr;
+	if (UMaterialExpressionMaterialFunctionCall* NormalFunction = AddMaterialFunctionCall(Material, TEXT("/Game/PBRStudio/Functions/02_Surface/MF_PBRStudio_NormalStrength.MF_PBRStudio_NormalStrength"), PBRARMLayout.FunctionX, NormalY + 120))
+	{
+		const bool bConnected =
+			ConnectFunctionInputByName(NormalFunction, TEXT("法线"), NormalTex) &
+			ConnectFunctionInputByName(NormalFunction, TEXT("强度"), NormalStrength);
+		if (bConnected)
+		{
+			NormalOutput = NormalFunction;
+		}
+	}
+	if (!NormalOutput)
+	{
+		UMaterialExpressionMultiply* NormalMultiply = AddMultiply(Material, PBRARMLayout.FunctionX, NormalY + 120);
+		NormalMultiply->A.Connect(0, NormalTex);
+		NormalMultiply->B.Connect(0, NormalStrength);
+		NormalOutput = NormalMultiply;
+	}
+	UMaterialExpressionConstant3Vector* FlatNormal = AddConstant3Vector(Material, FLinearColor(0.0f, 0.0f, 1.0f), PBRARMLayout.FunctionX, NormalY + 260);
+	UMaterialExpressionStaticSwitchParameter* UseNormalTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseNormalTexture, GroupNormal, 30, false, PBRARMLayout.SwitchX, NormalY + 180);
+	UseNormalTexture->A.Connect(0, NormalOutput);
+	UseNormalTexture->B.Connect(0, FlatNormal);
+	UMaterialExpression* NormalMaterialOutput = UseNormalTexture;
+
+	UMaterialExpressionTextureSampleParameter2D* RoughnessTex = AddTextureParameter(Material, FPBRMaterialParameters::RoughnessTexture, GroupRoughness, 10, PBRARMLayout.InputX, RoughnessY, EMaterialSamplerType::SAMPLERTYPE_Masks);
+	RoughnessTex->Coordinates.Connect(0, RoughnessUV);
+	UMaterialExpressionComponentMask* RoughnessMask = PBRARMAddTextureMask(Material, RoughnessTex, true, false, false, false, PBRARMLayout.MaskX, RoughnessY);
+	UMaterialExpressionScalarParameter* RoughnessMultiplier = AddScalarParameter(Material, FPBRMaterialParameters::RoughnessMultiplier, GroupRoughness, 20, 1.0f, PBRARMLayout.InputX, RoughnessY + 140);
+	UMaterialExpressionScalarParameter* RoughnessValue = AddScalarParameter(Material, FPBRMaterialParameters::RoughnessValue, GroupRoughness, 30, 0.5f, PBRARMLayout.InputX, RoughnessY + 260);
+	UMaterialExpression* RoughnessTextureOutput = nullptr;
+	UMaterialExpression* RoughnessSolidOutput = nullptr;
+	if (UMaterialExpressionMaterialFunctionCall* RoughnessFunction = AddMaterialFunctionCall(Material, TEXT("/Game/PBRStudio/Functions/02_Surface/MF_PBRStudio_ScalarTexture.MF_PBRStudio_ScalarTexture"), PBRARMLayout.FunctionX, RoughnessY + 40))
+	{
+		const bool bInputsConnected =
+			ConnectFunctionInputByName(RoughnessFunction, TEXT("贴图值"), RoughnessMask) &
+			ConnectFunctionInputByName(RoughnessFunction, TEXT("倍增"), RoughnessMultiplier) &
+			ConnectFunctionInputByName(RoughnessFunction, TEXT("固定值"), RoughnessValue);
+		if (bInputsConnected)
+		{
+			RoughnessTextureOutput = RoughnessFunction;
+			RoughnessSolidOutput = RoughnessFunction;
+		}
+	}
+	if (!RoughnessTextureOutput)
+	{
+		UMaterialExpressionMultiply* RoughnessMultiply = AddMultiply(Material, PBRARMLayout.FunctionX, RoughnessY + 40);
+		RoughnessMultiply->A.Connect(0, RoughnessMask);
+		RoughnessMultiply->B.Connect(0, RoughnessMultiplier);
+		RoughnessTextureOutput = RoughnessMultiply;
+		RoughnessSolidOutput = RoughnessValue;
+	}
+	UMaterialExpressionStaticSwitchParameter* UseRoughnessTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseRoughnessTexture, GroupRoughness, 40, false, PBRARMLayout.SwitchX, RoughnessY + 120);
+	UseRoughnessTexture->A.Connect(0, RoughnessTextureOutput);
+	UseRoughnessTexture->B.Connect(RoughnessTextureOutput == RoughnessSolidOutput ? 1 : 0, RoughnessSolidOutput);
+	UMaterialExpression* RoughnessMaterialOutput = UseRoughnessTexture;
+
+	UMaterialExpressionTextureSampleParameter2D* SpecularTex = AddTextureParameter(Material, FPBRMaterialParameters::SpecularTexture, GroupRoughness, 50, PBRARMLayout.InputX, SpecularY, EMaterialSamplerType::SAMPLERTYPE_Masks);
+	SpecularTex->Coordinates.Connect(0, SpecularUV);
+	UMaterialExpressionComponentMask* SpecularMask = PBRARMAddTextureMask(Material, SpecularTex, true, false, false, false, PBRARMLayout.MaskX, SpecularY);
+	UMaterialExpressionScalarParameter* SpecularLevel = AddScalarParameter(Material, FPBRMaterialParameters::SpecularLevel, GroupRoughness, 60, 0.5f, PBRARMLayout.InputX, SpecularY + 140);
+	UMaterialExpression* SpecularTextureOutput = nullptr;
+	UMaterialExpression* SpecularSolidOutput = nullptr;
+	if (UMaterialExpressionMaterialFunctionCall* SpecularFunction = AddMaterialFunctionCall(Material, TEXT("/Game/PBRStudio/Functions/02_Surface/MF_PBRStudio_ScalarTexture.MF_PBRStudio_ScalarTexture"), PBRARMLayout.FunctionX, SpecularY + 40))
+	{
+		const bool bInputsConnected =
+			ConnectFunctionInputByName(SpecularFunction, TEXT("贴图值"), SpecularMask) &
+			ConnectFunctionInputByName(SpecularFunction, TEXT("倍增"), SpecularLevel) &
+			ConnectFunctionInputByName(SpecularFunction, TEXT("固定值"), SpecularLevel);
+		if (bInputsConnected)
+		{
+			SpecularTextureOutput = SpecularFunction;
+			SpecularSolidOutput = SpecularFunction;
+		}
+	}
+	if (!SpecularTextureOutput)
+	{
+		UMaterialExpressionMultiply* SpecularMultiply = AddMultiply(Material, PBRARMLayout.FunctionX, SpecularY + 40);
+		SpecularMultiply->A.Connect(0, SpecularMask);
 		SpecularMultiply->B.Connect(0, SpecularLevel);
-		UseSpecularTexture->A.Connect(0, SpecularMultiply);
-		UseSpecularTexture->B.Connect(0, SpecularLevel);
-		EditorData->Specular.Connect(0, UseSpecularTexture);
+		SpecularTextureOutput = SpecularMultiply;
+		SpecularSolidOutput = SpecularLevel;
+	}
+	UMaterialExpressionStaticSwitchParameter* UseSpecularTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseSpecularTexture, GroupRoughness, 70, false, PBRARMLayout.SwitchX, SpecularY + 120);
+	UseSpecularTexture->A.Connect(0, SpecularTextureOutput);
+	UseSpecularTexture->B.Connect(SpecularTextureOutput == SpecularSolidOutput ? 1 : 0, SpecularSolidOutput);
+	UMaterialExpression* SpecularMaterialOutput = UseSpecularTexture;
+
+	UMaterialExpression* MetallicMaterialOutput = nullptr;
+	if (bUseMetallicGraph)
+	{
+		UMaterialExpressionTextureSampleParameter2D* MetallicTex = AddTextureParameter(Material, FPBRMaterialParameters::MetallicTexture, GroupMetallic, 10, PBRARMLayout.InputX, MetallicY, EMaterialSamplerType::SAMPLERTYPE_Masks);
+		MetallicTex->Coordinates.Connect(0, MetallicUV);
+		UMaterialExpressionComponentMask* MetallicMask = PBRARMAddTextureMask(Material, MetallicTex, true, false, false, false, PBRARMLayout.MaskX, MetallicY);
+		UMaterialExpressionScalarParameter* MetallicMultiplier = AddScalarParameter(Material, FPBRMaterialParameters::MetallicMultiplier, GroupMetallic, 20, 0.0f, PBRARMLayout.InputX, MetallicY + 140);
+		UMaterialExpressionScalarParameter* MetallicValue = AddScalarParameter(Material, FPBRMaterialParameters::MetallicValue, GroupMetallic, 30, 0.0f, PBRARMLayout.InputX, MetallicY + 260);
+		UMaterialExpression* MetallicTextureOutput = nullptr;
+		UMaterialExpression* MetallicSolidOutput = nullptr;
+		if (UMaterialExpressionMaterialFunctionCall* MetallicFunction = AddMaterialFunctionCall(Material, TEXT("/Game/PBRStudio/Functions/02_Surface/MF_PBRStudio_ScalarTexture.MF_PBRStudio_ScalarTexture"), PBRARMLayout.FunctionX, MetallicY + 40))
+		{
+			const bool bInputsConnected =
+				ConnectFunctionInputByName(MetallicFunction, TEXT("贴图值"), MetallicMask) &
+				ConnectFunctionInputByName(MetallicFunction, TEXT("倍增"), MetallicMultiplier) &
+				ConnectFunctionInputByName(MetallicFunction, TEXT("固定值"), MetallicValue);
+			if (bInputsConnected)
+			{
+				MetallicTextureOutput = MetallicFunction;
+				MetallicSolidOutput = MetallicFunction;
+			}
+		}
+		if (!MetallicTextureOutput)
+		{
+			UMaterialExpressionMultiply* MetallicMultiply = AddMultiply(Material, PBRARMLayout.FunctionX, MetallicY + 40);
+			MetallicMultiply->A.Connect(0, MetallicMask);
+			MetallicMultiply->B.Connect(0, MetallicMultiplier);
+			MetallicTextureOutput = MetallicMultiply;
+			MetallicSolidOutput = MetallicValue;
+		}
+		UMaterialExpressionStaticSwitchParameter* UseMetallicTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseMetallicTexture, GroupMetallic, 40, false, PBRARMLayout.SwitchX, MetallicY + 120);
+		UseMetallicTexture->A.Connect(0, MetallicTextureOutput);
+		UseMetallicTexture->B.Connect(MetallicTextureOutput == MetallicSolidOutput ? 1 : 0, MetallicSolidOutput);
+		MetallicMaterialOutput = UseMetallicTexture;
+	}
+	else
+	{
+		MetallicMaterialOutput = AddConstant(Material, 0.0f, PBRARMLayout.SwitchX, MetallicY + 120);
 	}
 
-	UMaterialExpression* OpacityOutputForThinTranslucent = nullptr;
-	if (UsesOpacity(MaterialType))
+	UMaterialExpressionTextureSampleParameter2D* AOTex = AddTextureParameter(Material, FPBRMaterialParameters::AOTexture, GroupOpacity, 20, PBRARMLayout.InputX, AOY, EMaterialSamplerType::SAMPLERTYPE_Masks);
+	AOTex->Coordinates.Connect(0, AOUV);
+	UMaterialExpressionComponentMask* AOMask = PBRARMAddTextureMask(Material, AOTex, true, false, false, false, PBRARMLayout.MaskX, AOY);
+	UMaterialExpressionStaticSwitchParameter* UseAOTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseAOTexture, GroupOpacity, 30, false, PBRARMLayout.SwitchX, AOY);
+	UMaterialExpressionConstant* FullAO = AddConstant(Material, 1.0f, PBRARMLayout.MaskX, AOY - 140);
+	UseAOTexture->A.Connect(0, AOMask);
+	UseAOTexture->B.Connect(0, FullAO);
+	UMaterialExpression* AOMaterialOutput = UseAOTexture;
+
+	UMaterialExpressionStaticSwitchParameter* UseOpacityTexture = nullptr;
+	UMaterialExpression* OpacityMaterialOutput = nullptr;
+	if (bUseOpacityGraph)
 	{
-		UMaterialExpressionTextureSampleParameter2D* OpacityTex = AddTextureParameter(Material, FPBRMaterialParameters::OpacityTexture, GroupOpacity, 10, -250, 420, EMaterialSamplerType::SAMPLERTYPE_Masks);
-		const float DefaultOpacity = GetTemplateDefaultOpacity(MaterialType);
-		UMaterialExpressionScalarParameter* OpacityValue = AddScalarParameter(Material, FPBRMaterialParameters::Opacity, GroupOpacity, 20, DefaultOpacity, -250, 560);
-		UMaterialExpressionStaticSwitchParameter* UseOpacityTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseOpacityTexture, GroupOpacity, 30, true, 240, 500);
-		UMaterialExpressionComponentMask* OpacityRed = AddMask(Material, -20, 430, true, false, false);
-		OpacityRed->Input.Connect(0, OpacityTex);
-		UMaterialExpressionMax* OpacityMask = AddMax(Material, 180, 450);
-		OpacityMask->A.Connect(0, OpacityRed);
-		OpacityMask->B.Connect(4, OpacityTex);
-		UMaterialExpressionMaterialFunctionCall* OpacityFunction = AddMaterialFunctionCall(
-			Material,
-			TEXT("/Game/PBRStudio/Functions/04_Mask/MF_PBRStudio_ScalarTextureSwitch.MF_PBRStudio_ScalarTextureSwitch"),
-			400,
-			500);
-		if (OpacityFunction &&
-			ConnectFunctionInputByIndex(OpacityFunction, 0, OpacityMask) &&
-			ConnectFunctionInputByIndex(OpacityFunction, 1, OpacityValue) &&
-			ConnectFunctionInputByIndex(OpacityFunction, 2, OpacityValue))
+		float DefaultOpacity = 1.0f;
+		if (MaterialType == EPBRMaterialType::Glass)
 		{
-			UseOpacityTexture->A.Connect(0, OpacityFunction);
-			UseOpacityTexture->B.Connect(0, OpacityValue);
+			DefaultOpacity = 0.35f;
+		}
+		else if (MaterialType == EPBRMaterialType::Transparent)
+		{
+			DefaultOpacity = 0.55f;
+		}
+		else if (MaterialType == EPBRMaterialType::Water)
+		{
+			DefaultOpacity = PBRARMDefaultWaterOpacity;
+		}
+		UMaterialExpressionScalarParameter* OpacityValue = AddScalarParameter(Material, FPBRMaterialParameters::Opacity, GroupOpacity, 10, DefaultOpacity, PBRARMLayout.InputX, OpacityY);
+		UMaterialExpressionTextureSampleParameter2D* OpacityTex = AddTextureParameter(Material, FPBRMaterialParameters::OpacityTexture, GroupOpacity, 40, PBRARMLayout.InputX, OpacityY + 180, EMaterialSamplerType::SAMPLERTYPE_Masks);
+		OpacityTex->Coordinates.Connect(0, OpacityUV);
+		UMaterialExpressionComponentMask* OpacityMask = PBRARMAddTextureMask(Material, OpacityTex, true, false, false, false, PBRARMLayout.MaskX, OpacityY + 180);
+		UMaterialExpressionMultiply* OpacityTextureMultiply = AddMultiply(Material, PBRARMLayout.FunctionX, OpacityY + 160);
+		OpacityTextureMultiply->A.Connect(0, OpacityValue);
+		OpacityTextureMultiply->B.Connect(0, OpacityMask);
+		UseOpacityTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseOpacityTexture, GroupOpacity, 50, false, PBRARMLayout.SwitchX, OpacityY + 120);
+		UseOpacityTexture->A.Connect(0, OpacityTextureMultiply);
+		UseOpacityTexture->B.Connect(0, OpacityValue);
+		OpacityMaterialOutput = UseOpacityTexture;
+	}
+
+	UMaterialExpression* EmissiveMaterialOutput = nullptr;
+	if (bUseEmissiveGraph)
+	{
+		UMaterialExpressionVectorParameter* EmissiveColor = AddVectorParameter(Material, FPBRMaterialParameters::EmissiveColor, GroupEmissive, 10, FLinearColor::Black, PBRARMLayout.InputX, EmissiveY);
+		UMaterialExpressionScalarParameter* EmissiveIntensity = AddScalarParameter(Material, FPBRMaterialParameters::EmissiveIntensity, GroupEmissive, 20, 0.0f, PBRARMLayout.InputX, EmissiveY + 120);
+		AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseEmissiveTemperature, GroupEmissive, 30, false, PBRARMLayout.InputX, EmissiveY + 240);
+		AddScalarParameter(Material, FPBRMaterialParameters::EmissiveTemperatureKelvin, GroupEmissive, 40, 6500.0f, PBRARMLayout.InputX, EmissiveY + 360);
+		UMaterialExpressionTextureSampleParameter2D* EmissiveTex = AddTextureParameter(Material, FPBRMaterialParameters::EmissiveTexture, GroupEmissive, 50, PBRARMLayout.InputX, EmissiveY + 480);
+		EmissiveTex->Coordinates.Connect(0, EmissiveUV);
+		UMaterialExpressionMultiply* EmissiveColorIntensity = AddMultiply(Material, PBRARMLayout.FunctionX, EmissiveY + 60);
+		EmissiveColorIntensity->A.Connect(0, EmissiveColor);
+		EmissiveColorIntensity->B.Connect(0, EmissiveIntensity);
+		UMaterialExpressionMultiply* EmissiveTextureIntensity = AddMultiply(Material, PBRARMLayout.FunctionX, EmissiveY + 420);
+		EmissiveTextureIntensity->A.Connect(0, EmissiveTex);
+		EmissiveTextureIntensity->B.Connect(0, EmissiveIntensity);
+		UMaterialExpressionStaticSwitchParameter* UseEmissiveTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseEmissiveTexture, GroupEmissive, 60, false, PBRARMLayout.SwitchX, EmissiveY + 240);
+		UseEmissiveTexture->A.Connect(0, EmissiveTextureIntensity);
+		UseEmissiveTexture->B.Connect(0, EmissiveColorIntensity);
+		EmissiveMaterialOutput = UseEmissiveTexture;
+	}
+
+	UMaterialExpression* DisplacementMaterialOutput = nullptr;
+	if (bUseDisplacementGraph)
+	{
+		UMaterialExpressionScalarParameter* HeightStrength = AddScalarParameter(Material, FPBRMaterialParameters::HeightStrength, GroupSpecial, 20, 0.0f, PBRARMLayout.SpecialInputX, DisplacementY + 180);
+		UMaterialExpressionTextureSampleParameter2D* HeightTex = AddTextureParameter(Material, FPBRMaterialParameters::HeightTexture, GroupSpecial, 21, PBRARMLayout.SpecialInputX, DisplacementY, EMaterialSamplerType::SAMPLERTYPE_Masks);
+		HeightTex->Coordinates.Connect(0, HeightUV);
+		UMaterialExpressionComponentMask* HeightMask = PBRARMAddTextureMask(Material, HeightTex, true, false, false, false, PBRARMLayout.SpecialFunctionX - 260, DisplacementY);
+		UMaterialExpression* HeightOffset = nullptr;
+		if (UMaterialExpressionMaterialFunctionCall* HeightOffsetFunction = AddMaterialFunctionCall(Material, TEXT("/Game/PBRStudio/Functions/02_Surface/MF_PBRStudio_HeightOffset.MF_PBRStudio_HeightOffset"), PBRARMLayout.SpecialFunctionX, DisplacementY + 40))
+		{
+			const bool bConnected =
+				ConnectFunctionInputByName(HeightOffsetFunction, TEXT("高度值"), HeightMask) &
+				ConnectFunctionInputByName(HeightOffsetFunction, TEXT("强度"), HeightStrength);
+			if (bConnected)
+			{
+				HeightOffset = HeightOffsetFunction;
+			}
+		}
+		if (!HeightOffset)
+		{
+			HeightOffset = PBRARMAddCenteredHeightOffset(Material, HeightMask, HeightStrength, PBRARMLayout.SpecialFunctionX, DisplacementY + 40);
+		}
+		UMaterialExpressionConstant* ZeroHeightOffset = AddConstant(Material, 0.0f, PBRARMLayout.SpecialFunctionX, DisplacementY + 220);
+		UMaterialExpressionStaticSwitchParameter* UseHeightTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseHeightTexture, GroupSpecial, 22, false, PBRARMLayout.SpecialResultX - 220, DisplacementY + 100);
+		UseHeightTexture->A.Connect(0, HeightOffset);
+		UseHeightTexture->B.Connect(0, ZeroHeightOffset);
+		UMaterialExpressionVertexNormalWS* VertexNormalWS = NewObject<UMaterialExpressionVertexNormalWS>(Material);
+		VertexNormalWS->MaterialExpressionEditorX = PBRARMLayout.SpecialResultX - 220;
+		VertexNormalWS->MaterialExpressionEditorY = DisplacementY + 260;
+		Material->GetExpressionCollection().AddExpression(VertexNormalWS);
+		UMaterialExpressionMultiply* HeightWPO = AddMultiply(Material, PBRARMLayout.SpecialResultX, DisplacementY + 180);
+		HeightWPO->A.Connect(0, VertexNormalWS);
+		HeightWPO->B.Connect(0, UseHeightTexture);
+		DisplacementMaterialOutput = HeightWPO;
+	}
+
+	UMaterialExpression* RefractionMaterialOutput = nullptr;
+	int32 RefractionMaterialOutputIndex = 0;
+	if (MaterialType == EPBRMaterialType::Fabric)
+	{
+		UMaterialExpressionVectorParameter* FabricFuzzColor = AddVectorParameter(Material, FPBRMaterialParameters::FabricFuzzColor, GroupSpecial, 60, FLinearColor::White, PBRARMLayout.SpecialInputX, SpecialY);
+		UMaterialExpressionScalarParameter* FabricFuzzStrength = AddScalarParameter(Material, FPBRMaterialParameters::FabricFuzzStrength, GroupSpecial, 70, 0.0f, PBRARMLayout.SpecialInputX, SpecialY + 140);
+		UMaterialExpressionFresnel* FuzzFresnel = PBRARMAddFresnel(Material, 3.0f, 0.02f, PBRARMLayout.SpecialFunctionX, SpecialY);
+		UMaterialExpressionMultiply* FuzzMask = AddMultiply(Material, PBRARMLayout.SpecialResultX - 300, SpecialY + 40);
+		FuzzMask->A.Connect(0, FuzzFresnel);
+		FuzzMask->B.Connect(0, FabricFuzzStrength);
+		UMaterialExpressionMultiply* FuzzColor = AddMultiply(Material, PBRARMLayout.SpecialResultX - 80, SpecialY + 40);
+		FuzzColor->A.Connect(0, FabricFuzzColor);
+		FuzzColor->B.Connect(0, FuzzMask);
+		UMaterialExpressionAdd* FabricBase = AddAdd(Material, PBRARMLayout.SpecialResultX + 140, SpecialY);
+		FabricBase->A.Connect(0, BaseColorOutput);
+		FabricBase->B.Connect(0, FuzzColor);
+		BaseColorOutput = FabricBase;
+		EditorData->SubsurfaceColor.Connect(0, FabricFuzzColor);
+	}
+	else if (MaterialType == EPBRMaterialType::Leather)
+	{
+		UMaterialExpressionScalarParameter* ClearCoat = AddScalarParameter(Material, FPBRMaterialParameters::ClearCoat, GroupSpecial, 30, 0.0f, PBRARMLayout.SpecialInputX, SpecialY);
+		UMaterialExpressionScalarParameter* ClearCoatRoughness = AddScalarParameter(Material, FPBRMaterialParameters::ClearCoatRoughness, GroupSpecial, 40, 0.25f, PBRARMLayout.SpecialInputX, SpecialY + 140);
+		EditorData->ClearCoat.Connect(0, ClearCoat);
+		EditorData->ClearCoatRoughness.Connect(0, ClearCoatRoughness);
+	}
+	else if (MaterialType == EPBRMaterialType::Metal)
+	{
+		UMaterialExpressionScalarParameter* Anisotropy = AddScalarParameter(Material, FPBRMaterialParameters::Anisotropy, GroupSpecial, 50, 0.0f, PBRARMLayout.SpecialInputX, SpecialY);
+		UMaterialExpressionScalarParameter* FlakeScale = AddScalarParameter(Material, FPBRMaterialParameters::FlakeScale, GroupSpecial, 140, 35.0f, PBRARMLayout.SpecialInputX, SpecialY + 140);
+		UMaterialExpressionScalarParameter* FlakeIntensity = AddScalarParameter(Material, FPBRMaterialParameters::FlakeIntensity, GroupSpecial, 150, 0.0f, PBRARMLayout.SpecialInputX, SpecialY + 260);
+		EditorData->Anisotropy.Connect(0, Anisotropy);
+		UMaterialExpressionCustom* FlakeMask = PBRARMAddFlakeMask(Material, MetallicUV, FlakeScale, PBRARMLayout.SpecialFunctionX, SpecialY + 60);
+		UMaterialExpressionMultiply* FlakeAmount = AddMultiply(Material, PBRARMLayout.SpecialResultX - 300, SpecialY + 100);
+		FlakeAmount->A.Connect(0, FlakeMask);
+		FlakeAmount->B.Connect(0, FlakeIntensity);
+		UMaterialExpressionConstant3Vector* FlakeColor = AddConstant3Vector(Material, FLinearColor::White, PBRARMLayout.SpecialResultX - 300, SpecialY + 240);
+		UMaterialExpressionMultiply* FlakeTint = AddMultiply(Material, PBRARMLayout.SpecialResultX - 80, SpecialY + 120);
+		FlakeTint->A.Connect(0, FlakeColor);
+		FlakeTint->B.Connect(0, FlakeAmount);
+		UMaterialExpressionAdd* MetalBase = AddAdd(Material, PBRARMLayout.SpecialResultX + 140, SpecialY + 80);
+		MetalBase->A.Connect(0, BaseColorOutput);
+		MetalBase->B.Connect(0, FlakeTint);
+		BaseColorOutput = MetalBase;
+	}
+	else if (MaterialType == EPBRMaterialType::Water)
+	{
+		UMaterialExpressionScalarParameter* RefractionAmount = AddScalarParameter(Material, FPBRMaterialParameters::RefractionAmount, GroupSpecial, 80, 1.45f, PBRARMLayout.SpecialInputX, SpecialY);
+		UMaterialExpressionVectorParameter* WaterColor = AddVectorParameter(Material, FPBRMaterialParameters::WaterColor, GroupSpecial, 90, FLinearColor(0.12f, 0.42f, 0.72f, 1.0f), PBRARMLayout.SpecialInputX, SpecialY + 120);
+		UMaterialExpressionScalarParameter* WaterFlowSpeedU = AddScalarParameter(Material, FPBRMaterialParameters::WaterFlowSpeedU, GroupSpecial, 100, PBRARMDefaultWaterFlowSpeedU, PBRARMLayout.SpecialInputX, SpecialY + 240);
+		UMaterialExpressionScalarParameter* WaterFlowSpeedV = AddScalarParameter(Material, FPBRMaterialParameters::WaterFlowSpeedV, GroupSpecial, 110, PBRARMDefaultWaterFlowSpeedV, PBRARMLayout.SpecialInputX, SpecialY + 360);
+		UMaterialExpressionScalarParameter* WaterRippleScale = AddScalarParameter(Material, FPBRMaterialParameters::WaterRippleScale, GroupSpecial, 120, PBRARMDefaultWaterRippleScale, PBRARMLayout.SpecialInputX, SpecialY + 480);
+		UMaterialExpressionScalarParameter* WaterRippleStrength = AddScalarParameter(Material, FPBRMaterialParameters::WaterRippleStrength, GroupSpecial, 130, PBRARMDefaultWaterRippleStrength, PBRARMLayout.SpecialInputX, SpecialY + 600);
+		UMaterialExpressionLinearInterpolate* WaterTint = PBRARMAddLerp(Material, 0.45f, PBRARMLayout.SpecialFunctionX, SpecialY + 40);
+		WaterTint->A.Connect(0, BaseColorOutput);
+		WaterTint->B.Connect(0, WaterColor);
+		UMaterialExpressionTime* WaterTime = NewObject<UMaterialExpressionTime>(Material);
+		WaterTime->bIgnorePause = true;
+		WaterTime->MaterialExpressionEditorX = PBRARMLayout.SpecialFunctionX;
+		WaterTime->MaterialExpressionEditorY = SpecialY + 220;
+		Material->GetExpressionCollection().AddExpression(WaterTime);
+		UMaterialExpression* RippleMask = nullptr;
+		if (UMaterialExpressionMaterialFunctionCall* RippleMaskFunction = AddMaterialFunctionCall(Material, TEXT("/Game/PBRStudio/Functions/03_Water/MF_PBRStudio_WaterRippleMask.MF_PBRStudio_WaterRippleMask"), PBRARMLayout.SpecialFunctionX, SpecialY + 180))
+		{
+			const bool bConnected =
+				ConnectFunctionInputByName(RippleMaskFunction, TEXT("UV"), BaseColorUV) &
+				ConnectFunctionInputByName(RippleMaskFunction, TEXT("Time"), WaterTime) &
+				ConnectFunctionInputByName(RippleMaskFunction, TEXT("U 速度"), WaterFlowSpeedU) &
+				ConnectFunctionInputByName(RippleMaskFunction, TEXT("V 速度"), WaterFlowSpeedV) &
+				ConnectFunctionInputByName(RippleMaskFunction, TEXT("缩放"), WaterRippleScale) &
+				ConnectFunctionInputByName(RippleMaskFunction, TEXT("强度"), WaterRippleStrength);
+			if (bConnected)
+			{
+				RippleMask = RippleMaskFunction;
+			}
+		}
+		if (!RippleMask)
+		{
+			RippleMask = PBRARMAddWaterRippleMask(Material, BaseColorUV, WaterTime, WaterFlowSpeedU, WaterFlowSpeedV, WaterRippleScale, WaterRippleStrength, PBRARMLayout.SpecialFunctionX, SpecialY + 180);
+		}
+		UMaterialExpression* WaterFlowUV = nullptr;
+		if (UMaterialExpressionMaterialFunctionCall* WaterFlowFunction = AddMaterialFunctionCall(Material, TEXT("/Game/PBRStudio/Functions/03_Water/MF_PBRStudio_WaterFlowUV.MF_PBRStudio_WaterFlowUV"), PBRARMLayout.SpecialFunctionX, SpecialY + 460))
+		{
+			const bool bConnected =
+				ConnectFunctionInputByName(WaterFlowFunction, TEXT("UV"), WaterRippleUV) &
+				ConnectFunctionInputByName(WaterFlowFunction, TEXT("Time"), WaterTime) &
+				ConnectFunctionInputByName(WaterFlowFunction, TEXT("U 速度"), WaterFlowSpeedU) &
+				ConnectFunctionInputByName(WaterFlowFunction, TEXT("V 速度"), WaterFlowSpeedV) &
+				ConnectFunctionInputByName(WaterFlowFunction, TEXT("缩放"), WaterRippleScale);
+			if (bConnected)
+			{
+				WaterFlowUV = WaterFlowFunction;
+			}
+		}
+		if (!WaterFlowUV)
+		{
+			WaterFlowUV = PBRARMAddWaterFlowUV(Material, WaterRippleUV, WaterTime, WaterFlowSpeedU, WaterFlowSpeedV, PBRARMLayout.SpecialFunctionX, SpecialY + 460);
+		}
+		UMaterialExpressionTextureSampleParameter2D* WaterRippleTex = AddTextureParameter(Material, FPBRMaterialParameters::WaterRippleTexture, GroupSpecial, 131, PBRARMLayout.SpecialResultX, SpecialY + 500, EMaterialSamplerType::SAMPLERTYPE_Masks);
+		WaterRippleTex->Coordinates.Connect(0, WaterFlowUV);
+		UMaterialExpressionComponentMask* WaterRippleTextureMask = PBRARMAddTextureMask(Material, WaterRippleTex, true, false, false, false, PBRARMLayout.SpecialResultX + 220, SpecialY + 500);
+		UMaterialExpressionMultiply* WaterRippleTextureStrength = AddMultiply(Material, PBRARMLayout.SpecialResultX + 420, SpecialY + 500);
+		WaterRippleTextureStrength->A.Connect(0, WaterRippleTextureMask);
+		WaterRippleTextureStrength->B.Connect(0, WaterRippleStrength);
+		UMaterialExpressionStaticSwitchParameter* UseWaterRippleTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseWaterRippleTexture, GroupSpecial, 132, true, PBRARMLayout.SpecialResultX + 620, SpecialY + 420);
+		UseWaterRippleTexture->A.Connect(0, WaterRippleTextureStrength);
+		UseWaterRippleTexture->B.Connect(0, RippleMask);
+		UMaterialExpressionMultiply* RippleTint = AddMultiply(Material, PBRARMLayout.SpecialResultX + 220, SpecialY + 260);
+		RippleTint->A.Connect(0, WaterColor);
+		RippleTint->B.Connect(0, UseWaterRippleTexture);
+		UMaterialExpressionAdd* WaterRippleBase = AddAdd(Material, PBRARMLayout.SpecialResultX + 420, SpecialY + 260);
+		WaterRippleBase->A.Connect(0, WaterTint);
+		WaterRippleBase->B.Connect(0, RippleTint);
+		BaseColorOutput = WaterRippleBase;
+		UMaterialExpression* RippleNormal = nullptr;
+		if (UMaterialExpressionMaterialFunctionCall* RippleNormalFunction = AddMaterialFunctionCall(Material, TEXT("/Game/PBRStudio/Functions/03_Water/MF_PBRStudio_WaterRippleNormal.MF_PBRStudio_WaterRippleNormal"), PBRARMLayout.SpecialFunctionX, SpecialY + 680))
+		{
+			const bool bConnected =
+				ConnectFunctionInputByName(RippleNormalFunction, TEXT("UV"), NormalUV) &
+				ConnectFunctionInputByName(RippleNormalFunction, TEXT("Time"), WaterTime) &
+				ConnectFunctionInputByName(RippleNormalFunction, TEXT("U 速度"), WaterFlowSpeedU) &
+				ConnectFunctionInputByName(RippleNormalFunction, TEXT("V 速度"), WaterFlowSpeedV) &
+				ConnectFunctionInputByName(RippleNormalFunction, TEXT("缩放"), WaterRippleScale) &
+				ConnectFunctionInputByName(RippleNormalFunction, TEXT("强度"), WaterRippleStrength);
+			if (bConnected)
+			{
+				RippleNormal = RippleNormalFunction;
+			}
+		}
+		if (!RippleNormal)
+		{
+			RippleNormal = PBRARMAddWaterRippleNormal(Material, NormalUV, WaterTime, WaterFlowSpeedU, WaterFlowSpeedV, WaterRippleScale, WaterRippleStrength, PBRARMLayout.SpecialFunctionX, SpecialY + 680);
+		}
+		NormalMaterialOutput = RippleNormal;
+		RefractionMaterialOutput = RefractionAmount;
+		RefractionMaterialOutputIndex = 0;
+		EditorData->SurfaceThickness.Connect(0, WaterRippleStrength);
+	}
+	else if (MaterialType == EPBRMaterialType::Glass)
+	{
+		const FName GroupGlassColor(TEXT("00 - 颜色"));
+		const FName GroupGlassOpacity(TEXT("01 - 透明"));
+		const FName GroupGlassRefraction(TEXT("02 - 折射"));
+		const FName GroupGlassReflection(TEXT("04 - 反射"));
+		const FName GroupGlassDirt(TEXT("06 - 污渍"));
+		const FName GroupGlassDistortion(TEXT("07 - 扭曲"));
+		const FName GroupGlassFrosted(TEXT("08 - 磨砂"));
+		const FName GroupGlassShadow(TEXT("09 - 阴影"));
+		const FName GroupGlassRayTracing(TEXT("10 - 光线追踪"));
+
+		UMaterialExpressionScalarParameter* RefractionAmount = AddScalarParameter(Material, FPBRMaterialParameters::RefractionAmount, GroupGlassRefraction, 80, 1.45f, PBRARMLayout.SpecialInputX, SpecialY);
+		UMaterialExpressionScalarParameter* GlassOpacityFresnelStrength = AddScalarParameter(Material, FPBRMaterialParameters::GlassOpacityFresnelStrength, GroupGlassOpacity, 90, 0.35f, PBRARMLayout.SpecialInputX, SpecialY + 120);
+		UMaterialExpressionScalarParameter* GlassFresnelBaseReflection = AddScalarParameter(Material, FPBRMaterialParameters::GlassFresnelBaseReflection, GroupGlassReflection, 100, 0.02f, PBRARMLayout.SpecialInputX, SpecialY + 240);
+		UMaterialExpressionScalarParameter* GlassFresnelExp = AddScalarParameter(Material, FPBRMaterialParameters::GlassFresnelExp, GroupGlassReflection, 110, 5.0f, PBRARMLayout.SpecialInputX, SpecialY + 360);
+		UMaterialExpressionScalarParameter* GlassFrostedStrength = AddScalarParameter(Material, FPBRMaterialParameters::GlassFrostedStrength, GroupGlassFrosted, 120, 0.0f, PBRARMLayout.SpecialInputX, SpecialY + 480);
+		UMaterialExpressionVectorParameter* GlassAbsorptionColor = AddVectorParameter(Material, FPBRMaterialParameters::GlassAbsorptionColor, GroupGlassColor, 130, FLinearColor(0.78f, 0.92f, 1.0f, 1.0f), PBRARMLayout.SpecialInputX, SpecialY + 620);
+		UMaterialExpressionScalarParameter* GlassAbsorptionStrength = AddScalarParameter(Material, FPBRMaterialParameters::GlassAbsorptionStrength, GroupGlassColor, 140, 0.15f, PBRARMLayout.SpecialInputX, SpecialY + 740);
+		UMaterialExpressionScalarParameter* GlassEdgeTintStrength = AddScalarParameter(Material, FPBRMaterialParameters::GlassEdgeTintStrength, GroupGlassColor, 150, 0.25f, PBRARMLayout.SpecialInputX, SpecialY + 860);
+		UMaterialExpressionScalarParameter* GlassShadowOpacity = AddScalarParameter(Material, FPBRMaterialParameters::GlassShadowOpacity, GroupGlassShadow, 160, 0.55f, PBRARMLayout.SpecialInputX, SpecialY + 980);
+		UMaterialExpressionScalarParameter* GlassCausticsIntensity = AddScalarParameter(Material, FPBRMaterialParameters::GlassCausticsIntensity, GroupGlassShadow, 170, 0.0f, PBRARMLayout.SpecialFunctionX - 120, SpecialY + 720);
+		UMaterialExpressionScalarParameter* GlassCausticsScale = AddScalarParameter(Material, FPBRMaterialParameters::GlassCausticsScale, GroupGlassShadow, 180, 24.0f, PBRARMLayout.SpecialFunctionX - 120, SpecialY + 840);
+		UMaterialExpressionScalarParameter* GlassCausticsSpeed = AddScalarParameter(Material, FPBRMaterialParameters::GlassCausticsSpeed, GroupGlassShadow, 190, 0.12f, PBRARMLayout.SpecialFunctionX - 120, SpecialY + 960);
+
+		UMaterialExpressionVectorParameter* GlassDirtColor = AddVectorParameter(Material, FPBRMaterialParameters::GlassDirtColor, GroupGlassDirt, 200, FLinearColor(0.35f, 0.32f, 0.26f, 1.0f), PBRARMLayout.SpecialInputX, SpecialY + 1120);
+		UMaterialExpressionTextureSampleParameter2D* GlassDirtTex = AddTextureParameter(Material, FPBRMaterialParameters::GlassDirtTexture, GroupGlassDirt, 205, PBRARMLayout.SpecialResultX - 740, SpecialY + 1560, EMaterialSamplerType::SAMPLERTYPE_Masks);
+		GlassDirtTex->Coordinates.Connect(0, BaseColorUV);
+		UMaterialExpressionComponentMask* GlassDirtMask = PBRARMAddTextureMask(Material, GlassDirtTex, true, false, false, false, PBRARMLayout.SpecialResultX - 520, SpecialY + 1560);
+		UMaterialExpressionStaticSwitchParameter* UseGlassDirtTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseGlassDirtTexture, GroupGlassDirt, 206, false, PBRARMLayout.SpecialResultX - 520, SpecialY + 1560);
+		UMaterialExpressionConstant* FullGlassDirtMask = AddConstant(Material, 1.0f, PBRARMLayout.SpecialResultX - 520, SpecialY + 1700);
+		UseGlassDirtTexture->A.Connect(0, GlassDirtMask);
+		UseGlassDirtTexture->B.Connect(0, FullGlassDirtMask);
+		UMaterialExpressionScalarParameter* GlassDirtIntensity = AddScalarParameter(Material, FPBRMaterialParameters::GlassDirtIntensity, GroupGlassDirt, 210, 0.0f, PBRARMLayout.SpecialInputX, SpecialY + 1260);
+		UMaterialExpressionScalarParameter* GlassDirtOpacity = AddScalarParameter(Material, FPBRMaterialParameters::GlassDirtOpacity, GroupGlassDirt, 220, 0.35f, PBRARMLayout.SpecialInputX, SpecialY + 1380);
+		UMaterialExpressionScalarParameter* GlassDirtRoughness = AddScalarParameter(Material, FPBRMaterialParameters::GlassDirtRoughness, GroupGlassDirt, 230, 0.65f, PBRARMLayout.SpecialInputX, SpecialY + 1500);
+
+		UMaterialExpressionTextureSampleParameter2D* GlassDistortionTex = AddTextureParameter(Material, FPBRMaterialParameters::GlassDistortionTexture, GroupGlassDistortion, 235, PBRARMLayout.SpecialFunctionX - 340, SpecialY + 1120, EMaterialSamplerType::SAMPLERTYPE_Masks);
+		GlassDistortionTex->Coordinates.Connect(0, BaseColorUV);
+		UMaterialExpressionComponentMask* GlassDistortionMask = PBRARMAddTextureMask(Material, GlassDistortionTex, true, false, false, false, PBRARMLayout.SpecialFunctionX - 120, SpecialY + 1120);
+		UMaterialExpressionStaticSwitchParameter* UseGlassDistortionTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseGlassDistortionTexture, GroupGlassDistortion, 236, false, PBRARMLayout.SpecialResultX - 80, SpecialY + 1120);
+		UMaterialExpressionConstant* FullGlassDistortionMask = AddConstant(Material, 1.0f, PBRARMLayout.SpecialFunctionX + 120, SpecialY + 1240);
+		UseGlassDistortionTexture->A.Connect(0, GlassDistortionMask);
+		UseGlassDistortionTexture->B.Connect(0, FullGlassDistortionMask);
+		UMaterialExpressionScalarParameter* GlassDistortionIntensity = AddScalarParameter(Material, FPBRMaterialParameters::GlassDistortionIntensity, GroupGlassDistortion, 240, 0.0f, PBRARMLayout.SpecialFunctionX - 120, SpecialY + 1120);
+		UMaterialExpressionScalarParameter* GlassDistortionIORIntensity = AddScalarParameter(Material, FPBRMaterialParameters::GlassDistortionIORIntensity, GroupGlassDistortion, 250, 0.0f, PBRARMLayout.SpecialFunctionX - 120, SpecialY + 1240);
+
+		UMaterialExpressionTextureSampleParameter2D* GlassFrostedTex = AddTextureParameter(Material, FPBRMaterialParameters::GlassFrostedTexture, GroupGlassFrosted, 255, PBRARMLayout.SpecialFunctionX + 100, SpecialY + 1400, EMaterialSamplerType::SAMPLERTYPE_Masks);
+		GlassFrostedTex->Coordinates.Connect(0, BaseColorUV);
+		UMaterialExpressionComponentMask* GlassFrostedMask = PBRARMAddTextureMask(Material, GlassFrostedTex, true, false, false, false, PBRARMLayout.SpecialFunctionX + 320, SpecialY + 1400);
+		UMaterialExpressionStaticSwitchParameter* UseGlassFrostedTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseGlassFrostedTexture, GroupGlassFrosted, 256, false, PBRARMLayout.SpecialResultX - 80, SpecialY + 1400);
+		UMaterialExpressionConstant* FullGlassFrostedMask = AddConstant(Material, 1.0f, PBRARMLayout.SpecialFunctionX + 320, SpecialY + 1540);
+		UseGlassFrostedTexture->A.Connect(0, GlassFrostedMask);
+		UseGlassFrostedTexture->B.Connect(0, FullGlassFrostedMask);
+
+		UMaterialExpressionScalarParameter* GlassShadowHighlightClamp = AddScalarParameter(Material, FPBRMaterialParameters::GlassShadowHighlightClamp, GroupGlassShadow, 260, 0.85f, PBRARMLayout.SpecialFunctionX - 120, SpecialY + 1360);
+		UMaterialExpressionScalarParameter* GlassShadowNormalIntensity = AddScalarParameter(Material, FPBRMaterialParameters::GlassShadowNormalIntensity, GroupGlassShadow, 270, 0.25f, PBRARMLayout.SpecialFunctionX - 120, SpecialY + 1480);
+		UMaterialExpressionScalarParameter* GlassRTOpacity = AddScalarParameter(Material, FPBRMaterialParameters::GlassRTOpacity, GroupGlassRayTracing, 280, 0.35f, PBRARMLayout.SpecialResultX - 360, SpecialY + 1120);
+		UMaterialExpressionScalarParameter* GlassRTRefractionAmount = AddScalarParameter(Material, FPBRMaterialParameters::GlassRTRefractionAmount, GroupGlassRayTracing, 290, 1.45f, PBRARMLayout.SpecialResultX - 360, SpecialY + 1240);
+		UMaterialExpressionScalarParameter* GlassRTFrostedStrength = AddScalarParameter(Material, FPBRMaterialParameters::GlassRTFrostedStrength, GroupGlassRayTracing, 300, 0.0f, PBRARMLayout.SpecialResultX - 360, SpecialY + 1360);
+
+		UMaterialExpressionFresnel* GlassEdgeFresnel = PBRARMAddFresnel(Material, 4.0f, 0.0f, PBRARMLayout.SpecialFunctionX, SpecialY + 520);
+		UMaterialExpressionMultiply* GlassEdgeTintMask = AddMultiply(Material, PBRARMLayout.SpecialResultX - 520, SpecialY + 560);
+		GlassEdgeTintMask->A.Connect(0, GlassEdgeFresnel);
+		GlassEdgeTintMask->B.Connect(0, GlassEdgeTintStrength);
+		UMaterialExpressionMultiply* GlassAbsorptionAmount = AddMultiply(Material, PBRARMLayout.SpecialResultX - 520, SpecialY + 700);
+		GlassAbsorptionAmount->A.Connect(0, GlassAbsorptionColor);
+		GlassAbsorptionAmount->B.Connect(0, GlassAbsorptionStrength);
+		UMaterialExpressionMultiply* GlassEdgeTint = AddMultiply(Material, PBRARMLayout.SpecialResultX - 300, SpecialY + 620);
+		GlassEdgeTint->A.Connect(0, GlassAbsorptionColor);
+		GlassEdgeTint->B.Connect(0, GlassEdgeTintMask);
+		UMaterialExpressionAdd* GlassTint = AddAdd(Material, PBRARMLayout.SpecialResultX - 80, SpecialY + 640);
+		GlassTint->A.Connect(0, GlassAbsorptionAmount);
+		GlassTint->B.Connect(0, GlassEdgeTint);
+		UMaterialExpressionMultiply* GlassDirtAmount = AddMultiply(Material, PBRARMLayout.SpecialResultX - 300, SpecialY + 1560);
+		GlassDirtAmount->A.Connect(0, UseGlassDirtTexture);
+		GlassDirtAmount->B.Connect(0, GlassDirtIntensity);
+		UMaterialExpressionMultiply* GlassDirtTint = AddMultiply(Material, PBRARMLayout.SpecialResultX - 300, SpecialY + 1120);
+		GlassDirtTint->A.Connect(0, GlassDirtColor);
+		GlassDirtTint->B.Connect(0, GlassDirtAmount);
+		UMaterialExpressionAdd* GlassTintWithDirt = AddAdd(Material, PBRARMLayout.SpecialResultX - 80, SpecialY + 1120);
+		GlassTintWithDirt->A.Connect(0, GlassTint);
+		GlassTintWithDirt->B.Connect(0, GlassDirtTint);
+		UMaterialExpressionAdd* GlassTintedBase = AddAdd(Material, PBRARMLayout.SpecialResultX + 140, SpecialY + 640);
+		GlassTintedBase->A.Connect(0, BaseColorOutput);
+		GlassTintedBase->B.Connect(0, GlassTintWithDirt);
+		BaseColorOutput = GlassTintedBase;
+
+		UMaterialExpressionMultiply* GlassDirtRoughnessAmount = AddMultiply(Material, PBRARMLayout.SpecialResultX - 300, SpecialY + 1280);
+		GlassDirtRoughnessAmount->A.Connect(0, GlassDirtAmount);
+		GlassDirtRoughnessAmount->B.Connect(0, GlassDirtRoughness);
+		UMaterialExpressionAdd* GlassRoughnessWithDirt = AddAdd(Material, PBRARMLayout.SpecialResultX - 80, SpecialY + 1280);
+		GlassRoughnessWithDirt->A.Connect(0, RoughnessMaterialOutput);
+		GlassRoughnessWithDirt->B.Connect(0, GlassDirtRoughnessAmount);
+		UMaterialExpressionSaturate* GlassRoughnessSaturated = NewObject<UMaterialExpressionSaturate>(Material);
+		GlassRoughnessSaturated->MaterialExpressionEditorX = PBRARMLayout.SpecialResultX + 140;
+		GlassRoughnessSaturated->MaterialExpressionEditorY = SpecialY + 1280;
+		GlassRoughnessSaturated->Input.Connect(0, GlassRoughnessWithDirt);
+		Material->GetExpressionCollection().AddExpression(GlassRoughnessSaturated);
+		RoughnessMaterialOutput = GlassRoughnessSaturated;
+
+		UMaterialExpressionMultiply* GlassDistortionScalarAmount = AddMultiply(Material, PBRARMLayout.SpecialResultX + 120, SpecialY + 1120);
+		GlassDistortionScalarAmount->A.Connect(0, GlassDistortionIntensity);
+		GlassDistortionScalarAmount->B.Connect(0, GlassDistortionIORIntensity);
+		UMaterialExpressionMultiply* GlassDistortionAmount = AddMultiply(Material, PBRARMLayout.SpecialResultX + 340, SpecialY + 1120);
+		GlassDistortionAmount->A.Connect(0, GlassDistortionScalarAmount);
+		GlassDistortionAmount->B.Connect(0, UseGlassDistortionTexture);
+		UMaterialExpressionAdd* GlassRefractionWithDistortion = AddAdd(Material, PBRARMLayout.SpecialResultX + 140, SpecialY + 1460);
+		GlassRefractionWithDistortion->A.Connect(0, RefractionAmount);
+		GlassRefractionWithDistortion->B.Connect(0, GlassDistortionAmount);
+		UMaterialExpressionMultiply* GlassFrostedAmount = AddMultiply(Material, PBRARMLayout.SpecialResultX + 120, SpecialY + 1400);
+		GlassFrostedAmount->A.Connect(0, GlassFrostedStrength);
+		GlassFrostedAmount->B.Connect(0, UseGlassFrostedTexture);
+
+		UMaterialExpressionTime* GlassTime = NewObject<UMaterialExpressionTime>(Material);
+		GlassTime->bIgnorePause = true;
+		GlassTime->MaterialExpressionEditorX = PBRARMLayout.SpecialFunctionX;
+		GlassTime->MaterialExpressionEditorY = SpecialY + 820;
+		Material->GetExpressionCollection().AddExpression(GlassTime);
+		UMaterialExpressionCustom* GlassCausticsMask = PBRARMAddGlassCausticsMask(Material, BaseColorUV, GlassTime, GlassCausticsScale, GlassCausticsSpeed, GlassCausticsIntensity, PBRARMLayout.SpecialResultX - 300, SpecialY + 860);
+		UMaterialExpressionMultiply* GlassCausticsColor = AddMultiply(Material, PBRARMLayout.SpecialResultX - 80, SpecialY + 860);
+		GlassCausticsColor->A.Connect(0, GlassAbsorptionColor);
+		GlassCausticsColor->B.Connect(0, GlassCausticsMask);
+		if (EmissiveMaterialOutput)
+		{
+			UMaterialExpressionAdd* GlassEmissiveWithCaustics = AddAdd(Material, PBRARMLayout.SpecialResultX + 140, SpecialY + 860);
+			GlassEmissiveWithCaustics->A.Connect(0, EmissiveMaterialOutput);
+			GlassEmissiveWithCaustics->B.Connect(0, GlassCausticsColor);
+			EmissiveMaterialOutput = GlassEmissiveWithCaustics;
 		}
 		else
 		{
-			UseOpacityTexture->A.Connect(0, OpacityMask);
-			UseOpacityTexture->B.Connect(0, OpacityValue);
+			EmissiveMaterialOutput = GlassCausticsColor;
 		}
-		EditorData->Opacity.Connect(0, UseOpacityTexture);
-		OpacityOutputForThinTranslucent = UseOpacityTexture;
-	}
 
-	if (UsesEmissive(MaterialType))
-	{
-		UMaterialExpressionTextureSampleParameter2D* EmissiveTex = AddTextureParameter(Material, FPBRMaterialParameters::EmissiveTexture, GroupEmissive, 10, -250, 700);
-		UMaterialExpressionVectorParameter* EmissiveColor = AddVectorParameter(Material, FPBRMaterialParameters::EmissiveColor, GroupEmissive, 20, MaterialType == EPBRMaterialType::Emissive ? FLinearColor::White : FLinearColor::Black, -250, 840);
-		UMaterialExpressionScalarParameter* EmissiveIntensity = AddScalarParameter(Material, FPBRMaterialParameters::EmissiveIntensity, GroupEmissive, 30, MaterialType == EPBRMaterialType::Emissive ? 1.0f : 0.0f, -250, 980);
-		UMaterialExpressionStaticSwitchParameter* UseEmissiveTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseEmissiveTexture, GroupEmissive, 40, true, 480, 780);
-		UMaterialExpressionMultiply* EmissiveColorMultiply = AddMultiply(Material, 0, 780);
-		UMaterialExpressionMultiply* EmissiveIntensityMultiply = AddMultiply(Material, 240, 780);
-		UMaterialExpressionMultiply* EmissiveSolidMultiply = AddMultiply(Material, 240, 980);
-		EmissiveColorMultiply->A.Connect(0, EmissiveTex);
-		EmissiveColorMultiply->B.Connect(0, EmissiveColor);
-		EmissiveIntensityMultiply->A.Connect(0, EmissiveColorMultiply);
-		EmissiveIntensityMultiply->B.Connect(0, EmissiveIntensity);
-		EmissiveSolidMultiply->A.Connect(0, EmissiveColor);
-		EmissiveSolidMultiply->B.Connect(0, EmissiveIntensity);
-		UseEmissiveTexture->A.Connect(0, EmissiveIntensityMultiply);
-		UseEmissiveTexture->B.Connect(0, EmissiveSolidMultiply);
-		EditorData->EmissiveColor.Connect(0, UseEmissiveTexture);
-	}
-
-	if (UsesHeight(MaterialType))
-	{
-		UMaterialExpressionTextureSampleParameter2D* HeightTex = AddTextureParameter(Material, FPBRMaterialParameters::HeightTexture, GroupHeight, 10, -250, 1180, EMaterialSamplerType::SAMPLERTYPE_Masks);
-		UMaterialExpressionScalarParameter* HeightStrength = AddScalarParameter(Material, FPBRMaterialParameters::HeightStrength, GroupHeight, 20, 0.0f, -250, 1320);
-		UMaterialExpressionScalarParameter* PixelDepthOffsetStrength = AddScalarParameter(Material, FPBRMaterialParameters::PixelDepthOffsetStrength, GroupHeight, 30, 0.0f, -250, 1460);
-		UMaterialExpressionStaticSwitchParameter* UseHeightTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseHeightTexture, GroupHeight, 40, true, 520, 1220);
-		UMaterialExpressionVertexNormalWS* VertexNormal = NewObject<UMaterialExpressionVertexNormalWS>(Material);
-		VertexNormal->MaterialExpressionEditorX = 20;
-		VertexNormal->MaterialExpressionEditorY = 1380;
-		Material->GetExpressionCollection().AddExpression(VertexNormal);
-		UMaterialExpressionConstant3Vector* NoWorldOffset = NewObject<UMaterialExpressionConstant3Vector>(Material);
-		NoWorldOffset->Constant = FLinearColor::Black;
-		NoWorldOffset->MaterialExpressionEditorX = 260;
-		NoWorldOffset->MaterialExpressionEditorY = 1500;
-		Material->GetExpressionCollection().AddExpression(NoWorldOffset);
-		UMaterialExpressionMaterialFunctionCall* HeightFunction = AddMaterialFunctionCall(
-			Material,
-			TEXT("/Game/PBRStudio/Functions/06_Displacement/MF_PBRStudio_HeightDisplacement.MF_PBRStudio_HeightDisplacement"),
-			120,
-			1260);
-		if (HeightFunction &&
-			ConnectFunctionInputByIndex(HeightFunction, 0, HeightTex) &&
-			ConnectFunctionInputByIndex(HeightFunction, 1, HeightStrength) &&
-			ConnectFunctionInputByIndex(HeightFunction, 2, PixelDepthOffsetStrength) &&
-			ConnectFunctionInputByIndex(HeightFunction, 3, VertexNormal))
+		if (UMaterialExpressionMaterialFunctionCall* GlassOpticsFunction = AddMaterialFunctionCall(Material, TEXT("/Game/PBRStudio/Functions/04_Glass/MF_PBRStudio_GlassOptics.MF_PBRStudio_GlassOptics"), PBRARMLayout.SpecialFunctionX, SpecialY + 180))
 		{
-			UseHeightTexture->A.Connect(0, HeightFunction);
-			UseHeightTexture->B.Connect(0, NoWorldOffset);
-			EditorData->WorldPositionOffset.Connect(0, UseHeightTexture);
-			EditorData->PixelDepthOffset.Connect(1, HeightFunction);
+			const bool bConnected =
+				ConnectFunctionInputByName(GlassOpticsFunction, TEXT("透明度"), UseOpacityTexture) &
+				ConnectFunctionInputByName(GlassOpticsFunction, TEXT("玻璃折射率"), RefractionAmount) &
+				ConnectFunctionInputByName(GlassOpticsFunction, TEXT("透明菲涅尔强度"), GlassOpacityFresnelStrength) &
+				ConnectFunctionInputByName(GlassOpticsFunction, TEXT("菲涅尔基础反射"), GlassFresnelBaseReflection) &
+				ConnectFunctionInputByName(GlassOpticsFunction, TEXT("菲涅尔指数"), GlassFresnelExp) &
+				ConnectFunctionInputByName(GlassOpticsFunction, TEXT("毛玻璃强度"), GlassFrostedAmount);
+			if (bConnected)
+			{
+				UMaterialExpressionAdd* FrostedRoughness = AddAdd(Material, PBRARMLayout.SpecialResultX - 260, SpecialY + 180);
+				FrostedRoughness->A.Connect(0, RoughnessMaterialOutput);
+				FrostedRoughness->B.Connect(2, GlassOpticsFunction);
+				UMaterialExpressionSaturate* FrostedRoughnessOutput = NewObject<UMaterialExpressionSaturate>(Material);
+				FrostedRoughnessOutput->MaterialExpressionEditorX = PBRARMLayout.SpecialResultX;
+				FrostedRoughnessOutput->MaterialExpressionEditorY = SpecialY + 180;
+				FrostedRoughnessOutput->Input.Connect(0, FrostedRoughness);
+				Material->GetExpressionCollection().AddExpression(FrostedRoughnessOutput);
+				RoughnessMaterialOutput = FrostedRoughnessOutput;
+
+				UMaterialExpressionShadowReplace* GlassShadowOpacitySwitch = NewObject<UMaterialExpressionShadowReplace>(Material);
+				GlassShadowOpacitySwitch->MaterialExpressionEditorX = PBRARMLayout.SpecialResultX;
+				GlassShadowOpacitySwitch->MaterialExpressionEditorY = SpecialY + 420;
+				GlassShadowOpacitySwitch->Default.Connect(0, GlassOpticsFunction);
+				UMaterialExpressionMultiply* ShadowNormalBoost = AddMultiply(Material, PBRARMLayout.SpecialResultX - 300, SpecialY + 360);
+				ShadowNormalBoost->A.Connect(0, GlassShadowOpacity);
+				ShadowNormalBoost->B.Connect(0, GlassShadowNormalIntensity);
+				UMaterialExpressionAdd* ShadowOpacityWithNormal = AddAdd(Material, PBRARMLayout.SpecialResultX - 80, SpecialY + 360);
+				ShadowOpacityWithNormal->A.Connect(0, GlassShadowOpacity);
+				ShadowOpacityWithNormal->B.Connect(0, ShadowNormalBoost);
+				UMaterialExpressionMultiply* ShadowOpacityClamped = AddMultiply(Material, PBRARMLayout.SpecialResultX + 120, SpecialY + 360);
+				ShadowOpacityClamped->A.Connect(0, ShadowOpacityWithNormal);
+				ShadowOpacityClamped->B.Connect(0, GlassShadowHighlightClamp);
+				GlassShadowOpacitySwitch->Shadow.Connect(0, ShadowOpacityClamped);
+				Material->GetExpressionCollection().AddExpression(GlassShadowOpacitySwitch);
+
+				UMaterialExpressionMultiply* DirtOpacityAmount = AddMultiply(Material, PBRARMLayout.SpecialResultX + 120, SpecialY + 520);
+				DirtOpacityAmount->A.Connect(0, GlassDirtAmount);
+				DirtOpacityAmount->B.Connect(0, GlassDirtOpacity);
+				UMaterialExpressionAdd* GlassOpacityWithDirt = AddAdd(Material, PBRARMLayout.SpecialResultX + 340, SpecialY + 520);
+				GlassOpacityWithDirt->A.Connect(0, GlassShadowOpacitySwitch);
+				GlassOpacityWithDirt->B.Connect(0, DirtOpacityAmount);
+				UMaterialExpressionSaturate* GlassOpacitySaturated = NewObject<UMaterialExpressionSaturate>(Material);
+				GlassOpacitySaturated->MaterialExpressionEditorX = PBRARMLayout.SpecialResultX + 560;
+				GlassOpacitySaturated->MaterialExpressionEditorY = SpecialY + 520;
+				GlassOpacitySaturated->Input.Connect(0, GlassOpacityWithDirt);
+				Material->GetExpressionCollection().AddExpression(GlassOpacitySaturated);
+
+				UMaterialExpressionRayTracingQualitySwitch* RTOpacitySwitch = NewObject<UMaterialExpressionRayTracingQualitySwitch>(Material);
+				RTOpacitySwitch->MaterialExpressionEditorX = PBRARMLayout.SpecialResultX + 780;
+				RTOpacitySwitch->MaterialExpressionEditorY = SpecialY + 520;
+				RTOpacitySwitch->Normal.Connect(0, GlassOpacitySaturated);
+				RTOpacitySwitch->RayTraced.Connect(0, GlassRTOpacity);
+				Material->GetExpressionCollection().AddExpression(RTOpacitySwitch);
+
+				UMaterialExpressionRayTracingQualitySwitch* RTRefractionSwitch = NewObject<UMaterialExpressionRayTracingQualitySwitch>(Material);
+				RTRefractionSwitch->MaterialExpressionEditorX = PBRARMLayout.SpecialResultX + 520;
+				RTRefractionSwitch->MaterialExpressionEditorY = SpecialY + 1460;
+				RTRefractionSwitch->Normal.Connect(0, GlassRefractionWithDistortion);
+				RTRefractionSwitch->RayTraced.Connect(0, GlassRTRefractionAmount);
+				Material->GetExpressionCollection().AddExpression(RTRefractionSwitch);
+
+				UMaterialExpressionAdd* RTRoughnessWithFrost = AddAdd(Material, PBRARMLayout.SpecialResultX + 360, SpecialY + 1280);
+				RTRoughnessWithFrost->A.Connect(0, RoughnessMaterialOutput);
+				RTRoughnessWithFrost->B.Connect(0, GlassRTFrostedStrength);
+				UMaterialExpressionRayTracingQualitySwitch* RTRoughnessSwitch = NewObject<UMaterialExpressionRayTracingQualitySwitch>(Material);
+				RTRoughnessSwitch->MaterialExpressionEditorX = PBRARMLayout.SpecialResultX + 580;
+				RTRoughnessSwitch->MaterialExpressionEditorY = SpecialY + 1280;
+				RTRoughnessSwitch->Normal.Connect(0, RoughnessMaterialOutput);
+				RTRoughnessSwitch->RayTraced.Connect(0, RTRoughnessWithFrost);
+				Material->GetExpressionCollection().AddExpression(RTRoughnessSwitch);
+
+				OpacityMaterialOutput = RTOpacitySwitch;
+				RefractionMaterialOutput = RTRefractionSwitch;
+				RoughnessMaterialOutput = RTRoughnessSwitch;
+			}
 		}
-		Material->MaxWorldPositionOffsetDisplacement = 20.0f;
-		Material->bAlwaysEvaluateWorldPositionOffset = true;
-		Material->bEnableTessellation = true;
-		Material->bEnableDisplacementFade = true;
-		Material->DisplacementScaling.Magnitude = 1.0f;
-		Material->DisplacementScaling.Center = 0.5f;
+		if (!RefractionMaterialOutput)
+		{
+			RefractionMaterialOutput = GlassRefractionWithDistortion;
+		}
+		RefractionMaterialOutputIndex = 0;
 	}
-
-	if (UsesClearCoat(MaterialType))
+	else if (MaterialType == EPBRMaterialType::Transparent)
 	{
-		Material->SetShadingModel(EMaterialShadingModel::MSM_ClearCoat);
-		UMaterialExpressionTextureSampleParameter2D* ClearCoatTex = AddTextureParameter(Material, FPBRMaterialParameters::ClearCoatTexture, GroupClearCoat, 10, 360, 1040, EMaterialSamplerType::SAMPLERTYPE_Masks);
-		UMaterialExpressionScalarParameter* ClearCoatValue = AddScalarParameter(Material, FPBRMaterialParameters::ClearCoat, GroupClearCoat, 20, 0.0f, 360, 1180);
-		UMaterialExpressionStaticSwitchParameter* UseClearCoatTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseClearCoatTexture, GroupClearCoat, 30, true, 860, 1080);
-		UMaterialExpressionMultiply* ClearCoatMultiply = AddMultiply(Material, 620, 1080);
-		ClearCoatMultiply->A.Connect(0, ClearCoatTex);
-		ClearCoatMultiply->B.Connect(0, ClearCoatValue);
-		UseClearCoatTexture->A.Connect(0, ClearCoatMultiply);
-		UseClearCoatTexture->B.Connect(0, ClearCoatValue);
-		EditorData->ClearCoat.Connect(0, UseClearCoatTexture);
-
-		UMaterialExpressionTextureSampleParameter2D* ClearCoatRoughnessTex = AddTextureParameter(Material, FPBRMaterialParameters::ClearCoatRoughnessTexture, GroupClearCoat, 30, 360, 1320, EMaterialSamplerType::SAMPLERTYPE_Masks);
-		UMaterialExpressionScalarParameter* ClearCoatRoughnessValue = AddScalarParameter(Material, FPBRMaterialParameters::ClearCoatRoughness, GroupClearCoat, 40, 0.15f, 360, 1460);
-		UMaterialExpressionStaticSwitchParameter* UseClearCoatRoughnessTexture = AddStaticSwitchParameter(Material, FPBRMaterialParameters::UseClearCoatRoughnessTexture, GroupClearCoat, 50, true, 860, 1360);
-		UMaterialExpressionMultiply* ClearCoatRoughnessMultiply = AddMultiply(Material, 620, 1360);
-		ClearCoatRoughnessMultiply->A.Connect(0, ClearCoatRoughnessTex);
-		ClearCoatRoughnessMultiply->B.Connect(0, ClearCoatRoughnessValue);
-		UseClearCoatRoughnessTexture->A.Connect(0, ClearCoatRoughnessMultiply);
-		UseClearCoatRoughnessTexture->B.Connect(0, ClearCoatRoughnessValue);
-		EditorData->ClearCoatRoughness.Connect(0, UseClearCoatRoughnessTexture);
+		UMaterialExpressionScalarParameter* RefractionAmount = AddScalarParameter(Material, FPBRMaterialParameters::RefractionAmount, GroupSpecial, 80, 1.45f, PBRARMLayout.SpecialInputX, SpecialY);
+		RefractionMaterialOutput = RefractionAmount;
+		RefractionMaterialOutputIndex = 0;
 	}
 
-	if (UsesFabricFuzz(MaterialType))
+	UMaterialExpressionNamedRerouteDeclaration* BaseColorDeclaration = PBRARMAddNamedRerouteDeclaration(Material, TEXT("Base Color"), BaseColorOutput, 0, FLinearColor(0.45f, 0.20f, 0.85f, 1.0f), PBRARMLayout.SwitchX + 260, BaseY + 160);
+	UMaterialExpressionNamedRerouteDeclaration* MetallicDeclaration = PBRARMAddNamedRerouteDeclaration(Material, TEXT("Metallic"), MetallicMaterialOutput, 0, FLinearColor(0.05f, 0.50f, 0.38f, 1.0f), PBRARMLayout.SwitchX + 260, MetallicY + 80);
+	UMaterialExpressionNamedRerouteDeclaration* SpecularDeclaration = PBRARMAddNamedRerouteDeclaration(Material, TEXT("Specular"), SpecularMaterialOutput, 0, FLinearColor(0.40f, 0.50f, 0.12f, 1.0f), PBRARMLayout.SwitchX + 260, SpecularY + 80);
+	UMaterialExpressionNamedRerouteDeclaration* RoughnessDeclaration = PBRARMAddNamedRerouteDeclaration(Material, TEXT("Roughness"), RoughnessMaterialOutput, 0, FLinearColor(0.45f, 0.50f, 0.12f, 1.0f), PBRARMLayout.SwitchX + 260, RoughnessY + 80);
+	UMaterialExpressionNamedRerouteDeclaration* NormalDeclaration = PBRARMAddNamedRerouteDeclaration(Material, TEXT("Normal"), NormalMaterialOutput, 0, FLinearColor(0.10f, 0.48f, 0.40f, 1.0f), PBRARMLayout.SwitchX + 260, NormalY + 160);
+	UMaterialExpressionNamedRerouteDeclaration* AODeclaration = PBRARMAddNamedRerouteDeclaration(Material, TEXT("AO"), AOMaterialOutput, 0, FLinearColor(0.50f, 0.28f, 0.08f, 1.0f), PBRARMLayout.SwitchX + 260, AOY + 60);
+	UMaterialExpressionNamedRerouteDeclaration* DisplacementDeclaration = DisplacementMaterialOutput
+		? PBRARMAddNamedRerouteDeclaration(Material, TEXT("Displacement"), DisplacementMaterialOutput, 0, FLinearColor(0.10f, 0.48f, 0.40f, 1.0f), PBRARMLayout.SpecialResultX + 160, DisplacementY + 160)
+		: nullptr;
+	UMaterialExpressionNamedRerouteDeclaration* OpacityDeclaration = OpacityMaterialOutput
+		? PBRARMAddNamedRerouteDeclaration(Material, TEXT("Opacity"), OpacityMaterialOutput, 0, FLinearColor(0.10f, 0.48f, 0.40f, 1.0f), PBRARMLayout.SwitchX + 260, OpacityY + 120)
+		: nullptr;
+	UMaterialExpressionNamedRerouteDeclaration* EmissiveDeclaration = EmissiveMaterialOutput
+		? PBRARMAddNamedRerouteDeclaration(Material, TEXT("Emissive"), EmissiveMaterialOutput, 0, FLinearColor(0.82f, 0.42f, 0.06f, 1.0f), PBRARMLayout.SwitchX + 260, EmissiveY + 240)
+		: nullptr;
+	UMaterialExpressionNamedRerouteDeclaration* RefractionDeclaration = RefractionMaterialOutput
+		? PBRARMAddNamedRerouteDeclaration(Material, TEXT("Refraction"), RefractionMaterialOutput, RefractionMaterialOutputIndex, FLinearColor(0.10f, 0.42f, 0.70f, 1.0f), PBRARMLayout.SpecialResultX + 520, SpecialY + 360)
+		: nullptr;
+
+	EditorData->BaseColor.Connect(0, PBRARMAddNamedRerouteUsage(Material, BaseColorDeclaration, PBRARMLayout.OutputUseX, OutputY));
+	EditorData->Metallic.Connect(0, PBRARMAddNamedRerouteUsage(Material, MetallicDeclaration, PBRARMLayout.OutputUseX, OutputY + 110));
+	EditorData->Specular.Connect(0, PBRARMAddNamedRerouteUsage(Material, SpecularDeclaration, PBRARMLayout.OutputUseX, OutputY + 220));
+	EditorData->Roughness.Connect(0, PBRARMAddNamedRerouteUsage(Material, RoughnessDeclaration, PBRARMLayout.OutputUseX, OutputY + 330));
+	EditorData->Normal.Connect(0, PBRARMAddNamedRerouteUsage(Material, NormalDeclaration, PBRARMLayout.OutputUseX, OutputY + 440));
+	EditorData->AmbientOcclusion.Connect(0, PBRARMAddNamedRerouteUsage(Material, AODeclaration, PBRARMLayout.OutputUseX, OutputY + 550));
+	if (DisplacementDeclaration)
 	{
-		UMaterialExpressionFresnel* FabricFresnel = AddFresnel(Material, 80, 780);
-		UMaterialExpressionVectorParameter* FuzzColor = AddVectorParameter(Material, FPBRMaterialParameters::FabricFuzzColor, GroupSpecial, 10, FLinearColor(0.6f, 0.58f, 0.52f), 80, 900);
-		UMaterialExpressionScalarParameter* FuzzStrength = AddScalarParameter(Material, FPBRMaterialParameters::FabricFuzzStrength, GroupSpecial, 20, 0.12f, 80, 1040);
-		UMaterialExpressionMultiply* FuzzColorMultiply = AddMultiply(Material, 360, 840);
-		UMaterialExpressionMultiply* FuzzStrengthMultiply = AddMultiply(Material, 600, 840);
-		FuzzColorMultiply->A.Connect(0, FabricFresnel);
-		FuzzColorMultiply->B.Connect(0, FuzzColor);
-		FuzzStrengthMultiply->A.Connect(0, FuzzColorMultiply);
-		FuzzStrengthMultiply->B.Connect(0, FuzzStrength);
-		EditorData->EmissiveColor.Connect(0, FuzzStrengthMultiply);
+		EditorData->WorldPositionOffset.Connect(0, PBRARMAddNamedRerouteUsage(Material, DisplacementDeclaration, PBRARMLayout.OutputUseX, OutputY + 660));
 	}
-
-	if (UsesRefraction(MaterialType))
+	if (OpacityDeclaration)
 	{
-		const float DefaultRefraction = GetTemplateDefaultRefraction(MaterialType);
-		UMaterialExpressionScalarParameter* Refraction = AddScalarParameter(Material, FPBRMaterialParameters::RefractionAmount, GroupSpecial, 10, DefaultRefraction, 80, 1220);
-		EditorData->Refraction.Connect(0, Refraction);
+		EditorData->Opacity.Connect(0, PBRARMAddNamedRerouteUsage(Material, OpacityDeclaration, PBRARMLayout.OutputUseX, OutputY + 770));
 	}
-
-	if (UsesWaterColor(MaterialType))
+	if (EmissiveDeclaration)
 	{
-		UMaterialExpressionVectorParameter* WaterColor = AddVectorParameter(Material, FPBRMaterialParameters::WaterColor, GroupSpecial, 20, FLinearColor(0.12f, 0.42f, 0.52f), 80, 1360);
-		UMaterialExpressionMultiply* WaterTintMultiply = AddMultiply(Material, 360, 1360);
-		WaterTintMultiply->A.Connect(0, UseBaseColorTexture);
-		WaterTintMultiply->B.Connect(0, WaterColor);
-		EditorData->BaseColor.Connect(0, WaterTintMultiply);
-		AddSingleLayerWaterOutput(Material, GroupSpecial, 720, 1460);
+		EditorData->EmissiveColor.Connect(0, PBRARMAddNamedRerouteUsage(Material, EmissiveDeclaration, PBRARMLayout.OutputUseX, OutputY + 880));
 	}
-	else if (MaterialType == EPBRMaterialType::Glass && OpacityOutputForThinTranslucent)
+	if (RefractionDeclaration)
 	{
-		AddThinTranslucentOutput(Material, UseBaseColorTexture, OpacityOutputForThinTranslucent, 720, 760);
+		EditorData->Refraction.Connect(0, PBRARMAddNamedRerouteUsage(Material, RefractionDeclaration, PBRARMLayout.OutputUseX, OutputY + 990));
 	}
-
-	ConnectTextureSamplesToUV(Material, SharedUV);
-	RemoveUnusedMaterialExpressions(Material);
-	LayoutPBRTemplateGraphByGroups(Material);
-	AddStandardTemplateComments(Material, MaterialType);
 
 	Material->PreEditChange(nullptr);
 	Material->PostEditChange();
-	OutMessage = TEXT("已构建母材质图表");
+	OutMessage = TEXT("已按 ARM Parent Graph Layout v8 构建母材质图表");
 	return true;
 }
 
+static bool BuildTemplateGraph(UMaterial* Material, EPBRMaterialType MaterialType, FString& OutMessage)
+{
+	return BuildARMStyleTemplateGraph(Material, MaterialType, OutMessage);
+}
 static void LayoutMaterialGraphByColumns(UMaterial* Material)
 {
 	if (!Material)

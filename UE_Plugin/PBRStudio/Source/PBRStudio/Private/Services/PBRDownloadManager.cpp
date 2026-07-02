@@ -21,6 +21,7 @@ FPBRDownloadManager::~FPBRDownloadManager()
 	{
 		if (Req.IsValid())
 		{
+			Req->OnRequestProgress64().Unbind();
 			Req->OnProcessRequestComplete().Unbind();
 			Req->CancelRequest();
 		}
@@ -160,8 +161,9 @@ void FPBRDownloadManager::DownloadEntry(int32 Index)
 	Request->SetVerb(TEXT("GET"));
 	Request->SetHeader(TEXT("User-Agent"), TEXT("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"));
 	Request->SetHeader(TEXT("Accept"), TEXT("*/*"));
-	Request->OnRequestProgress64().BindRaw(this, &FPBRDownloadManager::UpdateDownloadProgress, Index);
-	Request->OnProcessRequestComplete().BindRaw(this, &FPBRDownloadManager::OnDownloadFinished, Index);
+	const FString EntryURL = Entry.URL;
+	Request->OnRequestProgress64().BindRaw(this, &FPBRDownloadManager::UpdateDownloadProgress, EntryURL);
+	Request->OnProcessRequestComplete().BindRaw(this, &FPBRDownloadManager::OnDownloadFinished, EntryURL);
 	ActiveRequests.Add(Request);
 	Request->ProcessRequest();
 }
@@ -183,6 +185,8 @@ void FPBRDownloadManager::CancelAll()
 	{
 		if (Req.IsValid())
 		{
+			Req->OnRequestProgress64().Unbind();
+			Req->OnProcessRequestComplete().Unbind();
 			Req->CancelRequest();
 		}
 	}
@@ -198,8 +202,30 @@ void FPBRDownloadManager::CancelAll()
 	OnQueueChanged.ExecuteIfBound();
 }
 
-void FPBRDownloadManager::UpdateDownloadProgress(FHttpRequestPtr Request, uint64 BytesSent, uint64 BytesReceived, int32 Index)
+int32 FPBRDownloadManager::FindQueueIndexByURL(const FString& URL) const
 {
+	for (int32 Index = 0; Index < Queue.Num(); ++Index)
+	{
+		if (Queue[Index].URL == URL)
+		{
+			return Index;
+		}
+	}
+	return INDEX_NONE;
+}
+
+void FPBRDownloadManager::RemoveActiveRequest(FHttpRequestPtr Request)
+{
+	const IHttpRequest* RawRequest = Request.Get();
+	ActiveRequests.RemoveAll([RawRequest](const TSharedPtr<IHttpRequest>& ActiveRequest)
+	{
+		return ActiveRequest.Get() == RawRequest;
+	});
+}
+
+void FPBRDownloadManager::UpdateDownloadProgress(FHttpRequestPtr Request, uint64 BytesSent, uint64 BytesReceived, FString URL)
+{
+	const int32 Index = FindQueueIndexByURL(URL);
 	if (Index < 0 || Index >= Queue.Num())
 	{
 		return;
@@ -299,8 +325,11 @@ static FString FilenameFromUrlQuery(const FString& URL)
 	return FString();
 }
 
-void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded, int32 Index)
+void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded, FString URL)
 {
+	RemoveActiveRequest(Request);
+
+	const int32 Index = FindQueueIndexByURL(URL);
 	if (Index < 0 || Index >= Queue.Num())
 	{
 		return;
@@ -356,7 +385,7 @@ void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpRespo
 	}
 
 	const FString TargetPath = FPaths::Combine(SaveDirectory, Filename);
-	const TArray<uint8> Data = Response->GetContent();
+	const TArray<uint8>& Data = Response->GetContent();
 	if (!FFileHelper::SaveArrayToFile(Data, *TargetPath))
 	{
 		Entry.Status = TEXT("失败");
