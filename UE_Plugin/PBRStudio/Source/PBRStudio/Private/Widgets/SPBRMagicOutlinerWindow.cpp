@@ -404,6 +404,284 @@ static FString PBRMaterialFamilyLabel(const FString& ParentName)
 }
 }
 
+enum class EPBRMagicEditableMaterialParameterKind : uint8
+{
+	Scalar,
+	Color,
+	Switch
+};
+
+struct FPBRMagicEditableMaterialParameter
+{
+	EPBRMagicEditableMaterialParameterKind Kind = EPBRMagicEditableMaterialParameterKind::Scalar;
+	FName ParameterName;
+	const TCHAR* LabelKey = TEXT("");
+	const TCHAR* LabelChinese = TEXT("");
+	const TCHAR* LabelEnglish = TEXT("");
+	const TCHAR* GroupKey = TEXT("");
+	const TCHAR* GroupChinese = TEXT("");
+	const TCHAR* GroupEnglish = TEXT("");
+	uint32 TypeMask = 0;
+	float MinValue = 0.0f;
+	float MaxValue = 1.0f;
+	float DefaultValue = 0.0f;
+	float StepValue = 0.05f;
+	FLinearColor DefaultColor = FLinearColor::White;
+	bool bDefaultSwitchValue = false;
+	bool bShowOnPaintSurface = true;
+
+	FText GetLabel() const
+	{
+		return PBRText(LabelKey, LabelChinese, LabelEnglish);
+	}
+
+	FText GetGroupLabel() const
+	{
+		return PBRText(GroupKey, GroupChinese, GroupEnglish);
+	}
+};
+
+static constexpr uint32 MagicEditableMaterialTypeBit(EPBRMaterialType MaterialType)
+{
+	return 1u << static_cast<uint8>(MaterialType);
+}
+
+static constexpr uint32 MagicEditableMaterialAllTypesMask =
+	MagicEditableMaterialTypeBit(EPBRMaterialType::Standard) |
+	MagicEditableMaterialTypeBit(EPBRMaterialType::Wood) |
+	MagicEditableMaterialTypeBit(EPBRMaterialType::Stone) |
+	MagicEditableMaterialTypeBit(EPBRMaterialType::Tile) |
+	MagicEditableMaterialTypeBit(EPBRMaterialType::Fabric) |
+	MagicEditableMaterialTypeBit(EPBRMaterialType::Leather) |
+	MagicEditableMaterialTypeBit(EPBRMaterialType::Plastic) |
+	MagicEditableMaterialTypeBit(EPBRMaterialType::Metal) |
+	MagicEditableMaterialTypeBit(EPBRMaterialType::Transparent) |
+	MagicEditableMaterialTypeBit(EPBRMaterialType::Glass) |
+	MagicEditableMaterialTypeBit(EPBRMaterialType::Water) |
+	MagicEditableMaterialTypeBit(EPBRMaterialType::Emissive);
+
+static FPBRMagicEditableMaterialParameter MakeMagicScalarParameter(
+	const FName& ParameterName,
+	const TCHAR* LabelKey,
+	const TCHAR* LabelChinese,
+	const TCHAR* LabelEnglish,
+	const TCHAR* GroupKey,
+	const TCHAR* GroupChinese,
+	const TCHAR* GroupEnglish,
+	uint32 TypeMask,
+	float MinValue,
+	float MaxValue,
+	float DefaultValue,
+	float StepValue,
+	bool bShowOnPaintSurface = true)
+{
+	FPBRMagicEditableMaterialParameter Parameter;
+	Parameter.Kind = EPBRMagicEditableMaterialParameterKind::Scalar;
+	Parameter.ParameterName = ParameterName;
+	Parameter.LabelKey = LabelKey;
+	Parameter.LabelChinese = LabelChinese;
+	Parameter.LabelEnglish = LabelEnglish;
+	Parameter.GroupKey = GroupKey;
+	Parameter.GroupChinese = GroupChinese;
+	Parameter.GroupEnglish = GroupEnglish;
+	Parameter.TypeMask = TypeMask;
+	Parameter.MinValue = MinValue;
+	Parameter.MaxValue = MaxValue;
+	Parameter.DefaultValue = DefaultValue;
+	Parameter.StepValue = StepValue;
+	Parameter.bShowOnPaintSurface = bShowOnPaintSurface;
+	return Parameter;
+}
+
+static FPBRMagicEditableMaterialParameter MakeMagicColorParameter(
+	const FName& ParameterName,
+	const TCHAR* LabelKey,
+	const TCHAR* LabelChinese,
+	const TCHAR* LabelEnglish,
+	const TCHAR* GroupKey,
+	const TCHAR* GroupChinese,
+	const TCHAR* GroupEnglish,
+	uint32 TypeMask,
+	const FLinearColor& DefaultColor,
+	bool bShowOnPaintSurface = false)
+{
+	FPBRMagicEditableMaterialParameter Parameter;
+	Parameter.Kind = EPBRMagicEditableMaterialParameterKind::Color;
+	Parameter.ParameterName = ParameterName;
+	Parameter.LabelKey = LabelKey;
+	Parameter.LabelChinese = LabelChinese;
+	Parameter.LabelEnglish = LabelEnglish;
+	Parameter.GroupKey = GroupKey;
+	Parameter.GroupChinese = GroupChinese;
+	Parameter.GroupEnglish = GroupEnglish;
+	Parameter.TypeMask = TypeMask;
+	Parameter.DefaultColor = DefaultColor;
+	Parameter.bShowOnPaintSurface = bShowOnPaintSurface;
+	return Parameter;
+}
+
+static FPBRMagicEditableMaterialParameter MakeMagicSwitchParameter(
+	const FName& ParameterName,
+	const TCHAR* LabelKey,
+	const TCHAR* LabelChinese,
+	const TCHAR* LabelEnglish,
+	const TCHAR* GroupKey,
+	const TCHAR* GroupChinese,
+	const TCHAR* GroupEnglish,
+	uint32 TypeMask,
+	bool bDefaultValue,
+	bool bShowOnPaintSurface = false)
+{
+	FPBRMagicEditableMaterialParameter Parameter;
+	Parameter.Kind = EPBRMagicEditableMaterialParameterKind::Switch;
+	Parameter.ParameterName = ParameterName;
+	Parameter.LabelKey = LabelKey;
+	Parameter.LabelChinese = LabelChinese;
+	Parameter.LabelEnglish = LabelEnglish;
+	Parameter.GroupKey = GroupKey;
+	Parameter.GroupChinese = GroupChinese;
+	Parameter.GroupEnglish = GroupEnglish;
+	Parameter.TypeMask = TypeMask;
+	Parameter.bDefaultSwitchValue = bDefaultValue;
+	Parameter.bShowOnPaintSurface = bShowOnPaintSurface;
+	return Parameter;
+}
+
+static bool IsMagicEditableParameterVisibleForType(const FPBRMagicEditableMaterialParameter& Parameter, EPBRMaterialType MaterialType)
+{
+	return (Parameter.TypeMask & MagicEditableMaterialTypeBit(MaterialType)) != 0;
+}
+
+static const TArray<FPBRMagicEditableMaterialParameter>& GetMagicEditableMaterialParameters()
+{
+	constexpr uint32 StandardAndMetal =
+		MagicEditableMaterialTypeBit(EPBRMaterialType::Standard) |
+		MagicEditableMaterialTypeBit(EPBRMaterialType::Metal);
+	constexpr uint32 HeightTypes =
+		MagicEditableMaterialTypeBit(EPBRMaterialType::Standard) |
+		MagicEditableMaterialTypeBit(EPBRMaterialType::Wood) |
+		MagicEditableMaterialTypeBit(EPBRMaterialType::Stone) |
+		MagicEditableMaterialTypeBit(EPBRMaterialType::Tile);
+	constexpr uint32 TransparentTypes =
+		MagicEditableMaterialTypeBit(EPBRMaterialType::Transparent) |
+		MagicEditableMaterialTypeBit(EPBRMaterialType::Glass) |
+		MagicEditableMaterialTypeBit(EPBRMaterialType::Water);
+	constexpr uint32 GlassOnly = MagicEditableMaterialTypeBit(EPBRMaterialType::Glass);
+	constexpr uint32 WaterOnly = MagicEditableMaterialTypeBit(EPBRMaterialType::Water);
+	constexpr uint32 FabricOnly = MagicEditableMaterialTypeBit(EPBRMaterialType::Fabric);
+	constexpr uint32 LeatherOnly = MagicEditableMaterialTypeBit(EPBRMaterialType::Leather);
+	constexpr uint32 MetalOnly = MagicEditableMaterialTypeBit(EPBRMaterialType::Metal);
+	constexpr uint32 EmissiveOnly = MagicEditableMaterialTypeBit(EPBRMaterialType::Emissive);
+
+	static const TArray<FPBRMagicEditableMaterialParameter> Parameters = {
+		MakeMagicColorParameter(FPBRMaterialParameters::BaseColorTint, TEXT("MagicParamBaseTint"), TEXT("基础色调"), TEXT("Base Tint"), TEXT("MagicParamGroupBase"), TEXT("基础 / 贴图"), TEXT("Base / Textures"), MagicEditableMaterialAllTypesMask, FLinearColor::White, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::BaseColorIntensity, TEXT("MagicParamBaseIntensity"), TEXT("基础色强度"), TEXT("Base Intensity"), TEXT("MagicParamGroupBase"), TEXT("基础 / 贴图"), TEXT("Base / Textures"), MagicEditableMaterialAllTypesMask, 0.0f, 5.0f, 1.0f, 0.05f, true),
+		MakeMagicSwitchParameter(FPBRMaterialParameters::UseBaseColorTexture, TEXT("MagicParamUseBaseTexture"), TEXT("启用基础色贴图"), TEXT("Use Base Texture"), TEXT("MagicParamGroupBase"), TEXT("基础 / 贴图"), TEXT("Base / Textures"), MagicEditableMaterialAllTypesMask, false),
+		MakeMagicSwitchParameter(FPBRMaterialParameters::UseNormalTexture, TEXT("MagicParamUseNormalTexture"), TEXT("启用法线贴图"), TEXT("Use Normal Texture"), TEXT("MagicParamGroupBase"), TEXT("基础 / 贴图"), TEXT("Base / Textures"), MagicEditableMaterialAllTypesMask, false),
+		MakeMagicSwitchParameter(FPBRMaterialParameters::UseRoughnessTexture, TEXT("MagicParamUseRoughnessTexture"), TEXT("启用粗糙度贴图"), TEXT("Use Roughness Texture"), TEXT("MagicParamGroupBase"), TEXT("基础 / 贴图"), TEXT("Base / Textures"), MagicEditableMaterialAllTypesMask, false),
+		MakeMagicScalarParameter(FPBRMaterialParameters::RoughnessValue, TEXT("MagicParamRoughness"), TEXT("粗糙度"), TEXT("Roughness"), TEXT("MagicParamGroupSurface"), TEXT("表面响应"), TEXT("Surface Response"), MagicEditableMaterialAllTypesMask, 0.0f, 1.0f, 0.5f, 0.02f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::RoughnessMultiplier, TEXT("MagicParamRoughnessMultiplier"), TEXT("粗糙度强度"), TEXT("Roughness Multiplier"), TEXT("MagicParamGroupSurface"), TEXT("表面响应"), TEXT("Surface Response"), MagicEditableMaterialAllTypesMask, 0.0f, 4.0f, 1.0f, 0.05f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::SpecularLevel, TEXT("MagicParamSpecular"), TEXT("高光强度"), TEXT("Specular"), TEXT("MagicParamGroupSurface"), TEXT("表面响应"), TEXT("Surface Response"), MagicEditableMaterialAllTypesMask, 0.0f, 1.0f, 0.5f, 0.02f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::NormalStrength, TEXT("MagicParamNormalStrength"), TEXT("法线强度"), TEXT("Normal Strength"), TEXT("MagicParamGroupSurface"), TEXT("表面响应"), TEXT("Surface Response"), MagicEditableMaterialAllTypesMask, 0.0f, 5.0f, 1.0f, 0.05f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::AOMultiplier, TEXT("MagicParamAOMultiplier"), TEXT("环境遮蔽强度"), TEXT("AO Multiplier"), TEXT("MagicParamGroupSurface"), TEXT("表面响应"), TEXT("Surface Response"), MagicEditableMaterialAllTypesMask, 0.0f, 4.0f, 1.0f, 0.05f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::UVUTiling, TEXT("MagicParamUVUTiling"), TEXT("U 平铺"), TEXT("U Tiling"), TEXT("MagicParamGroupUV"), TEXT("UV 调整"), TEXT("UV Adjust"), MagicEditableMaterialAllTypesMask, 0.01f, 100.0f, 1.0f, 0.1f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::UVVTiling, TEXT("MagicParamUVVTiling"), TEXT("V 平铺"), TEXT("V Tiling"), TEXT("MagicParamGroupUV"), TEXT("UV 调整"), TEXT("UV Adjust"), MagicEditableMaterialAllTypesMask, 0.01f, 100.0f, 1.0f, 0.1f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::UVUOffset, TEXT("MagicParamUVUOffset"), TEXT("U 偏移"), TEXT("U Offset"), TEXT("MagicParamGroupUV"), TEXT("UV 调整"), TEXT("UV Adjust"), MagicEditableMaterialAllTypesMask, -10.0f, 10.0f, 0.0f, 0.01f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::UVVOffset, TEXT("MagicParamUVVOffset"), TEXT("V 偏移"), TEXT("V Offset"), TEXT("MagicParamGroupUV"), TEXT("UV 调整"), TEXT("UV Adjust"), MagicEditableMaterialAllTypesMask, -10.0f, 10.0f, 0.0f, 0.01f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::UVRotationDegrees, TEXT("MagicParamUVRotation"), TEXT("UV 旋转角度"), TEXT("UV Rotation"), TEXT("MagicParamGroupUV"), TEXT("UV 调整"), TEXT("UV Adjust"), MagicEditableMaterialAllTypesMask, -360.0f, 360.0f, 0.0f, 1.0f),
+
+		MakeMagicSwitchParameter(FPBRMaterialParameters::UseMetallicTexture, TEXT("MagicParamUseMetallicTexture"), TEXT("启用金属度贴图"), TEXT("Use Metallic Texture"), TEXT("MagicParamGroupMetal"), TEXT("金属 / 标准"), TEXT("Metal / Standard"), StandardAndMetal, false),
+		MakeMagicScalarParameter(FPBRMaterialParameters::MetallicValue, TEXT("MagicParamMetallic"), TEXT("金属度"), TEXT("Metallic"), TEXT("MagicParamGroupMetal"), TEXT("金属 / 标准"), TEXT("Metal / Standard"), StandardAndMetal, 0.0f, 1.0f, 0.0f, 0.02f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::MetallicMultiplier, TEXT("MagicParamMetallicMultiplier"), TEXT("金属度强度"), TEXT("Metallic Multiplier"), TEXT("MagicParamGroupMetal"), TEXT("金属 / 标准"), TEXT("Metal / Standard"), StandardAndMetal, 0.0f, 2.0f, 0.0f, 0.05f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::Anisotropy, TEXT("MagicParamAnisotropy"), TEXT("各向异性"), TEXT("Anisotropy"), TEXT("MagicParamGroupMetal"), TEXT("金属 / 标准"), TEXT("Metal / Standard"), MetalOnly, -1.0f, 1.0f, 0.22f, 0.02f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::FlakeScale, TEXT("MagicParamFlakeScale"), TEXT("金属颗粒缩放"), TEXT("Flake Scale"), TEXT("MagicParamGroupMetal"), TEXT("金属 / 标准"), TEXT("Metal / Standard"), MetalOnly, 1.0f, 200.0f, 35.0f, 1.0f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::FlakeIntensity, TEXT("MagicParamFlakeIntensity"), TEXT("金属颗粒强度"), TEXT("Flake Intensity"), TEXT("MagicParamGroupMetal"), TEXT("金属 / 标准"), TEXT("Metal / Standard"), MetalOnly, 0.0f, 2.0f, 0.0f, 0.02f, true),
+
+		MakeMagicSwitchParameter(FPBRMaterialParameters::UseHeightTexture, TEXT("MagicParamUseHeightTexture"), TEXT("启用高度贴图"), TEXT("Use Height Texture"), TEXT("MagicParamGroupHeight"), TEXT("高度 / 置换"), TEXT("Height / Displacement"), HeightTypes, false),
+		MakeMagicScalarParameter(FPBRMaterialParameters::HeightStrength, TEXT("MagicParamHeightStrength"), TEXT("置换强度"), TEXT("Height Strength"), TEXT("MagicParamGroupHeight"), TEXT("高度 / 置换"), TEXT("Height / Displacement"), HeightTypes, 0.0f, 1.0f, 0.0f, 0.01f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::PixelDepthOffsetStrength, TEXT("MagicParamPixelDepthOffset"), TEXT("深度偏移强度"), TEXT("Pixel Depth Offset"), TEXT("MagicParamGroupHeight"), TEXT("高度 / 置换"), TEXT("Height / Displacement"), HeightTypes, 0.0f, 1.0f, 0.0f, 0.01f),
+
+		MakeMagicColorParameter(FPBRMaterialParameters::FabricFuzzColor, TEXT("MagicParamFabricFuzzColor"), TEXT("织物绒毛颜色"), TEXT("Fabric Fuzz Color"), TEXT("MagicParamGroupFabric"), TEXT("布料绒毛"), TEXT("Fabric Fuzz"), FabricOnly, FLinearColor::White),
+		MakeMagicScalarParameter(FPBRMaterialParameters::FabricFuzzStrength, TEXT("MagicParamFabricFuzzStrength"), TEXT("织物绒毛强度"), TEXT("Fabric Fuzz Strength"), TEXT("MagicParamGroupFabric"), TEXT("布料绒毛"), TEXT("Fabric Fuzz"), FabricOnly, 0.0f, 2.0f, 0.42f, 0.02f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::ClearCoat, TEXT("MagicParamClearCoat"), TEXT("清漆强度"), TEXT("Clear Coat"), TEXT("MagicParamGroupLeather"), TEXT("皮革清漆"), TEXT("Leather Clear Coat"), LeatherOnly, 0.0f, 1.0f, 0.35f, 0.02f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::ClearCoatRoughness, TEXT("MagicParamClearCoatRoughness"), TEXT("清漆粗糙度"), TEXT("Clear Coat Roughness"), TEXT("MagicParamGroupLeather"), TEXT("皮革清漆"), TEXT("Leather Clear Coat"), LeatherOnly, 0.0f, 1.0f, 0.22f, 0.02f, true),
+
+		MakeMagicSwitchParameter(FPBRMaterialParameters::UseOpacityTexture, TEXT("MagicParamUseOpacityTexture"), TEXT("启用透明贴图"), TEXT("Use Opacity Texture"), TEXT("MagicParamGroupTransparent"), TEXT("透明 / 折射"), TEXT("Transparency / Refraction"), TransparentTypes, false, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::Opacity, TEXT("MagicParamOpacity"), TEXT("透明度"), TEXT("Opacity"), TEXT("MagicParamGroupTransparent"), TEXT("透明 / 折射"), TEXT("Transparency / Refraction"), TransparentTypes, 0.0f, 1.0f, 0.35f, 0.02f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::RefractionAmount, TEXT("MagicParamRefraction"), TEXT("折射率"), TEXT("Refraction"), TEXT("MagicParamGroupTransparent"), TEXT("透明 / 折射"), TEXT("Transparency / Refraction"), TransparentTypes, 1.0f, 2.4f, 1.45f, 0.01f, true),
+
+		MakeMagicColorParameter(FPBRMaterialParameters::GlassAbsorptionColor, TEXT("MagicParamGlassAbsorptionColor"), TEXT("玻璃吸收颜色"), TEXT("Absorption Color"), TEXT("MagicParamGroupGlass"), TEXT("玻璃光学"), TEXT("Glass Optics"), GlassOnly, FLinearColor(0.78f, 0.92f, 1.0f, 1.0f), true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassOpacityFresnelStrength, TEXT("MagicParamGlassOpacityFresnel"), TEXT("透明菲涅尔强度"), TEXT("Opacity Fresnel"), TEXT("MagicParamGroupGlass"), TEXT("玻璃光学"), TEXT("Glass Optics"), GlassOnly, 0.0f, 1.0f, 0.35f, 0.02f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassFresnelBaseReflection, TEXT("MagicParamGlassFresnelBase"), TEXT("菲涅尔基础反射"), TEXT("Fresnel Base"), TEXT("MagicParamGroupGlass"), TEXT("玻璃光学"), TEXT("Glass Optics"), GlassOnly, 0.0f, 1.0f, 0.02f, 0.01f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassFresnelExp, TEXT("MagicParamGlassFresnelExp"), TEXT("菲涅尔指数"), TEXT("Fresnel Exponent"), TEXT("MagicParamGroupGlass"), TEXT("玻璃光学"), TEXT("Glass Optics"), GlassOnly, 0.5f, 12.0f, 5.0f, 0.1f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassFrostedStrength, TEXT("MagicParamGlassFrosted"), TEXT("毛玻璃强度"), TEXT("Frosted Strength"), TEXT("MagicParamGroupGlass"), TEXT("玻璃光学"), TEXT("Glass Optics"), GlassOnly, 0.0f, 1.0f, 0.0f, 0.02f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassAbsorptionStrength, TEXT("MagicParamGlassAbsorptionStrength"), TEXT("玻璃吸收强度"), TEXT("Absorption Strength"), TEXT("MagicParamGroupGlass"), TEXT("玻璃光学"), TEXT("Glass Optics"), GlassOnly, 0.0f, 2.0f, 0.15f, 0.02f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassEdgeTintStrength, TEXT("MagicParamGlassEdgeTint"), TEXT("玻璃边缘染色"), TEXT("Edge Tint"), TEXT("MagicParamGroupGlass"), TEXT("玻璃光学"), TEXT("Glass Optics"), GlassOnly, 0.0f, 2.0f, 0.25f, 0.02f),
+
+		MakeMagicColorParameter(FPBRMaterialParameters::GlassDirtColor, TEXT("MagicParamGlassDirtColor"), TEXT("玻璃污渍颜色"), TEXT("Dirt Color"), TEXT("MagicParamGroupGlassDirt"), TEXT("玻璃污渍"), TEXT("Glass Dirt"), GlassOnly, FLinearColor(0.35f, 0.32f, 0.26f, 1.0f)),
+		MakeMagicSwitchParameter(FPBRMaterialParameters::UseGlassDirtTexture, TEXT("MagicParamUseGlassDirtTexture"), TEXT("启用污渍贴图"), TEXT("Use Dirt Texture"), TEXT("MagicParamGroupGlassDirt"), TEXT("玻璃污渍"), TEXT("Glass Dirt"), GlassOnly, false),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassDirtIntensity, TEXT("MagicParamGlassDirtIntensity"), TEXT("玻璃污渍强度"), TEXT("Dirt Intensity"), TEXT("MagicParamGroupGlassDirt"), TEXT("玻璃污渍"), TEXT("Glass Dirt"), GlassOnly, 0.0f, 2.0f, 0.0f, 0.02f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassDirtOpacity, TEXT("MagicParamGlassDirtOpacity"), TEXT("玻璃污渍透明度"), TEXT("Dirt Opacity"), TEXT("MagicParamGroupGlassDirt"), TEXT("玻璃污渍"), TEXT("Glass Dirt"), GlassOnly, 0.0f, 1.0f, 0.35f, 0.02f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassDirtRoughness, TEXT("MagicParamGlassDirtRoughness"), TEXT("玻璃污渍粗糙度"), TEXT("Dirt Roughness"), TEXT("MagicParamGroupGlassDirt"), TEXT("玻璃污渍"), TEXT("Glass Dirt"), GlassOnly, 0.0f, 1.0f, 0.65f, 0.02f),
+		MakeMagicSwitchParameter(FPBRMaterialParameters::UseGlassDistortionTexture, TEXT("MagicParamUseGlassDistortionTexture"), TEXT("启用扭曲贴图"), TEXT("Use Distortion Texture"), TEXT("MagicParamGroupGlassDistortion"), TEXT("玻璃扭曲 / 阴影"), TEXT("Glass Distortion / Shadow"), GlassOnly, false),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassDistortionIntensity, TEXT("MagicParamGlassDistortion"), TEXT("玻璃扭曲强度"), TEXT("Distortion"), TEXT("MagicParamGroupGlassDistortion"), TEXT("玻璃扭曲 / 阴影"), TEXT("Glass Distortion / Shadow"), GlassOnly, 0.0f, 2.0f, 0.0f, 0.02f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassDistortionIORIntensity, TEXT("MagicParamGlassDistortionIOR"), TEXT("玻璃 IOR 扭曲强度"), TEXT("IOR Distortion"), TEXT("MagicParamGroupGlassDistortion"), TEXT("玻璃扭曲 / 阴影"), TEXT("Glass Distortion / Shadow"), GlassOnly, 0.0f, 2.0f, 0.0f, 0.02f),
+		MakeMagicSwitchParameter(FPBRMaterialParameters::UseGlassFrostedTexture, TEXT("MagicParamUseGlassFrostedTexture"), TEXT("启用磨砂贴图"), TEXT("Use Frosted Texture"), TEXT("MagicParamGroupGlassDistortion"), TEXT("玻璃扭曲 / 阴影"), TEXT("Glass Distortion / Shadow"), GlassOnly, false),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassShadowOpacity, TEXT("MagicParamGlassShadowOpacity"), TEXT("玻璃投影强度"), TEXT("Shadow Opacity"), TEXT("MagicParamGroupGlassDistortion"), TEXT("玻璃扭曲 / 阴影"), TEXT("Glass Distortion / Shadow"), GlassOnly, 0.0f, 1.0f, 0.55f, 0.02f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassShadowHighlightClamp, TEXT("MagicParamGlassShadowHighlightClamp"), TEXT("玻璃阴影高光裁剪"), TEXT("Shadow Highlight Clamp"), TEXT("MagicParamGroupGlassDistortion"), TEXT("玻璃扭曲 / 阴影"), TEXT("Glass Distortion / Shadow"), GlassOnly, 0.0f, 2.0f, 0.85f, 0.02f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassShadowNormalIntensity, TEXT("MagicParamGlassShadowNormal"), TEXT("玻璃阴影法线强度"), TEXT("Shadow Normal"), TEXT("MagicParamGroupGlassDistortion"), TEXT("玻璃扭曲 / 阴影"), TEXT("Glass Distortion / Shadow"), GlassOnly, 0.0f, 2.0f, 0.25f, 0.02f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassCausticsIntensity, TEXT("MagicParamGlassCaustics"), TEXT("玻璃焦散强度"), TEXT("Caustics Intensity"), TEXT("MagicParamGroupGlassRay"), TEXT("玻璃焦散 / 光追"), TEXT("Glass Caustics / RT"), GlassOnly, 0.0f, 10.0f, 0.0f, 0.05f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassCausticsScale, TEXT("MagicParamGlassCausticsScale"), TEXT("玻璃焦散大小"), TEXT("Caustics Scale"), TEXT("MagicParamGroupGlassRay"), TEXT("玻璃焦散 / 光追"), TEXT("Glass Caustics / RT"), GlassOnly, 0.01f, 100.0f, 24.0f, 0.5f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassCausticsSpeed, TEXT("MagicParamGlassCausticsSpeed"), TEXT("玻璃焦散速度"), TEXT("Caustics Speed"), TEXT("MagicParamGroupGlassRay"), TEXT("玻璃焦散 / 光追"), TEXT("Glass Caustics / RT"), GlassOnly, -5.0f, 5.0f, 0.12f, 0.01f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassRTOpacity, TEXT("MagicParamGlassRTOpacity"), TEXT("光追玻璃透明度"), TEXT("RT Opacity"), TEXT("MagicParamGroupGlassRay"), TEXT("玻璃焦散 / 光追"), TEXT("Glass Caustics / RT"), GlassOnly, 0.0f, 1.0f, 0.35f, 0.02f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassRTRefractionAmount, TEXT("MagicParamGlassRTRefraction"), TEXT("光追玻璃折射"), TEXT("RT Refraction"), TEXT("MagicParamGroupGlassRay"), TEXT("玻璃焦散 / 光追"), TEXT("Glass Caustics / RT"), GlassOnly, 1.0f, 2.4f, 1.45f, 0.01f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::GlassRTFrostedStrength, TEXT("MagicParamGlassRTFrosted"), TEXT("光追毛玻璃强度"), TEXT("RT Frosted"), TEXT("MagicParamGroupGlassRay"), TEXT("玻璃焦散 / 光追"), TEXT("Glass Caustics / RT"), GlassOnly, 0.0f, 1.0f, 0.0f, 0.02f),
+
+		MakeMagicColorParameter(FPBRMaterialParameters::WaterColor, TEXT("MagicParamWaterColor"), TEXT("水体颜色"), TEXT("Water Color"), TEXT("MagicParamGroupWater"), TEXT("水体"), TEXT("Water"), WaterOnly, FLinearColor(0.12f, 0.42f, 0.72f, 1.0f), true),
+		MakeMagicSwitchParameter(FPBRMaterialParameters::UseWaterRippleTexture, TEXT("MagicParamUseWaterRippleTexture"), TEXT("启用水纹贴图"), TEXT("Use Ripple Texture"), TEXT("MagicParamGroupWater"), TEXT("水体"), TEXT("Water"), WaterOnly, false),
+		MakeMagicScalarParameter(FPBRMaterialParameters::WaterFlowSpeedU, TEXT("MagicParamWaterFlowU"), TEXT("水流 U 速度"), TEXT("Flow U"), TEXT("MagicParamGroupWater"), TEXT("水体"), TEXT("Water"), WaterOnly, -2.0f, 2.0f, 0.18f, 0.01f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::WaterFlowSpeedV, TEXT("MagicParamWaterFlowV"), TEXT("水流 V 速度"), TEXT("Flow V"), TEXT("MagicParamGroupWater"), TEXT("水体"), TEXT("Water"), WaterOnly, -2.0f, 2.0f, 0.09f, 0.01f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::WaterRippleScale, TEXT("MagicParamWaterRippleScale"), TEXT("水波缩放"), TEXT("Ripple Scale"), TEXT("MagicParamGroupWater"), TEXT("水体"), TEXT("Water"), WaterOnly, 0.01f, 50.0f, 18.0f, 0.5f, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::WaterRippleStrength, TEXT("MagicParamWaterRippleStrength"), TEXT("水波强度"), TEXT("Ripple Strength"), TEXT("MagicParamGroupWater"), TEXT("水体"), TEXT("Water"), WaterOnly, 0.0f, 2.0f, 0.8f, 0.02f, true),
+
+		MakeMagicColorParameter(FPBRMaterialParameters::EmissiveColor, TEXT("MagicParamEmissiveColor"), TEXT("自发光颜色"), TEXT("Emissive Color"), TEXT("MagicParamGroupEmissive"), TEXT("自发光"), TEXT("Emissive"), EmissiveOnly, FLinearColor::White, true),
+		MakeMagicSwitchParameter(FPBRMaterialParameters::UseEmissiveTexture, TEXT("MagicParamUseEmissiveTexture"), TEXT("启用自发光贴图"), TEXT("Use Emissive Texture"), TEXT("MagicParamGroupEmissive"), TEXT("自发光"), TEXT("Emissive"), EmissiveOnly, false),
+		MakeMagicSwitchParameter(FPBRMaterialParameters::UseEmissiveTemperature, TEXT("MagicParamUseEmissiveTemperature"), TEXT("使用自发光色温"), TEXT("Use Emissive Temperature"), TEXT("MagicParamGroupEmissive"), TEXT("自发光"), TEXT("Emissive"), EmissiveOnly, false, true),
+		MakeMagicScalarParameter(FPBRMaterialParameters::EmissiveTemperatureKelvin, TEXT("MagicParamEmissiveKelvin"), TEXT("自发光色温"), TEXT("Emissive Kelvin"), TEXT("MagicParamGroupEmissive"), TEXT("自发光"), TEXT("Emissive"), EmissiveOnly, 1000.0f, 20000.0f, 6500.0f, 250.0f),
+		MakeMagicScalarParameter(FPBRMaterialParameters::EmissiveIntensity, TEXT("MagicParamEmissiveIntensity"), TEXT("自发光强度"), TEXT("Emissive Intensity"), TEXT("MagicParamGroupEmissive"), TEXT("自发光"), TEXT("Emissive"), EmissiveOnly, 0.0f, 100.0f, 2.0f, 0.25f, true)
+	};
+	return Parameters;
+}
+
+static bool HasMagicEditableGroupVisibleForType(const TCHAR* GroupKey, EPBRMaterialType MaterialType)
+{
+	for (const FPBRMagicEditableMaterialParameter& Parameter : GetMagicEditableMaterialParameters())
+	{
+		if (FCString::Strcmp(Parameter.GroupKey, GroupKey) == 0 && IsMagicEditableParameterVisibleForType(Parameter, MaterialType))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+static FString FormatMagicEditableMaterialScalar(float Value, float StepValue)
+{
+	if (StepValue >= 100.0f)
+	{
+		return FString::Printf(TEXT("%.0f"), Value);
+	}
+	if (StepValue >= 1.0f)
+	{
+		return FString::Printf(TEXT("%.0f"), Value);
+	}
+	if (StepValue >= 0.1f)
+	{
+		return FString::Printf(TEXT("%.1f"), Value);
+	}
+	return FString::Printf(TEXT("%.2f"), Value);
+}
+
 class SPBRMagicOutlinerRow : public STableRow<TSharedPtr<FPBRMagicOutlinerItem>>
 {
 public:
@@ -504,7 +782,13 @@ enum class EPBRMagicPaintHitAction : uint8
 	RowToggle,
 	RowSelect,
 	OpenMaterial,
+	AdjustMaterial,
 	SelectActors,
+	MaterialTypePrevious,
+	MaterialTypeNext,
+	MaterialScalarDown,
+	MaterialScalarUp,
+	MaterialSwitchToggle,
 	ModelBatchRename,
 	ModelReplaceActors,
 	ModelGroupToFolder,
@@ -540,6 +824,12 @@ struct FPBRMagicPaintHitRegion
 	TSharedPtr<FPBRNameCheckListItem> NameItem;
 	TSharedPtr<FPBRCheckedActorListItem> CheckedActorItem;
 	int32 MaterialSlotIndex = INDEX_NONE;
+	FName MaterialParameterName;
+	float MaterialParameterMin = 0.0f;
+	float MaterialParameterMax = 1.0f;
+	float MaterialParameterDefault = 0.0f;
+	float MaterialParameterStep = 0.05f;
+	bool bMaterialSwitchDefault = false;
 };
 
 class SPBRMagicOutlinerPaintSurface : public SLeafWidget
@@ -704,6 +994,21 @@ public:
 					OwnerWindow->OpenMaterialEditor(OwnerWindow->SelectedMaterialItems[0]);
 				}
 				break;
+			case EPBRMagicPaintHitAction::AdjustMaterial:
+				if (Hit.Item.IsValid())
+				{
+					OwnerWindow->ActiveTreeItem = Hit.Item;
+					OwnerWindow->OnEditSelectedMaterialSlot(Hit.Item, Hit.MaterialSlotIndex);
+				}
+				else if (OwnerWindow->ActiveTreeItem.IsValid())
+				{
+					OwnerWindow->OnEditSelectedMaterialSlot(OwnerWindow->ActiveTreeItem);
+				}
+				else if (!OwnerWindow->SelectedMaterialItems.IsEmpty())
+				{
+					OwnerWindow->OnEditSelectedMaterialSlot(OwnerWindow->SelectedMaterialItems[0]);
+				}
+				break;
 			case EPBRMagicPaintHitAction::SelectActors:
 				if (OwnerWindow->ActiveTreeItem.IsValid())
 				{
@@ -716,6 +1021,27 @@ public:
 				else
 				{
 					OwnerWindow->OnSelectCheckedClicked();
+				}
+				break;
+			case EPBRMagicPaintHitAction::MaterialTypePrevious:
+				OwnerWindow->CycleEditableMaterialType(-1);
+				break;
+			case EPBRMagicPaintHitAction::MaterialTypeNext:
+				OwnerWindow->CycleEditableMaterialType(1);
+				break;
+			case EPBRMagicPaintHitAction::MaterialScalarDown:
+			case EPBRMagicPaintHitAction::MaterialScalarUp:
+				if (!Hit.MaterialParameterName.IsNone())
+				{
+					const float SignedStep = Hit.Action == EPBRMagicPaintHitAction::MaterialScalarUp ? Hit.MaterialParameterStep : -Hit.MaterialParameterStep;
+					OwnerWindow->StepEditableMaterialScalar(Hit.MaterialParameterName, SignedStep, Hit.MaterialParameterMin, Hit.MaterialParameterMax, Hit.MaterialParameterDefault);
+				}
+				break;
+			case EPBRMagicPaintHitAction::MaterialSwitchToggle:
+				if (!Hit.MaterialParameterName.IsNone())
+				{
+					const bool bCurrentValue = OwnerWindow->GetEditableMaterialSwitch(Hit.MaterialParameterName, Hit.bMaterialSwitchDefault);
+					OwnerWindow->CommitEditableMaterialSwitch(Hit.MaterialParameterName, !bCurrentValue);
 				}
 				break;
 			case EPBRMagicPaintHitAction::ModelBatchRename:
@@ -1118,6 +1444,29 @@ private:
 		Region.NameItem = NameItem;
 		Region.CheckedActorItem = CheckedActorItem;
 		Region.MaterialSlotIndex = MaterialSlotIndex;
+		HitRegions.Add(Region);
+	}
+
+	void AddMaterialScalarHit(const FVector2D& Position, const FVector2D& Size, EPBRMagicPaintHitAction Action, const FPBRMagicEditableMaterialParameter& Parameter) const
+	{
+		FPBRMagicPaintHitRegion Region;
+		Region.Rect = FSlateRect(Position.X, Position.Y, Position.X + Size.X, Position.Y + Size.Y);
+		Region.Action = Action;
+		Region.MaterialParameterName = Parameter.ParameterName;
+		Region.MaterialParameterMin = Parameter.MinValue;
+		Region.MaterialParameterMax = Parameter.MaxValue;
+		Region.MaterialParameterDefault = Parameter.DefaultValue;
+		Region.MaterialParameterStep = Parameter.StepValue;
+		HitRegions.Add(Region);
+	}
+
+	void AddMaterialSwitchHit(const FVector2D& Position, const FVector2D& Size, const FPBRMagicEditableMaterialParameter& Parameter) const
+	{
+		FPBRMagicPaintHitRegion Region;
+		Region.Rect = FSlateRect(Position.X, Position.Y, Position.X + Size.X, Position.Y + Size.Y);
+		Region.Action = EPBRMagicPaintHitAction::MaterialSwitchToggle;
+		Region.MaterialParameterName = Parameter.ParameterName;
+		Region.bMaterialSwitchDefault = Parameter.bDefaultSwitchValue;
 		HitRegions.Add(Region);
 	}
 
@@ -1853,6 +2202,125 @@ private:
 		DrawButton(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 46.0f, -7.0f), FVector2D(38.0f, 28.0f), TEXT("+"), TEXT(""), UpAction, Theme);
 	}
 
+	void DrawMaterialScalarStepper(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicEditableMaterialParameter& Parameter, const FPBRMagicTheme& Theme) const
+	{
+		const TOptional<float> OptionalValue = OwnerWindow->GetEditableMaterialScalar(Parameter.ParameterName, Parameter.DefaultValue);
+		const float Value = OptionalValue.IsSet() ? OptionalValue.GetValue() : Parameter.DefaultValue;
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position, Size.X - 112.0f, Parameter.GetLabel().ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 174.0f, 0), 76.0f, FormatMagicEditableMaterialScalar(Value, Parameter.StepValue), FAppStyle::GetFontStyle("SmallFont"), Theme.Selection);
+
+		const FVector2D ButtonSize(34.0f, 24.0f);
+		const FVector2D DownPos = Position + FVector2D(Size.X - 88.0f, -5.0f);
+		const FVector2D UpPos = Position + FVector2D(Size.X - 44.0f, -5.0f);
+		auto DrawParamButton = [this, &OutDrawElements, &Geometry, Layer, &Theme, ButtonSize](const FVector2D& ButtonPos, const FString& Text, EPBRMagicPaintHitAction Action, const FPBRMagicEditableMaterialParameter& Param)
+		{
+			const FSlateRect ButtonRect(ButtonPos.X, ButtonPos.Y, ButtonPos.X + ButtonSize.X, ButtonPos.Y + ButtonSize.Y);
+			const bool bHovered = HoveredAction == Action && RectMatches(HoveredRect, ButtonRect);
+			const bool bPressed = PressedAction == Action && RectMatches(PressedRect, ButtonRect);
+			const FLinearColor Fill = bPressed ? MixColor(Theme.PanelRaised, Theme.Background, 0.35f) : (bHovered ? MixColor(Theme.PanelRaised, Theme.Primary, 0.12f) : Theme.PanelRaised);
+			DrawRoundedBox(OutDrawElements, Geometry, Layer, ButtonPos, ButtonSize, Fill, 4.0f, bHovered || bPressed ? Theme.PrimarySoft : Theme.Border, 1.0f);
+			DrawTextInRect(OutDrawElements, Geometry, Layer + 1, ButtonPos + FVector2D(0.0f, 5.0f), ButtonSize.X, Text, FAppStyle::GetFontStyle("SmallFontBold"), Theme.Selection);
+			AddMaterialScalarHit(ButtonPos, ButtonSize, Action, Param);
+		};
+		DrawParamButton(DownPos, TEXT("-"), EPBRMagicPaintHitAction::MaterialScalarDown, Parameter);
+		DrawParamButton(UpPos, TEXT("+"), EPBRMagicPaintHitAction::MaterialScalarUp, Parameter);
+	}
+
+	void DrawMaterialSwitchRow(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicEditableMaterialParameter& Parameter, const FPBRMagicTheme& Theme) const
+	{
+		const bool bEnabled = OwnerWindow->GetEditableMaterialSwitch(Parameter.ParameterName, Parameter.bDefaultSwitchValue);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position, Size.X - 92.0f, Parameter.GetLabel().ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		const FVector2D TogglePos = Position + FVector2D(Size.X - 82.0f, -5.0f);
+		const FVector2D ToggleSize(74.0f, 24.0f);
+		const FSlateRect ToggleRect(TogglePos.X, TogglePos.Y, TogglePos.X + ToggleSize.X, TogglePos.Y + ToggleSize.Y);
+		const bool bHovered = HoveredAction == EPBRMagicPaintHitAction::MaterialSwitchToggle && RectMatches(HoveredRect, ToggleRect);
+		DrawRoundedBox(OutDrawElements, Geometry, Layer, TogglePos, ToggleSize, bEnabled ? Theme.DropZone : Theme.PanelRaised, 4.0f, bHovered ? Theme.Primary : Theme.Border, 1.0f);
+		DrawTextInRect(OutDrawElements, Geometry, Layer + 1, TogglePos + FVector2D(8.0f, 5.0f), ToggleSize.X - 16.0f, bEnabled ? TEXT("ON") : TEXT("OFF"), FAppStyle::GetFontStyle("SmallFontBold"), bEnabled ? Theme.Selection : Theme.TextMuted);
+		AddMaterialSwitchHit(TogglePos, ToggleSize, Parameter);
+	}
+
+	void DrawMaterialColorRow(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicEditableMaterialParameter& Parameter, const FPBRMagicTheme& Theme) const
+	{
+		const TOptional<float> OptionalR = OwnerWindow->GetEditableMaterialVectorChannel(Parameter.ParameterName, 0, Parameter.DefaultColor);
+		const TOptional<float> OptionalG = OwnerWindow->GetEditableMaterialVectorChannel(Parameter.ParameterName, 1, Parameter.DefaultColor);
+		const TOptional<float> OptionalB = OwnerWindow->GetEditableMaterialVectorChannel(Parameter.ParameterName, 2, Parameter.DefaultColor);
+		const float R = OptionalR.IsSet() ? OptionalR.GetValue() : Parameter.DefaultColor.R;
+		const float G = OptionalG.IsSet() ? OptionalG.GetValue() : Parameter.DefaultColor.G;
+		const float B = OptionalB.IsSet() ? OptionalB.GetValue() : Parameter.DefaultColor.B;
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position, Size.X - 62.0f, Parameter.GetLabel().ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		DrawRoundedBox(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 50.0f, -3.0f), FVector2D(42.0f, 20.0f), FLinearColor(R, G, B, 1.0f), 4.0f, Theme.Border, 1.0f);
+	}
+
+	void DrawMaterialControls(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicTheme& Theme) const
+	{
+		DrawPanelSurface(OutDrawElements, Geometry, Layer, Position, Size, Theme.PanelRaised, 6.0f, Theme.Border, 1.0f);
+		DrawText(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, 10.0f), TEXT("材质直接调整"), FAppStyle::GetFontStyle("NormalFontBold"), Theme.Text);
+		if (!OwnerWindow->GetEditableMaterialInstance())
+		{
+			DrawTextInRect(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, 36.0f), Size.X - 24.0f, TEXT("点材质槽右侧“调参”后可直接改当前材质。"), FAppStyle::GetFontStyle("SmallFont"), Theme.TextMuted);
+			return;
+		}
+
+		DrawTextInRect(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, 34.0f), Size.X - 24.0f, OwnerWindow->GetEditableMaterialNameText().ToString(), FAppStyle::GetFontStyle("SmallFont"), Theme.TextMuted);
+		DrawButton(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, 58.0f), FVector2D(40.0f, 26.0f), TEXT("<"), TEXT(""), EPBRMagicPaintHitAction::MaterialTypePrevious, Theme);
+		DrawRoundedBox(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(58.0f, 58.0f), FVector2D(Size.X - 116.0f, 26.0f), Theme.Background, 4.0f, Theme.Border, 1.0f);
+		DrawTextInRect(OutDrawElements, Geometry, Layer + 2, Position + FVector2D(66.0f, 64.0f), Size.X - 132.0f, OwnerWindow->GetEditableMaterialTypeText().ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Selection);
+		DrawButton(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(Size.X - 52.0f, 58.0f), FVector2D(40.0f, 26.0f), TEXT(">"), TEXT(""), EPBRMagicPaintHitAction::MaterialTypeNext, Theme);
+
+		TArray<const FPBRMagicEditableMaterialParameter*> PriorityParameters;
+		TArray<const FPBRMagicEditableMaterialParameter*> CoreParameters;
+		const EPBRMaterialType MaterialType = OwnerWindow->GetEditableMaterialType();
+		for (const FPBRMagicEditableMaterialParameter& Parameter : GetMagicEditableMaterialParameters())
+		{
+			if (!Parameter.bShowOnPaintSurface || !IsMagicEditableParameterVisibleForType(Parameter, MaterialType))
+			{
+				continue;
+			}
+
+			const bool bTypeSpecific = Parameter.TypeMask != MagicEditableMaterialAllTypesMask;
+			if (bTypeSpecific)
+			{
+				PriorityParameters.Add(&Parameter);
+			}
+			else
+			{
+				CoreParameters.Add(&Parameter);
+			}
+		}
+
+		TArray<const FPBRMagicEditableMaterialParameter*> VisibleParameters;
+		VisibleParameters.Append(PriorityParameters);
+		VisibleParameters.Append(CoreParameters);
+
+		float RowY = Position.Y + 100.0f;
+		const float RowH = 27.0f;
+		const int32 MaxRows = FMath::Clamp(FMath::FloorToInt((Size.Y - 112.0f) / RowH), 0, 7);
+		for (int32 Index = 0; Index < FMath::Min(MaxRows, VisibleParameters.Num()); ++Index)
+		{
+			const FPBRMagicEditableMaterialParameter* Parameter = VisibleParameters[Index];
+			if (!Parameter)
+			{
+				continue;
+			}
+
+			const FVector2D RowPos(Position.X + 12.0f, RowY);
+			const FVector2D RowSize(Size.X - 24.0f, RowH);
+			switch (Parameter->Kind)
+			{
+			case EPBRMagicEditableMaterialParameterKind::Scalar:
+				DrawMaterialScalarStepper(OutDrawElements, Geometry, Layer + 1, RowPos, RowSize, *Parameter, Theme);
+				break;
+			case EPBRMagicEditableMaterialParameterKind::Switch:
+				DrawMaterialSwitchRow(OutDrawElements, Geometry, Layer + 1, RowPos, RowSize, *Parameter, Theme);
+				break;
+			case EPBRMagicEditableMaterialParameterKind::Color:
+				DrawMaterialColorRow(OutDrawElements, Geometry, Layer + 1, RowPos, RowSize, *Parameter, Theme);
+				break;
+			}
+			RowY += RowH;
+		}
+	}
+
 	void DrawLightControls(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicTheme& Theme) const
 	{
 		DrawPanelSurface(OutDrawElements, Geometry, Layer, Position, Size, Theme.PanelRaised, 6.0f, Theme.Border, 1.0f);
@@ -1917,9 +2385,19 @@ private:
 		}
 		else
 		{
-			DrawButton(OutDrawElements, Geometry, Layer + 1, ActionsPos + FVector2D(12, 22), FVector2D(100, 34), TEXT("↗"), TEXT("打开材质"), EPBRMagicPaintHitAction::OpenMaterial, Theme);
-			DrawButton(OutDrawElements, Geometry, Layer + 1, ActionsPos + FVector2D(124, 22), FVector2D(122, 34), TEXT("□"), TEXT("选择关联Actor"), EPBRMagicPaintHitAction::SelectActors, Theme);
-			DrawButton(OutDrawElements, Geometry, Layer + 1, ActionsPos + FVector2D(258, 22), FVector2D(86, 34), TEXT("⟳"), TEXT("重置"), EPBRMagicPaintHitAction::ClearChecked, Theme);
+			if (bMaterialInspector)
+			{
+				DrawButton(OutDrawElements, Geometry, Layer + 1, ActionsPos + FVector2D(12, 22), FVector2D(72, 34), TEXT("↗"), TEXT("打开"), EPBRMagicPaintHitAction::OpenMaterial, Theme);
+				DrawButton(OutDrawElements, Geometry, Layer + 1, ActionsPos + FVector2D(94, 22), FVector2D(104, 34), TEXT("□"), TEXT("选Actor"), EPBRMagicPaintHitAction::SelectActors, Theme);
+				DrawButton(OutDrawElements, Geometry, Layer + 1, ActionsPos + FVector2D(208, 22), FVector2D(72, 34), TEXT("◇"), TEXT("调参"), EPBRMagicPaintHitAction::AdjustMaterial, Theme);
+				DrawButton(OutDrawElements, Geometry, Layer + 1, ActionsPos + FVector2D(290, 22), FVector2D(54, 34), TEXT("⟳"), TEXT("重置"), EPBRMagicPaintHitAction::ClearChecked, Theme);
+			}
+			else
+			{
+				DrawButton(OutDrawElements, Geometry, Layer + 1, ActionsPos + FVector2D(12, 22), FVector2D(100, 34), TEXT("↗"), TEXT("打开材质"), EPBRMagicPaintHitAction::OpenMaterial, Theme);
+				DrawButton(OutDrawElements, Geometry, Layer + 1, ActionsPos + FVector2D(124, 22), FVector2D(122, 34), TEXT("□"), TEXT("选择关联Actor"), EPBRMagicPaintHitAction::SelectActors, Theme);
+				DrawButton(OutDrawElements, Geometry, Layer + 1, ActionsPos + FVector2D(258, 22), FVector2D(86, 34), TEXT("⟳"), TEXT("重置"), EPBRMagicPaintHitAction::ClearChecked, Theme);
+			}
 		}
 
 		const FVector2D ListPos = Position + FVector2D(12, 188);
@@ -1928,8 +2406,9 @@ private:
 		DrawText(OutDrawElements, Geometry, Layer + 1, ListPos + FVector2D(Size.X - 46, 0), FString::FromInt(InspectorCount), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Selection);
 
 		const FVector2D FooterPos(Position.X + 12.0f, Position.Y + Size.Y - 72.0f);
-		const bool bShowParameterPanel = OwnerWindow->ActiveCategory == EPBRMagicOutlinerCategory::Lights || OwnerWindow->ActiveCategory == EPBRMagicOutlinerCategory::Cameras;
-		const float ParameterHeight = OwnerWindow->ActiveCategory == EPBRMagicOutlinerCategory::Cameras ? 292.0f : (bShowParameterPanel ? 188.0f : 0.0f);
+		const bool bShowMaterialParameterPanel = bMaterialInspector && OwnerWindow->GetEditableMaterialInstance() != nullptr;
+		const bool bShowParameterPanel = OwnerWindow->ActiveCategory == EPBRMagicOutlinerCategory::Lights || OwnerWindow->ActiveCategory == EPBRMagicOutlinerCategory::Cameras || bShowMaterialParameterPanel;
+		const float ParameterHeight = OwnerWindow->ActiveCategory == EPBRMagicOutlinerCategory::Cameras ? 292.0f : (bShowMaterialParameterPanel ? 250.0f : (bShowParameterPanel ? 188.0f : 0.0f));
 		const FVector2D ParameterPos(Position.X + 12.0f, FooterPos.Y - ParameterHeight - 8.0f);
 		const FVector2D ListBoxPos = ListPos + FVector2D(0, 24);
 		const float ListBoxBottom = bShowParameterPanel ? ParameterPos.Y - 12.0f : FooterPos.Y - 18.0f;
@@ -2000,14 +2479,15 @@ private:
 							DrawRoundedBox(OutDrawElements, Geometry, Layer + 1, SlotPos, SlotSize, Theme.PanelRaised, 4.0f, Theme.Border, 1.0f);
 							DrawBox(OutDrawElements, Geometry, Layer + 2, SlotPos + FVector2D(8.0f, 8.0f), FVector2D(6.0f, 6.0f), Theme.Primary);
 							DrawTextInRect(OutDrawElements, Geometry, Layer + 3, SlotPos + FVector2D(22.0f, 6.0f), 38.0f, FString::Printf(TEXT("[%d]"), SlotRef.SlotIndex), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Selection);
-							const float ReplaceW = 44.0f;
-							const float AvailableTextW = FMath::Max(120.0f, SlotSize.X - 122.0f - ReplaceW);
+							const float ActionW = 44.0f;
+							const float AvailableTextW = FMath::Max(120.0f, SlotSize.X - 122.0f - ActionW);
 							const float ActorW = FMath::Clamp(SlotSize.X * 0.38f, 78.0f, AvailableTextW * 0.58f);
 							const float ComponentW = FMath::Max(52.0f, AvailableTextW - ActorW - 10.0f);
 							DrawTextInRect(OutDrawElements, Geometry, Layer + 3, SlotPos + FVector2D(62.0f, 6.0f), ActorW, ActorName, FAppStyle::GetFontStyle("SmallFont"), Theme.Text);
 							DrawTextInRect(OutDrawElements, Geometry, Layer + 3, SlotPos + FVector2D(72.0f + ActorW, 6.0f), ComponentW, ComponentName, FAppStyle::GetFontStyle("SmallFont"), Theme.TextMuted);
-							DrawTextInRect(OutDrawElements, Geometry, Layer + 3, SlotPos + FVector2D(SlotSize.X - 54.0f, 6.0f), 44.0f, TEXT("替换"), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Primary);
+							DrawTextInRect(OutDrawElements, Geometry, Layer + 3, SlotPos + FVector2D(SlotSize.X - 54.0f, 6.0f), ActionW, TEXT("调参"), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Primary);
 							AddHit(SlotPos, SlotSize, EPBRMagicPaintHitAction::RowSelect, EPBRMagicOutlinerCategory::All, Item, nullptr, nullptr, SlotLine);
+							AddHit(SlotPos + FVector2D(SlotSize.X - 62.0f, 0.0f), FVector2D(56.0f, SlotSize.Y), EPBRMagicPaintHitAction::AdjustMaterial, EPBRMagicOutlinerCategory::All, Item, nullptr, nullptr, SlotRef.SlotIndex);
 						}
 						CardY += SlotH;
 					}
@@ -2072,6 +2552,10 @@ private:
 		else if (OwnerWindow->ActiveCategory == EPBRMagicOutlinerCategory::Cameras)
 		{
 			DrawCameraControls(OutDrawElements, Geometry, Layer + 1, ParameterPos, FVector2D(Size.X - 24.0f, ParameterHeight), Theme);
+		}
+		else if (bShowMaterialParameterPanel)
+		{
+			DrawMaterialControls(OutDrawElements, Geometry, Layer + 1, ParameterPos, FVector2D(Size.X - 24.0f, ParameterHeight), Theme);
 		}
 
 		DrawPanelSurface(OutDrawElements, Geometry, Layer, FooterPos, FVector2D(Size.X - 24.0f, 56.0f), Theme.PanelRaised, 5.0f, Theme.Border, 1.0f);
@@ -3146,6 +3630,44 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildSelectedMaterialEditorPanel()
 			.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Text"))); });
 	};
 
+	TSharedRef<SVerticalBox> ParameterBox = SNew(SVerticalBox);
+	FString LastGroupKey;
+	for (const FPBRMagicEditableMaterialParameter& Parameter : GetMagicEditableMaterialParameters())
+	{
+		const FString GroupKey(Parameter.GroupKey);
+		if (GroupKey != LastGroupKey)
+		{
+			LastGroupKey = GroupKey;
+			ParameterBox->AddSlot()
+			.AutoHeight()
+			.Padding(0, 8, 0, 4)
+			[
+				SNew(STextBlock)
+				.Visibility_Lambda([this, GroupKey]()
+				{
+					return HasMagicEditableGroupVisibleForType(*GroupKey, GetEditableMaterialType()) ? EVisibility::Visible : EVisibility::Collapsed;
+				})
+				.Text(Parameter.GetGroupLabel())
+				.Font(FAppStyle::GetFontStyle("SmallFontBold"))
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Selection"))); })
+			];
+		}
+
+		ParameterBox->AddSlot()
+		.AutoHeight()
+		.Padding(0, 0, 0, 4)
+		[
+			SNew(SBox)
+			.Visibility_Lambda([this, TypeMask = Parameter.TypeMask]()
+			{
+				return (TypeMask & MagicEditableMaterialTypeBit(GetEditableMaterialType())) != 0 ? EVisibility::Visible : EVisibility::Collapsed;
+			})
+			[
+				BuildMaterialParameterControl(Parameter)
+			]
+		];
+	}
+
 	return SNew(SBorder)
 		.Visibility(this, &SPBRMagicOutlinerWindow::GetEditableMaterialPanelVisibility)
 		.BorderImage(FAppStyle::Get().GetBrush("Brushes.Recessed"))
@@ -3207,37 +3729,17 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildSelectedMaterialEditorPanel()
 					]
 				]
 			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
-			[
-				BuildMaterialVectorControl(PBRText(TEXT("MagicBaseColorTint"), TEXT("基础色调"), TEXT("Base Tint")), FPBRMaterialParameters::BaseColorTint, FLinearColor::White)
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
-			[
-				BuildMaterialVectorControl(PBRText(TEXT("MagicEmissiveColor"), TEXT("自发光颜色"), TEXT("Emissive Color")), FPBRMaterialParameters::EmissiveColor, FLinearColor::Black)
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
-			[
-				BuildMaterialScalarControl(PBRText(TEXT("MagicBaseIntensity"), TEXT("基础色强度"), TEXT("Base Intensity")), FPBRMaterialParameters::BaseColorIntensity, 0.0f, 5.0f, 1.0f)
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
-			[
-				BuildMaterialScalarControl(PBRText(TEXT("MagicRoughnessValue"), TEXT("粗糙度"), TEXT("Roughness")), FPBRMaterialParameters::RoughnessValue, 0.0f, 1.0f, 0.5f)
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
-			[
-				BuildMaterialScalarControl(PBRText(TEXT("MagicMetallicValue"), TEXT("金属度"), TEXT("Metallic")), FPBRMaterialParameters::MetallicValue, 0.0f, 1.0f, 0.0f)
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
-			[
-				BuildMaterialScalarControl(PBRText(TEXT("MagicNormalStrength"), TEXT("法线强度"), TEXT("Normal Strength")), FPBRMaterialParameters::NormalStrength, 0.0f, 5.0f, 1.0f)
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
-			[
-				BuildMaterialScalarControl(PBRText(TEXT("MagicOpacity"), TEXT("透明度"), TEXT("Opacity")), FPBRMaterialParameters::Opacity, 0.0f, 1.0f, 1.0f)
-			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
-				BuildMaterialScalarControl(PBRText(TEXT("MagicEmissiveIntensity"), TEXT("自发光强度"), TEXT("Emissive Intensity")), FPBRMaterialParameters::EmissiveIntensity, 0.0f, 20.0f, 0.0f)
+				SNew(SBox)
+				.HeightOverride(360.0f)
+				[
+					SNew(SScrollBox)
+					+ SScrollBox::Slot()
+					[
+						ParameterBox
+					]
+				]
 			]
 		];
 }
@@ -3267,7 +3769,21 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildEditableMaterialTypeMenu()
 	return MenuBox;
 }
 
-TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialScalarControl(const FText& Label, const FName& ParameterName, float MinValue, float MaxValue, float DefaultValue)
+TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialParameterControl(const FPBRMagicEditableMaterialParameter& Parameter)
+{
+	switch (Parameter.Kind)
+	{
+	case EPBRMagicEditableMaterialParameterKind::Color:
+		return BuildMaterialVectorControl(Parameter.GetLabel(), Parameter.ParameterName, Parameter.DefaultColor);
+	case EPBRMagicEditableMaterialParameterKind::Switch:
+		return BuildMaterialSwitchControl(Parameter.GetLabel(), Parameter.ParameterName, Parameter.bDefaultSwitchValue);
+	case EPBRMagicEditableMaterialParameterKind::Scalar:
+	default:
+		return BuildMaterialScalarControl(Parameter.GetLabel(), Parameter.ParameterName, Parameter.MinValue, Parameter.MaxValue, Parameter.DefaultValue, Parameter.StepValue);
+	}
+}
+
+TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialScalarControl(const FText& Label, const FName& ParameterName, float MinValue, float MaxValue, float DefaultValue, float StepValue)
 {
 	return SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot().FillWidth(0.45f).VAlign(VAlign_Center).Padding(0, 0, 8, 0)
@@ -3285,7 +3801,7 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialScalarControl(const FT
 			.MaxValue(MaxValue)
 			.MinSliderValue(MinValue)
 			.MaxSliderValue(MaxValue)
-			.Delta((MaxValue - MinValue) <= 1.0f ? 0.01f : 0.05f)
+			.Delta(StepValue)
 			.Value_Lambda([this, ParameterName, DefaultValue]()
 			{
 				return GetEditableMaterialScalar(ParameterName, DefaultValue);
@@ -3341,6 +3857,42 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialVectorControl(const FT
 			[
 				MakeChannelBox(2)
 			]
+		];
+}
+
+TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialSwitchControl(const FText& Label, const FName& ParameterName, bool bDefaultValue)
+{
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(0.65f).VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+		[
+			SNew(STextBlock)
+			.Text(Label)
+			.Font(FAppStyle::GetFontStyle("SmallFont"))
+			.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			SNew(SCheckBox)
+			.IsChecked_Lambda([this, ParameterName, bDefaultValue]()
+			{
+				return GetEditableMaterialSwitch(ParameterName, bDefaultValue) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+			})
+			.OnCheckStateChanged_Lambda([this, ParameterName](ECheckBoxState NewState)
+			{
+				CommitEditableMaterialSwitch(ParameterName, NewState == ECheckBoxState::Checked);
+			})
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text_Lambda([this, ParameterName, bDefaultValue]()
+			{
+				return GetEditableMaterialSwitch(ParameterName, bDefaultValue)
+					? PBRText(TEXT("MagicSwitchEnabled"), TEXT("启用"), TEXT("On"))
+					: PBRText(TEXT("MagicSwitchDisabled"), TEXT("关闭"), TEXT("Off"));
+			})
+			.Font(FAppStyle::GetFontStyle("TinyText"))
+			.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Selection"))); })
 		];
 }
 
@@ -4257,7 +4809,10 @@ TSharedRef<ITableRow> SPBRMagicOutlinerWindow::GenerateSelectedMaterialRow(TShar
 						.ButtonStyle(FAppStyle::Get(), "FlatButton")
 						.ContentPadding(FMargin(7, 4))
 						.ButtonColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("DropZone"))); })
-						.OnClicked(this, &SPBRMagicOutlinerWindow::OnEditSelectedMaterialSlot, Item)
+						.OnClicked_Lambda([this, Item]()
+						{
+							return OnEditSelectedMaterialSlot(Item);
+						})
 						[
 							SNew(STextBlock)
 							.Text(PBRText(TEXT("AdjustSelectedMaterialSmall"), TEXT("调参"), TEXT("Adjust")))
@@ -4288,7 +4843,7 @@ TSharedRef<ITableRow> SPBRMagicOutlinerWindow::GenerateSelectedMaterialRow(TShar
 		];
 }
 
-FReply SPBRMagicOutlinerWindow::OnEditSelectedMaterialSlot(TSharedPtr<FPBRMagicOutlinerItem> Item)
+FReply SPBRMagicOutlinerWindow::OnEditSelectedMaterialSlot(TSharedPtr<FPBRMagicOutlinerItem> Item, int32 MaterialSlotIndex)
 {
 	if (!Item.IsValid() || Item->MaterialSlots.IsEmpty())
 	{
@@ -4297,12 +4852,26 @@ FReply SPBRMagicOutlinerWindow::OnEditSelectedMaterialSlot(TSharedPtr<FPBRMagicO
 	}
 
 	const FPBRMaterialSlotReference* PreferredSlot = nullptr;
-	for (const FPBRMaterialSlotReference& SlotRef : Item->MaterialSlots)
+	if (MaterialSlotIndex != INDEX_NONE)
 	{
-		if (SlotRef.MeshComponent.IsValid() && IsActorSelectedInEditor(SlotRef.Actor.Get()))
+		for (const FPBRMaterialSlotReference& SlotRef : Item->MaterialSlots)
 		{
-			PreferredSlot = &SlotRef;
-			break;
+			if (SlotRef.SlotIndex == MaterialSlotIndex && SlotRef.MeshComponent.IsValid())
+			{
+				PreferredSlot = &SlotRef;
+				break;
+			}
+		}
+	}
+	if (!PreferredSlot)
+	{
+		for (const FPBRMaterialSlotReference& SlotRef : Item->MaterialSlots)
+		{
+			if (SlotRef.MeshComponent.IsValid() && IsActorSelectedInEditor(SlotRef.Actor.Get()))
+			{
+				PreferredSlot = &SlotRef;
+				break;
+			}
 		}
 	}
 	if (!PreferredSlot)
@@ -4360,6 +4929,17 @@ UMaterialInstanceConstant* SPBRMagicOutlinerWindow::GetEditableMaterialInstance(
 	UMaterialInterface* Material = Component->GetMaterial(SlotIndex);
 	UMaterialInstanceConstant* Instance = Cast<UMaterialInstanceConstant>(Material);
 	return Instance && FPBRSceneMaterialReplacer::IsPBRStudioGeneratedMaterial(Instance) ? Instance : nullptr;
+}
+
+EPBRMaterialType SPBRMagicOutlinerWindow::GetEditableMaterialType() const
+{
+	UPrimitiveComponent* Component = nullptr;
+	int32 SlotIndex = INDEX_NONE;
+	if (!ResolveEditableMaterialSlot(Component, SlotIndex))
+	{
+		return EPBRMaterialType::Standard;
+	}
+	return GuessMagicMaterialTypeFromMaterial(Component->GetMaterial(SlotIndex));
 }
 
 FText SPBRMagicOutlinerWindow::GetEditableMaterialNameText() const
@@ -4438,6 +5018,20 @@ TOptional<float> SPBRMagicOutlinerWindow::GetEditableMaterialVectorChannel(const
 	}
 }
 
+bool SPBRMagicOutlinerWindow::GetEditableMaterialSwitch(const FName& ParameterName, bool bDefaultValue) const
+{
+	if (UMaterialInstanceConstant* Instance = GetEditableMaterialInstance())
+	{
+		bool bValue = bDefaultValue;
+		FGuid ExpressionGuid;
+		if (Instance->GetStaticSwitchParameterValue(FMaterialParameterInfo(ParameterName), bValue, ExpressionGuid))
+		{
+			return bValue;
+		}
+	}
+	return bDefaultValue;
+}
+
 void SPBRMagicOutlinerWindow::CommitEditableMaterialScalar(const FName& ParameterName, float Value, float MinValue, float MaxValue)
 {
 	UPrimitiveComponent* Component = nullptr;
@@ -4506,6 +5100,34 @@ void SPBRMagicOutlinerWindow::CommitEditableMaterialVectorChannel(const FName& P
 	}
 }
 
+void SPBRMagicOutlinerWindow::CommitEditableMaterialSwitch(const FName& ParameterName, bool bValue)
+{
+	UPrimitiveComponent* Component = nullptr;
+	int32 SlotIndex = INDEX_NONE;
+	if (!ResolveEditableMaterialSlot(Component, SlotIndex))
+	{
+		StatusMessage = TEXT("没有可编辑的材质槽");
+		return;
+	}
+
+	FString Message;
+	if (FPBRSceneMaterialReplacer::SetStaticSwitchParameterForSlot(Component, SlotIndex, ParameterName, bValue, Message))
+	{
+		StatusMessage = Message;
+		Invalidate(EInvalidateWidgetReason::Paint);
+	}
+	else
+	{
+		StatusMessage = Message.IsEmpty() ? TEXT("开关更新失败") : Message;
+	}
+}
+
+void SPBRMagicOutlinerWindow::StepEditableMaterialScalar(const FName& ParameterName, float DeltaValue, float MinValue, float MaxValue, float DefaultValue)
+{
+	const TOptional<float> CurrentValue = GetEditableMaterialScalar(ParameterName, DefaultValue);
+	CommitEditableMaterialScalar(ParameterName, (CurrentValue.IsSet() ? CurrentValue.GetValue() : DefaultValue) + DeltaValue, MinValue, MaxValue);
+}
+
 void SPBRMagicOutlinerWindow::SelectEditableMaterialType(EPBRMaterialType MaterialType)
 {
 	UPrimitiveComponent* Component = nullptr;
@@ -4520,12 +5142,35 @@ void SPBRMagicOutlinerWindow::SelectEditableMaterialType(EPBRMaterialType Materi
 	if (FPBRSceneMaterialReplacer::SetMaterialTypeForSlot(Component, SlotIndex, MaterialType, Message))
 	{
 		StatusMessage = Message;
-		Invalidate(EInvalidateWidgetReason::Paint);
+		Invalidate(EInvalidateWidgetReason::LayoutAndVolatility);
 	}
 	else
 	{
 		StatusMessage = Message.IsEmpty() ? TEXT("材质类型切换失败") : Message;
 	}
+}
+
+void SPBRMagicOutlinerWindow::CycleEditableMaterialType(int32 Direction)
+{
+	const TArray<FPBRMagicMaterialTypeOption>& Options = GetMagicMaterialTypeOptions();
+	if (Options.IsEmpty())
+	{
+		return;
+	}
+
+	const EPBRMaterialType CurrentType = GetEditableMaterialType();
+	int32 CurrentIndex = 0;
+	for (int32 Index = 0; Index < Options.Num(); ++Index)
+	{
+		if (Options[Index].Type == CurrentType)
+		{
+			CurrentIndex = Index;
+			break;
+		}
+	}
+
+	const int32 NextIndex = (CurrentIndex + Direction + Options.Num()) % Options.Num();
+	SelectEditableMaterialType(Options[NextIndex].Type);
 }
 
 TSharedRef<ITableRow> SPBRMagicOutlinerWindow::GenerateNameCheckRow(TSharedPtr<FPBRNameCheckListItem> Item, const TSharedRef<STableViewBase>& OwnerTable)

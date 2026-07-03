@@ -1663,7 +1663,12 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 
 	if (MaterialType == EPBRMaterialType::Glass)
 	{
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.02f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.5f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 0.35f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.45f);
 	}
 	else if (Candidate.ReplacementKind == EPBRSceneReplacementKind::Emissive || Candidate.bLooksEmissive)
@@ -3172,50 +3177,61 @@ static void ApplySelectionMaterialTypeDefaults(UMaterialInstanceConstant* Instan
 	switch (MaterialType)
 	{
 	case EPBRMaterialType::Wood:
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.46f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.52f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.34f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, 0.9f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
 		break;
 	case EPBRMaterialType::Stone:
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.58f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.48f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.46f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, 1.18f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::HeightStrength, 0.02f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::HeightStrength, 0.08f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
 		break;
 	case EPBRMaterialType::Tile:
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.34f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.38f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.65f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::HeightStrength, 0.04f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.52f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, 0.8f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::HeightStrength, 0.035f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
 		break;
 	case EPBRMaterialType::Fabric:
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.82f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.86f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.18f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, 0.75f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
 		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::FabricFuzzColor, FLinearColor(0.6f, 0.58f, 0.52f, 1.0f));
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::FabricFuzzStrength, 0.12f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::FabricFuzzStrength, 0.42f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
 		break;
 	case EPBRMaterialType::Leather:
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.42f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.42f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, 0.65f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::ClearCoat, 0.35f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::ClearCoatRoughness, 0.28f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::ClearCoatRoughness, 0.22f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
 		break;
 	case EPBRMaterialType::Plastic:
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.38f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.48f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.42f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, 0.5f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
@@ -3223,37 +3239,64 @@ static void ApplySelectionMaterialTypeDefaults(UMaterialInstanceConstant* Instan
 	case EPBRMaterialType::Metal:
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.28f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.5f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, 0.45f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 1.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Anisotropy, 0.22f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
 		break;
 	case EPBRMaterialType::Transparent:
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.18f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.22f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 0.55f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.05f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.8f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 0.62f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.15f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.4f);
 		break;
 	case EPBRMaterialType::Glass:
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.05f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.02f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 0.22f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.52f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.8f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 0.35f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.45f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.5f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassOpacityFresnelStrength, 0.35f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassFresnelBaseReflection, 0.02f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassFresnelExp, 5.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassFrostedStrength, 0.0f);
+		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::GlassAbsorptionColor, FLinearColor(0.78f, 0.92f, 1.0f, 1.0f));
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassAbsorptionStrength, 0.15f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassEdgeTintStrength, 0.25f);
+		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::GlassDirtColor, FLinearColor(0.35f, 0.32f, 0.26f, 1.0f));
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassDirtIntensity, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassDirtOpacity, 0.35f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassDirtRoughness, 0.65f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassDistortionIntensity, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassDistortionIORIntensity, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassShadowOpacity, 0.55f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassShadowHighlightClamp, 0.85f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassShadowNormalIntensity, 0.25f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassCausticsIntensity, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassCausticsScale, 24.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassCausticsSpeed, 0.12f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassRTOpacity, 0.35f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassRTRefractionAmount, 1.45f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::GlassRTFrostedStrength, 0.0f);
+		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseGlassDirtTexture), false);
+		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseGlassDistortionTexture), false);
+		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseGlassFrostedTexture), false);
 		break;
 	case EPBRMaterialType::Water:
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.02f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.05f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 0.65f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.33f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::SpecularLevel, 0.55f);
 		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::WaterColor, FLinearColor(0.12f, 0.42f, 0.72f, 1.0f));
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedU, 0.18f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedV, 0.09f);
@@ -3262,12 +3305,12 @@ static void ApplySelectionMaterialTypeDefaults(UMaterialInstanceConstant* Instan
 		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseWaterRippleTexture), false);
 		break;
 	case EPBRMaterialType::Emissive:
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.45f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.35f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
 		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::EmissiveColor, FLinearColor::White);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::EmissiveIntensity, 1.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::EmissiveIntensity, 2.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
 		break;
 	case EPBRMaterialType::Standard:
@@ -3327,13 +3370,13 @@ FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMateria
 	Candidate.OpacityTexture = FindOpacityTexture(CurrentMaterial, Candidate.OpacitySourcePath);
 	Candidate.bLooksEmissive = IsEmissiveMaterial(CurrentMaterial, Candidate.EmissiveTexture.Get());
 	Candidate.bLooksTransparent = IsTransparentMaterial(CurrentMaterial, Candidate.OpacityTexture.Get());
-	if (Candidate.bLooksEmissive)
-	{
-		Candidate.ReplacementKind = EPBRSceneReplacementKind::Emissive;
-	}
-	else if (IsSceneGlassMaterial(CurrentMaterial))
+	if (IsSceneGlassMaterial(CurrentMaterial))
 	{
 		Candidate.ReplacementKind = EPBRSceneReplacementKind::Glass;
+	}
+	else if (Candidate.bLooksEmissive)
+	{
+		Candidate.ReplacementKind = EPBRSceneReplacementKind::Emissive;
 	}
 	else
 	{
@@ -3560,14 +3603,6 @@ void FPBRSceneMaterialReplacer::ScanCurrentLevel(TArray<TSharedPtr<FPBRSceneMate
 						Candidate->ReplaceMode = TEXT("不可替换");
 						Candidate->Status = TEXT("不可替换: PBRStudio 材质");
 					}
-					else if (Candidate->bLooksEmissive)
-					{
-						Candidate->ReplacementKind = EPBRSceneReplacementKind::Emissive;
-						Candidate->bCanReplace = true;
-						Candidate->bUseBPRReplacement = false;
-						Candidate->ReplaceMode = TEXT("普通替换");
-						Candidate->Status = TEXT("普通替换: 自发光");
-					}
 					else if (bLooksGlass)
 					{
 						Candidate->ReplacementKind = EPBRSceneReplacementKind::Glass;
@@ -3575,6 +3610,14 @@ void FPBRSceneMaterialReplacer::ScanCurrentLevel(TArray<TSharedPtr<FPBRSceneMate
 						Candidate->bUseBPRReplacement = false;
 						Candidate->ReplaceMode = TEXT("普通替换");
 						Candidate->Status = TEXT("普通替换: 玻璃");
+					}
+					else if (Candidate->bLooksEmissive)
+					{
+						Candidate->ReplacementKind = EPBRSceneReplacementKind::Emissive;
+						Candidate->bCanReplace = true;
+						Candidate->bUseBPRReplacement = false;
+						Candidate->ReplaceMode = TEXT("普通替换");
+						Candidate->Status = TEXT("普通替换: 自发光");
 					}
 					else if (Candidate->bLooksTransparent)
 					{
