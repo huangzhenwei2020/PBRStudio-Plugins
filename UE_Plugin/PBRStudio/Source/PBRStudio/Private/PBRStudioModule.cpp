@@ -558,7 +558,10 @@ void FPBRStudioModule::RebuildSubstrateTemplateMaterialsFromConsole()
 void FPBRStudioModule::ScanMaterialFunctionUsageFromConsole()
 {
 	const TArray<FString> Roots = {
+		TEXT("/PBRStudio/Templates"),
+		TEXT("/PBRStudio/Functions"),
 		TEXT("/Game/PBRStudio/Templates"),
+		TEXT("/Game/PBRStudio/Functions"),
 		TEXT("/Game/PBRStudio/SpecialMaterials")
 	};
 

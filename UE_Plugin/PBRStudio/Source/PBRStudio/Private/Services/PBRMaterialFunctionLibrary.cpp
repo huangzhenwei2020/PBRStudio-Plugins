@@ -24,7 +24,7 @@
 #include "Materials/MaterialFunction.h"
 #include "UObject/Package.h"
 
-static constexpr const TCHAR* FunctionRoot = TEXT("/Game/PBRStudio/Functions");
+static constexpr const TCHAR* FunctionRoot = TEXT("/PBRStudio/Functions");
 static constexpr float PBRDefaultWaterFlowSpeedU = 0.18f;
 static constexpr float PBRDefaultWaterFlowSpeedV = 0.09f;
 static constexpr float PBRDefaultWaterRippleScale = 18.0f;

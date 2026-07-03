@@ -46,6 +46,10 @@
 
 如果项目不是 C++ 项目，且 UE 无法自动编译插件，需要安装 Visual Studio 2022 和 UE C++ 工具链，或先给项目添加一个空 C++ 类。
 
+UE 插件自带 `Content`，统一母材质和材质函数位于 `/PBRStudio/Templates`、`/PBRStudio/Functions`。创建 PBR 材质、材质转换和魔法大纲调参会优先使用插件自带母材质；转换后的项目实例仍默认保存到 `/Game/PBRStudio/SceneReplaced`。
+
+维护发布包时可用 `UnrealEditor-Cmd.exe <项目.uproject> -run=PBRStudioBuildContent -nop4 -unattended -nullrhi -NoSound` 重建插件内置母材质和函数。
+
 ## 4. UE 端功能
 
 ### 4.1 贴图套件

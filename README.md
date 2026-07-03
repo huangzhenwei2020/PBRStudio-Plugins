@@ -78,6 +78,12 @@ PBRStudio-Plugins/
 
 非 C++ 项目如果无法编译，可以给项目添加一个空 C++ 类，让 UE 生成工程文件后再编译。
 
+### UE 插件自带母材质
+
+UE 插件本身包含 `Content`，母材质和材质函数挂载在 `/PBRStudio/Templates`、`/PBRStudio/Functions`。创建 PBR 材质、材质转换和魔法大纲调参会优先使用插件自带母材质；转换出来的材质实例仍默认保存到项目 `/Game/PBRStudio/SceneReplaced`，方便每个项目单独管理。
+
+维护发布包时可用命令行重建内置母材质：`UnrealEditor-Cmd.exe <项目.uproject> -run=PBRStudioBuildContent -nop4 -unattended -nullrhi -NoSound`。
+
 ## UE 插件主要功能
 
 ### 1. 贴图套件

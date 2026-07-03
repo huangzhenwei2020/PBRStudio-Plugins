@@ -72,6 +72,10 @@ static constexpr float PBRARMDefaultWaterFlowSpeedU = 0.18f;
 static constexpr float PBRARMDefaultWaterFlowSpeedV = 0.09f;
 static constexpr float PBRARMDefaultWaterRippleScale = 18.0f;
 static constexpr float PBRARMDefaultWaterRippleStrength = 0.8f;
+static constexpr const TCHAR* PBRStudioPluginTemplateRoot = TEXT("/PBRStudio/Templates/");
+static constexpr const TCHAR* PBRStudioProjectTemplateRoot = TEXT("/Game/PBRStudio/Templates/");
+static constexpr const TCHAR* PBRStudioPluginFunctionRoot = TEXT("/PBRStudio/Functions/");
+static constexpr const TCHAR* PBRStudioProjectFunctionRoot = TEXT("/Game/PBRStudio/Functions/");
 
 static FString GetDemoSourceSetName(EPBRMaterialType MaterialType)
 {
@@ -1650,21 +1654,39 @@ static UMaterialExpressionMaterialFunctionCall* AddFresnelGlowFunction(
 static UMaterialExpressionMaterialFunctionCall* AddMaterialFunctionCall(UMaterial* Material, const TCHAR* FunctionPath, int32 X, int32 Y)
 {
 	static bool bEnsuredPBRStudioFunctions = false;
-	if (!bEnsuredPBRStudioFunctions && FCString::Strstr(FunctionPath, TEXT("/Game/PBRStudio/Functions/")))
+	const FString RequestedPath(FunctionPath);
+	const bool bIsPBRStudioFunction =
+		RequestedPath.Contains(PBRStudioProjectFunctionRoot, ESearchCase::CaseSensitive) ||
+		RequestedPath.Contains(PBRStudioPluginFunctionRoot, ESearchCase::CaseSensitive);
+	if (!bEnsuredPBRStudioFunctions && bIsPBRStudioFunction)
 	{
 		TArray<FString> Messages;
 		FPBRMaterialFunctionLibrary::EnsureAllMaterialFunctions(Messages);
 		bEnsuredPBRStudioFunctions = true;
 	}
 
-	UMaterialFunctionInterface* Function = LoadObject<UMaterialFunctionInterface>(nullptr, FunctionPath);
-	if (!Function)
+	TArray<FString> CandidatePaths;
+	if (RequestedPath.Contains(PBRStudioProjectFunctionRoot, ESearchCase::CaseSensitive))
 	{
-		const FString ObjectPath(FunctionPath);
-		int32 DotIndex = INDEX_NONE;
-		ObjectPath.FindChar(TEXT('.'), DotIndex);
-		const FString AssetPath = DotIndex == INDEX_NONE ? ObjectPath : ObjectPath.Left(DotIndex);
-		Function = Cast<UMaterialFunctionInterface>(UEditorAssetLibrary::LoadAsset(AssetPath));
+		CandidatePaths.Add(RequestedPath.Replace(PBRStudioProjectFunctionRoot, PBRStudioPluginFunctionRoot, ESearchCase::CaseSensitive));
+	}
+	CandidatePaths.Add(RequestedPath);
+
+	UMaterialFunctionInterface* Function = nullptr;
+	for (const FString& CandidatePath : CandidatePaths)
+	{
+		Function = LoadObject<UMaterialFunctionInterface>(nullptr, *CandidatePath);
+		if (!Function)
+		{
+			int32 DotIndex = INDEX_NONE;
+			CandidatePath.FindChar(TEXT('.'), DotIndex);
+			const FString AssetPath = DotIndex == INDEX_NONE ? CandidatePath : CandidatePath.Left(DotIndex);
+			Function = Cast<UMaterialFunctionInterface>(UEditorAssetLibrary::LoadAsset(AssetPath));
+		}
+		if (Function)
+		{
+			break;
+		}
 	}
 	if (!Function)
 	{
@@ -2601,7 +2623,7 @@ FString FPBRMaterialTemplateManager::GetTemplateAssetName(EPBRMaterialType Mater
 
 FString FPBRMaterialTemplateManager::GetTemplatePackagePath(EPBRMaterialType MaterialType)
 {
-	return TEXT("/Game/PBRStudio/Templates/") + GetTemplateAssetName(MaterialType);
+	return FString(PBRStudioPluginTemplateRoot) + GetTemplateAssetName(MaterialType);
 }
 
 FString FPBRMaterialTemplateManager::GetExampleMaterialInstancePackagePath(EPBRMaterialType MaterialType)
@@ -2619,7 +2641,7 @@ UMaterial* FPBRMaterialTemplateManager::EnsureTemplateMaterial(EPBRMaterialType 
 			ResetMaterialGraph(ExistingMaterial);
 			BuildTemplateGraph(ExistingMaterial, MaterialType, OutMessage);
 			SaveMaterial(ExistingMaterial);
-			OutMessage = TEXT("已重建母材质图表并清理多余节点");
+			OutMessage = TEXT("已重建插件自带母材质图表并清理多余节点");
 			return ExistingMaterial;
 		}
 	}
@@ -2640,7 +2662,32 @@ UMaterial* FPBRMaterialTemplateManager::EnsureTemplateMaterial(EPBRMaterialType 
 	case EPBRMaterialType::Water:
 	case EPBRMaterialType::Emissive:
 	default:
-		return CreateStandardTemplate(FullPath, AssetName, MaterialType, OutMessage);
+		if (UMaterial* PluginMaterial = CreateStandardTemplate(FullPath, AssetName, MaterialType, OutMessage))
+		{
+			OutMessage = TEXT("已创建插件自带 PBR 母材质");
+			return PluginMaterial;
+		}
+
+		const FString PluginMessage = OutMessage;
+		const FString ProjectPath = FString(PBRStudioProjectTemplateRoot) + GetTemplateAssetName(MaterialType);
+		if (UObject* ExistingProject = LoadAssetIfExistsQuietly(ProjectPath))
+		{
+			if (UMaterial* ExistingProjectMaterial = Cast<UMaterial>(ExistingProject))
+			{
+				ResetMaterialGraph(ExistingProjectMaterial);
+				BuildTemplateGraph(ExistingProjectMaterial, MaterialType, OutMessage);
+				SaveMaterial(ExistingProjectMaterial);
+				OutMessage = TEXT("插件母材质不可写，已回退并重建项目母材质: ") + PluginMessage;
+				return ExistingProjectMaterial;
+			}
+		}
+
+		UMaterial* ProjectMaterial = CreateStandardTemplate(ProjectPath, AssetName, MaterialType, OutMessage);
+		if (ProjectMaterial)
+		{
+			OutMessage = TEXT("插件母材质不可写，已回退创建项目母材质: ") + PluginMessage;
+		}
+		return ProjectMaterial;
 	}
 }
 
