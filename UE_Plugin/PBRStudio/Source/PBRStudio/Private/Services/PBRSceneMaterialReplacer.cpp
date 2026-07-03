@@ -1696,7 +1696,7 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
 	UEditorLoadingAndSavingUtils::SavePackages({ Instance->GetPackage() }, true);
 
-	OutMessage = FString::Printf(TEXT("已按 ARM 算法转换材质实例：%s"), *Instance->GetName());
+	OutMessage = FString::Printf(TEXT("已按 PBRStudio 统一母材质逻辑转换材质实例：%s"), *Instance->GetName());
 	return Instance;
 }
 
@@ -3510,6 +3510,27 @@ bool FPBRSceneMaterialReplacer::SetStaticSwitchParameterForSlot(UPrimitiveCompon
 	Instance->MarkPackageDirty();
 	RefreshPrimitiveAfterMaterialChange(Component, true);
 	OutMessage = FString::Printf(TEXT("已更新开关：%s"), *ParameterName.ToString());
+	return true;
+}
+
+bool FPBRSceneMaterialReplacer::SetTextureParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, UTexture* Texture, FString& OutMessage)
+{
+	FPBRSceneEditableMaterialResult EditableResult = EnsureEditableMaterialForSlot(Component, MaterialIndex);
+	UMaterialInstanceConstant* Instance = EditableResult.Instance;
+	if (!Instance)
+	{
+		OutMessage = EditableResult.Message;
+		return false;
+	}
+
+	const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRSetSelectedMaterialTexture", "PBRStudio Set Selected Material Texture"));
+	Instance->Modify();
+	Instance->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(ParameterName), Texture);
+	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
+	Instance->PostEditChange();
+	Instance->MarkPackageDirty();
+	RefreshPrimitiveAfterMaterialChange(Component, false);
+	OutMessage = FString::Printf(TEXT("已更新贴图：%s"), *ParameterName.ToString());
 	return true;
 }
 

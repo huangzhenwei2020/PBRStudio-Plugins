@@ -1,6 +1,7 @@
 #include "Widgets/SPBRMagicOutlinerWindow.h"
 
 #include "AssetThumbnail.h"
+#include "AssetRegistry/AssetData.h"
 #include "Brushes/SlateDynamicImageBrush.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
@@ -23,6 +24,7 @@
 #include "Engine/Selection.h"
 #include "Engine/Scene.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/Texture.h"
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Commands/InputBindingManager.h"
@@ -39,6 +41,7 @@
 #include "Models/PBRMaterialTypes.h"
 #include "PBRStudioModule.h"
 #include "PBRStudioStyle.h"
+#include "PropertyCustomizationHelpers.h"
 #include "Rendering/DrawElements.h"
 #include "Services/PBRDataStore.h"
 #include "Services/PBRLocalization.h"
@@ -440,6 +443,133 @@ struct FPBRMagicEditableMaterialParameter
 		return PBRText(GroupKey, GroupChinese, GroupEnglish);
 	}
 };
+
+enum class EPBRMagicDynamicMaterialParameterKind : uint8
+{
+	Scalar,
+	Color,
+	Switch,
+	Texture
+};
+
+struct FPBRMagicDynamicMaterialParameter
+{
+	EPBRMagicDynamicMaterialParameterKind Kind = EPBRMagicDynamicMaterialParameterKind::Scalar;
+	FName ParameterName;
+	FString Group;
+	int32 SortPriority = 0;
+	float ScalarValue = 0.0f;
+	float ScalarMin = 0.0f;
+	float ScalarMax = 1.0f;
+	float ScalarStep = 0.01f;
+	FLinearColor ColorValue = FLinearColor::White;
+	bool bSwitchValue = false;
+	TWeakObjectPtr<UTexture> TextureValue;
+};
+
+static FString GetMagicDynamicParameterGroup(const FMaterialParameterMetadata& Metadata)
+{
+#if WITH_EDITORONLY_DATA
+	if (!Metadata.Group.IsNone())
+	{
+		const FString GroupName = Metadata.Group.ToString();
+		if (!GroupName.IsEmpty() && !GroupName.Equals(TEXT("None"), ESearchCase::IgnoreCase))
+		{
+			return GroupName;
+		}
+	}
+#endif
+	return PBRText(TEXT("MagicParamGroupUngrouped"), TEXT("未分组"), TEXT("Ungrouped")).ToString();
+}
+
+static FString NormalizeMagicDynamicParameterGroup(const FString& ParameterName, const FString& GroupName)
+{
+	if (ParameterName == TEXT("法线贴图") ||
+		ParameterName == TEXT("使用法线贴图") ||
+		ParameterName == TEXT("法线强度") ||
+		ParameterName == TEXT("法线影响折射") ||
+		ParameterName == TEXT("法线影响折射强度") ||
+		ParameterName == TEXT("使用高质量法线"))
+	{
+		return TEXT("03 - 法线");
+	}
+
+	return GroupName.IsEmpty()
+		? PBRText(TEXT("MagicParamGroupUngrouped"), TEXT("未分组"), TEXT("Ungrouped")).ToString()
+		: GroupName;
+}
+
+static int32 GetMagicDynamicParameterSortPriority(const FMaterialParameterMetadata& Metadata)
+{
+#if WITH_EDITORONLY_DATA
+	return Metadata.SortPriority;
+#else
+	return 0;
+#endif
+}
+
+static bool IsMagicLikelyNormalizedScalar(const FString& ParameterName)
+{
+	return ParameterName.Contains(TEXT("Opacity"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("Alpha"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("Roughness"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("Metallic"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("Specular"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("Mask"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("Fresnel"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("ClearCoat"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("Anisotropy"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("透明"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("粗糙"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("金属"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("高光"), ESearchCase::IgnoreCase);
+}
+
+static void NormalizeMagicDynamicScalarRange(FPBRMagicDynamicMaterialParameter& Parameter)
+{
+	if (Parameter.ScalarMax <= Parameter.ScalarMin || FMath::IsNearlyEqual(Parameter.ScalarMin, Parameter.ScalarMax))
+	{
+		const FString ParameterName = Parameter.ParameterName.ToString();
+		if (IsMagicLikelyNormalizedScalar(ParameterName))
+		{
+			Parameter.ScalarMin = Parameter.ScalarValue < 0.0f ? -1.0f : 0.0f;
+			Parameter.ScalarMax = 1.0f;
+		}
+		else
+		{
+			const float AbsValue = FMath::Abs(Parameter.ScalarValue);
+			Parameter.ScalarMin = Parameter.ScalarValue < 0.0f ? -FMath::Max(AbsValue * 2.0f, 1.0f) : 0.0f;
+			Parameter.ScalarMax = FMath::Max(AbsValue * 2.0f, 1.0f);
+		}
+	}
+
+	if (Parameter.ScalarMax <= Parameter.ScalarMin)
+	{
+		Parameter.ScalarMin = 0.0f;
+		Parameter.ScalarMax = 1.0f;
+	}
+
+	const float Range = Parameter.ScalarMax - Parameter.ScalarMin;
+	Parameter.ScalarStep = Range > 50.0f ? 1.0f : (Range > 5.0f ? 0.1f : 0.01f);
+}
+
+static void AddMagicDynamicParameter(TArray<FPBRMagicDynamicMaterialParameter>& Items, FPBRMagicDynamicMaterialParameter&& Parameter)
+{
+	if (Parameter.ParameterName.IsNone())
+	{
+		return;
+	}
+
+	const bool bAlreadyAdded = Items.ContainsByPredicate([&Parameter](const FPBRMagicDynamicMaterialParameter& Existing)
+	{
+		return Existing.ParameterName == Parameter.ParameterName && Existing.Kind == Parameter.Kind;
+	});
+
+	if (!bAlreadyAdded)
+	{
+		Items.Add(MoveTemp(Parameter));
+	}
+}
 
 static constexpr uint32 MagicEditableMaterialTypeBit(EPBRMaterialType MaterialType)
 {
@@ -1449,24 +1579,34 @@ private:
 
 	void AddMaterialScalarHit(const FVector2D& Position, const FVector2D& Size, EPBRMagicPaintHitAction Action, const FPBRMagicEditableMaterialParameter& Parameter) const
 	{
+		AddMaterialScalarHit(Position, Size, Action, Parameter.ParameterName, Parameter.MinValue, Parameter.MaxValue, Parameter.DefaultValue, Parameter.StepValue);
+	}
+
+	void AddMaterialScalarHit(const FVector2D& Position, const FVector2D& Size, EPBRMagicPaintHitAction Action, const FName& ParameterName, float MinValue, float MaxValue, float DefaultValue, float StepValue) const
+	{
 		FPBRMagicPaintHitRegion Region;
 		Region.Rect = FSlateRect(Position.X, Position.Y, Position.X + Size.X, Position.Y + Size.Y);
 		Region.Action = Action;
-		Region.MaterialParameterName = Parameter.ParameterName;
-		Region.MaterialParameterMin = Parameter.MinValue;
-		Region.MaterialParameterMax = Parameter.MaxValue;
-		Region.MaterialParameterDefault = Parameter.DefaultValue;
-		Region.MaterialParameterStep = Parameter.StepValue;
+		Region.MaterialParameterName = ParameterName;
+		Region.MaterialParameterMin = MinValue;
+		Region.MaterialParameterMax = MaxValue;
+		Region.MaterialParameterDefault = DefaultValue;
+		Region.MaterialParameterStep = StepValue;
 		HitRegions.Add(Region);
 	}
 
 	void AddMaterialSwitchHit(const FVector2D& Position, const FVector2D& Size, const FPBRMagicEditableMaterialParameter& Parameter) const
 	{
+		AddMaterialSwitchHit(Position, Size, Parameter.ParameterName, Parameter.bDefaultSwitchValue);
+	}
+
+	void AddMaterialSwitchHit(const FVector2D& Position, const FVector2D& Size, const FName& ParameterName, bool bDefaultValue) const
+	{
 		FPBRMagicPaintHitRegion Region;
 		Region.Rect = FSlateRect(Position.X, Position.Y, Position.X + Size.X, Position.Y + Size.Y);
 		Region.Action = EPBRMagicPaintHitAction::MaterialSwitchToggle;
-		Region.MaterialParameterName = Parameter.ParameterName;
-		Region.bMaterialSwitchDefault = Parameter.bDefaultSwitchValue;
+		Region.MaterialParameterName = ParameterName;
+		Region.bMaterialSwitchDefault = bDefaultValue;
 		HitRegions.Add(Region);
 	}
 
@@ -2251,6 +2391,63 @@ private:
 		DrawRoundedBox(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 50.0f, -3.0f), FVector2D(42.0f, 20.0f), FLinearColor(R, G, B, 1.0f), 4.0f, Theme.Border, 1.0f);
 	}
 
+	void DrawDynamicMaterialScalarStepper(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicDynamicMaterialParameter& Parameter, const FPBRMagicTheme& Theme) const
+	{
+		const TOptional<float> OptionalValue = OwnerWindow->GetEditableMaterialScalar(Parameter.ParameterName, Parameter.ScalarValue);
+		const float Value = OptionalValue.IsSet() ? OptionalValue.GetValue() : Parameter.ScalarValue;
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position, Size.X - 112.0f, Parameter.ParameterName.ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 174.0f, 0), 76.0f, FormatMagicEditableMaterialScalar(Value, Parameter.ScalarStep), FAppStyle::GetFontStyle("SmallFont"), Theme.Selection);
+
+		const FVector2D ButtonSize(34.0f, 24.0f);
+		const FVector2D DownPos = Position + FVector2D(Size.X - 88.0f, -5.0f);
+		const FVector2D UpPos = Position + FVector2D(Size.X - 44.0f, -5.0f);
+		auto DrawParamButton = [this, &OutDrawElements, &Geometry, Layer, &Theme, ButtonSize, &Parameter](const FVector2D& ButtonPos, const FString& Text, EPBRMagicPaintHitAction Action)
+		{
+			const FSlateRect ButtonRect(ButtonPos.X, ButtonPos.Y, ButtonPos.X + ButtonSize.X, ButtonPos.Y + ButtonSize.Y);
+			const bool bHovered = HoveredAction == Action && RectMatches(HoveredRect, ButtonRect);
+			const bool bPressed = PressedAction == Action && RectMatches(PressedRect, ButtonRect);
+			const FLinearColor Fill = bPressed ? MixColor(Theme.PanelRaised, Theme.Background, 0.35f) : (bHovered ? MixColor(Theme.PanelRaised, Theme.Primary, 0.12f) : Theme.PanelRaised);
+			DrawRoundedBox(OutDrawElements, Geometry, Layer, ButtonPos, ButtonSize, Fill, 4.0f, bHovered || bPressed ? Theme.PrimarySoft : Theme.Border, 1.0f);
+			DrawTextInRect(OutDrawElements, Geometry, Layer + 1, ButtonPos + FVector2D(0.0f, 5.0f), ButtonSize.X, Text, FAppStyle::GetFontStyle("SmallFontBold"), Theme.Selection);
+			AddMaterialScalarHit(ButtonPos, ButtonSize, Action, Parameter.ParameterName, Parameter.ScalarMin, Parameter.ScalarMax, Parameter.ScalarValue, Parameter.ScalarStep);
+		};
+		DrawParamButton(DownPos, TEXT("-"), EPBRMagicPaintHitAction::MaterialScalarDown);
+		DrawParamButton(UpPos, TEXT("+"), EPBRMagicPaintHitAction::MaterialScalarUp);
+	}
+
+	void DrawDynamicMaterialSwitchRow(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicDynamicMaterialParameter& Parameter, const FPBRMagicTheme& Theme) const
+	{
+		const bool bEnabled = OwnerWindow->GetEditableMaterialSwitch(Parameter.ParameterName, Parameter.bSwitchValue);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position, Size.X - 92.0f, Parameter.ParameterName.ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		const FVector2D TogglePos = Position + FVector2D(Size.X - 82.0f, -5.0f);
+		const FVector2D ToggleSize(74.0f, 24.0f);
+		const FSlateRect ToggleRect(TogglePos.X, TogglePos.Y, TogglePos.X + ToggleSize.X, TogglePos.Y + ToggleSize.Y);
+		const bool bHovered = HoveredAction == EPBRMagicPaintHitAction::MaterialSwitchToggle && RectMatches(HoveredRect, ToggleRect);
+		DrawRoundedBox(OutDrawElements, Geometry, Layer, TogglePos, ToggleSize, bEnabled ? Theme.DropZone : Theme.PanelRaised, 4.0f, bHovered ? Theme.Primary : Theme.Border, 1.0f);
+		DrawTextInRect(OutDrawElements, Geometry, Layer + 1, TogglePos + FVector2D(8.0f, 5.0f), ToggleSize.X - 16.0f, bEnabled ? TEXT("ON") : TEXT("OFF"), FAppStyle::GetFontStyle("SmallFontBold"), bEnabled ? Theme.Selection : Theme.TextMuted);
+		AddMaterialSwitchHit(TogglePos, ToggleSize, Parameter.ParameterName, Parameter.bSwitchValue);
+	}
+
+	void DrawDynamicMaterialColorRow(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicDynamicMaterialParameter& Parameter, const FPBRMagicTheme& Theme) const
+	{
+		const TOptional<float> OptionalR = OwnerWindow->GetEditableMaterialVectorChannel(Parameter.ParameterName, 0, Parameter.ColorValue);
+		const TOptional<float> OptionalG = OwnerWindow->GetEditableMaterialVectorChannel(Parameter.ParameterName, 1, Parameter.ColorValue);
+		const TOptional<float> OptionalB = OwnerWindow->GetEditableMaterialVectorChannel(Parameter.ParameterName, 2, Parameter.ColorValue);
+		const float R = OptionalR.IsSet() ? OptionalR.GetValue() : Parameter.ColorValue.R;
+		const float G = OptionalG.IsSet() ? OptionalG.GetValue() : Parameter.ColorValue.G;
+		const float B = OptionalB.IsSet() ? OptionalB.GetValue() : Parameter.ColorValue.B;
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position, Size.X - 62.0f, Parameter.ParameterName.ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		DrawRoundedBox(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 50.0f, -3.0f), FVector2D(42.0f, 20.0f), FLinearColor(R, G, B, 1.0f), 4.0f, Theme.Border, 1.0f);
+	}
+
+	void DrawDynamicMaterialTextureRow(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicDynamicMaterialParameter& Parameter, const FPBRMagicTheme& Theme) const
+	{
+		const UTexture* Texture = OwnerWindow->GetEditableMaterialTexture(Parameter.ParameterName);
+		const FString TextureName = Texture ? Texture->GetName() : TEXT("未指定");
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position, Size.X * 0.52f, Parameter.ParameterName.ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X * 0.54f, 0.0f), Size.X * 0.44f, TextureName, FAppStyle::GetFontStyle("SmallFont"), Texture ? Theme.Selection : Theme.TextMuted);
+	}
+
 	void DrawMaterialControls(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicTheme& Theme) const
 	{
 		DrawPanelSurface(OutDrawElements, Geometry, Layer, Position, Size, Theme.PanelRaised, 6.0f, Theme.Border, 1.0f);
@@ -2266,6 +2463,42 @@ private:
 		DrawRoundedBox(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(58.0f, 58.0f), FVector2D(Size.X - 116.0f, 26.0f), Theme.Background, 4.0f, Theme.Border, 1.0f);
 		DrawTextInRect(OutDrawElements, Geometry, Layer + 2, Position + FVector2D(66.0f, 64.0f), Size.X - 132.0f, OwnerWindow->GetEditableMaterialTypeText().ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Selection);
 		DrawButton(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(Size.X - 52.0f, 58.0f), FVector2D(40.0f, 26.0f), TEXT(">"), TEXT(""), EPBRMagicPaintHitAction::MaterialTypeNext, Theme);
+
+		float RowY = Position.Y + 100.0f;
+		const float RowH = 27.0f;
+		const int32 MaxRows = FMath::Clamp(FMath::FloorToInt((Size.Y - 112.0f) / RowH), 0, 7);
+		const TArray<FPBRMagicDynamicMaterialParameter> DynamicParameters = OwnerWindow->CollectEditableDynamicMaterialParameters();
+		if (DynamicParameters.Num() > 0)
+		{
+			for (int32 Index = 0; Index < FMath::Min(MaxRows, DynamicParameters.Num()); ++Index)
+			{
+				const FPBRMagicDynamicMaterialParameter& Parameter = DynamicParameters[Index];
+				const FVector2D RowPos(Position.X + 12.0f, RowY);
+				const FVector2D RowSize(Size.X - 24.0f, RowH);
+				switch (Parameter.Kind)
+				{
+				case EPBRMagicDynamicMaterialParameterKind::Scalar:
+					DrawDynamicMaterialScalarStepper(OutDrawElements, Geometry, Layer + 1, RowPos, RowSize, Parameter, Theme);
+					break;
+				case EPBRMagicDynamicMaterialParameterKind::Switch:
+					DrawDynamicMaterialSwitchRow(OutDrawElements, Geometry, Layer + 1, RowPos, RowSize, Parameter, Theme);
+					break;
+				case EPBRMagicDynamicMaterialParameterKind::Color:
+					DrawDynamicMaterialColorRow(OutDrawElements, Geometry, Layer + 1, RowPos, RowSize, Parameter, Theme);
+					break;
+				case EPBRMagicDynamicMaterialParameterKind::Texture:
+					DrawDynamicMaterialTextureRow(OutDrawElements, Geometry, Layer + 1, RowPos, RowSize, Parameter, Theme);
+					break;
+				}
+				RowY += RowH;
+			}
+
+			if (DynamicParameters.Num() > MaxRows && MaxRows > 0)
+			{
+				DrawTextInRect(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, Size.Y - 25.0f), Size.X - 24.0f, FString::Printf(TEXT("还有 %d 个参数，切换经典 UI 可完整编辑"), DynamicParameters.Num() - MaxRows), FAppStyle::GetFontStyle("SmallFont"), Theme.TextMuted);
+			}
+			return;
+		}
 
 		TArray<const FPBRMagicEditableMaterialParameter*> PriorityParameters;
 		TArray<const FPBRMagicEditableMaterialParameter*> CoreParameters;
@@ -2292,9 +2525,6 @@ private:
 		VisibleParameters.Append(PriorityParameters);
 		VisibleParameters.Append(CoreParameters);
 
-		float RowY = Position.Y + 100.0f;
-		const float RowH = 27.0f;
-		const int32 MaxRows = FMath::Clamp(FMath::FloorToInt((Size.Y - 112.0f) / RowH), 0, 7);
 		for (int32 Index = 0; Index < FMath::Min(MaxRows, VisibleParameters.Num()); ++Index)
 		{
 			const FPBRMagicEditableMaterialParameter* Parameter = VisibleParameters[Index];
@@ -3631,41 +3861,76 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildSelectedMaterialEditorPanel()
 	};
 
 	TSharedRef<SVerticalBox> ParameterBox = SNew(SVerticalBox);
-	FString LastGroupKey;
-	for (const FPBRMagicEditableMaterialParameter& Parameter : GetMagicEditableMaterialParameters())
+	const TArray<FPBRMagicDynamicMaterialParameter> DynamicParameters = CollectEditableDynamicMaterialParameters();
+	if (DynamicParameters.Num() > 0)
 	{
-		const FString GroupKey(Parameter.GroupKey);
-		if (GroupKey != LastGroupKey)
+		FString LastGroupName;
+		TArray<FPBRMagicDynamicMaterialParameter> GroupParameters;
+		auto FlushDynamicGroup = [this, &ParameterBox, &LastGroupName, &GroupParameters]()
 		{
-			LastGroupKey = GroupKey;
+			if (GroupParameters.Num() == 0)
+			{
+				return;
+			}
+
 			ParameterBox->AddSlot()
 			.AutoHeight()
 			.Padding(0, 8, 0, 4)
 			[
-				SNew(STextBlock)
-				.Visibility_Lambda([this, GroupKey]()
+				BuildDynamicMaterialParameterGroup(LastGroupName, GroupParameters)
+			];
+			GroupParameters.Reset();
+		};
+
+		for (const FPBRMagicDynamicMaterialParameter& Parameter : DynamicParameters)
+		{
+			if (Parameter.Group != LastGroupName)
+			{
+				FlushDynamicGroup();
+				LastGroupName = Parameter.Group;
+			}
+			GroupParameters.Add(Parameter);
+		}
+		FlushDynamicGroup();
+	}
+	else
+	{
+		FString LastGroupKey;
+		for (const FPBRMagicEditableMaterialParameter& Parameter : GetMagicEditableMaterialParameters())
+		{
+			const FString GroupKey(Parameter.GroupKey);
+			if (GroupKey != LastGroupKey)
+			{
+				LastGroupKey = GroupKey;
+				ParameterBox->AddSlot()
+				.AutoHeight()
+				.Padding(0, 8, 0, 4)
+				[
+					SNew(STextBlock)
+					.Visibility_Lambda([this, GroupKey]()
+					{
+						return HasMagicEditableGroupVisibleForType(*GroupKey, GetEditableMaterialType()) ? EVisibility::Visible : EVisibility::Collapsed;
+					})
+					.Text(Parameter.GetGroupLabel())
+					.Font(FAppStyle::GetFontStyle("SmallFontBold"))
+					.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Selection"))); })
+				];
+			}
+
+			ParameterBox->AddSlot()
+			.AutoHeight()
+			.Padding(0, 0, 0, 4)
+			[
+				SNew(SBox)
+				.Visibility_Lambda([this, TypeMask = Parameter.TypeMask]()
 				{
-					return HasMagicEditableGroupVisibleForType(*GroupKey, GetEditableMaterialType()) ? EVisibility::Visible : EVisibility::Collapsed;
+					return (TypeMask & MagicEditableMaterialTypeBit(GetEditableMaterialType())) != 0 ? EVisibility::Visible : EVisibility::Collapsed;
 				})
-				.Text(Parameter.GetGroupLabel())
-				.Font(FAppStyle::GetFontStyle("SmallFontBold"))
-				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Selection"))); })
+				[
+					BuildMaterialParameterControl(Parameter)
+				]
 			];
 		}
-
-		ParameterBox->AddSlot()
-		.AutoHeight()
-		.Padding(0, 0, 0, 4)
-		[
-			SNew(SBox)
-			.Visibility_Lambda([this, TypeMask = Parameter.TypeMask]()
-			{
-				return (TypeMask & MagicEditableMaterialTypeBit(GetEditableMaterialType())) != 0 ? EVisibility::Visible : EVisibility::Collapsed;
-			})
-			[
-				BuildMaterialParameterControl(Parameter)
-			]
-		];
 	}
 
 	return SNew(SBorder)
@@ -3783,6 +4048,153 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialParameterControl(const
 	}
 }
 
+TArray<FPBRMagicDynamicMaterialParameter> SPBRMagicOutlinerWindow::CollectEditableDynamicMaterialParameters() const
+{
+	TArray<FPBRMagicDynamicMaterialParameter> Parameters;
+	const UMaterialInstanceConstant* Instance = GetEditableMaterialInstance();
+	if (!Instance)
+	{
+		return Parameters;
+	}
+
+	TMap<FMaterialParameterInfo, FMaterialParameterMetadata> ScalarParameters;
+	Instance->GetAllParametersOfType(EMaterialParameterType::Scalar, ScalarParameters);
+	for (const TPair<FMaterialParameterInfo, FMaterialParameterMetadata>& Pair : ScalarParameters)
+	{
+		float Value = Pair.Value.Value.Type == EMaterialParameterType::Scalar ? Pair.Value.Value.AsScalar() : 0.0f;
+		Instance->GetScalarParameterValue(Pair.Key, Value);
+
+		FPBRMagicDynamicMaterialParameter Parameter;
+		Parameter.Kind = EPBRMagicDynamicMaterialParameterKind::Scalar;
+		Parameter.ParameterName = Pair.Key.Name;
+		Parameter.Group = NormalizeMagicDynamicParameterGroup(Parameter.ParameterName.ToString(), GetMagicDynamicParameterGroup(Pair.Value));
+		Parameter.SortPriority = GetMagicDynamicParameterSortPriority(Pair.Value);
+		Parameter.ScalarValue = Value;
+#if WITH_EDITORONLY_DATA
+		Parameter.ScalarMin = Pair.Value.ScalarMin;
+		Parameter.ScalarMax = Pair.Value.ScalarMax;
+#endif
+		NormalizeMagicDynamicScalarRange(Parameter);
+		AddMagicDynamicParameter(Parameters, MoveTemp(Parameter));
+	}
+
+	TMap<FMaterialParameterInfo, FMaterialParameterMetadata> VectorParameters;
+	Instance->GetAllParametersOfType(EMaterialParameterType::Vector, VectorParameters);
+	for (const TPair<FMaterialParameterInfo, FMaterialParameterMetadata>& Pair : VectorParameters)
+	{
+		FLinearColor Value = Pair.Value.Value.Type == EMaterialParameterType::Vector ? Pair.Value.Value.AsLinearColor() : FLinearColor::White;
+		Instance->GetVectorParameterValue(Pair.Key, Value);
+
+		FPBRMagicDynamicMaterialParameter Parameter;
+		Parameter.Kind = EPBRMagicDynamicMaterialParameterKind::Color;
+		Parameter.ParameterName = Pair.Key.Name;
+		Parameter.Group = NormalizeMagicDynamicParameterGroup(Parameter.ParameterName.ToString(), GetMagicDynamicParameterGroup(Pair.Value));
+		Parameter.SortPriority = GetMagicDynamicParameterSortPriority(Pair.Value);
+		Parameter.ColorValue = Value;
+		AddMagicDynamicParameter(Parameters, MoveTemp(Parameter));
+	}
+
+	TMap<FMaterialParameterInfo, FMaterialParameterMetadata> TextureParameters;
+	Instance->GetAllParametersOfType(EMaterialParameterType::Texture, TextureParameters);
+	for (const TPair<FMaterialParameterInfo, FMaterialParameterMetadata>& Pair : TextureParameters)
+	{
+		UTexture* Texture = nullptr;
+		Instance->GetTextureParameterValue(Pair.Key, Texture);
+
+		FPBRMagicDynamicMaterialParameter Parameter;
+		Parameter.Kind = EPBRMagicDynamicMaterialParameterKind::Texture;
+		Parameter.ParameterName = Pair.Key.Name;
+		Parameter.Group = NormalizeMagicDynamicParameterGroup(Parameter.ParameterName.ToString(), GetMagicDynamicParameterGroup(Pair.Value));
+		Parameter.SortPriority = GetMagicDynamicParameterSortPriority(Pair.Value);
+		Parameter.TextureValue = Texture;
+		AddMagicDynamicParameter(Parameters, MoveTemp(Parameter));
+	}
+
+	TMap<FMaterialParameterInfo, FMaterialParameterMetadata> SwitchParameters;
+	Instance->GetAllParametersOfType(EMaterialParameterType::StaticSwitch, SwitchParameters);
+	for (const TPair<FMaterialParameterInfo, FMaterialParameterMetadata>& Pair : SwitchParameters)
+	{
+		bool bValue = Pair.Value.Value.Type == EMaterialParameterType::StaticSwitch ? Pair.Value.Value.AsStaticSwitch() : false;
+		FGuid ExpressionGuid;
+		Instance->GetStaticSwitchParameterValue(Pair.Key, bValue, ExpressionGuid);
+
+		FPBRMagicDynamicMaterialParameter Parameter;
+		Parameter.Kind = EPBRMagicDynamicMaterialParameterKind::Switch;
+		Parameter.ParameterName = Pair.Key.Name;
+		Parameter.Group = NormalizeMagicDynamicParameterGroup(Parameter.ParameterName.ToString(), GetMagicDynamicParameterGroup(Pair.Value));
+		Parameter.SortPriority = GetMagicDynamicParameterSortPriority(Pair.Value);
+		Parameter.bSwitchValue = bValue;
+		AddMagicDynamicParameter(Parameters, MoveTemp(Parameter));
+	}
+
+	Parameters.Sort([](const FPBRMagicDynamicMaterialParameter& A, const FPBRMagicDynamicMaterialParameter& B)
+	{
+		if (A.Group != B.Group)
+		{
+			return A.Group < B.Group;
+		}
+		if (A.SortPriority != B.SortPriority)
+		{
+			return A.SortPriority < B.SortPriority;
+		}
+		if (A.ParameterName != B.ParameterName)
+		{
+			return A.ParameterName.ToString() < B.ParameterName.ToString();
+		}
+		return static_cast<uint8>(A.Kind) < static_cast<uint8>(B.Kind);
+	});
+
+	return Parameters;
+}
+
+TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildDynamicMaterialParameterGroup(const FString& GroupName, const TArray<FPBRMagicDynamicMaterialParameter>& Parameters)
+{
+	TSharedRef<SVerticalBox> Body = SNew(SVerticalBox);
+	for (const FPBRMagicDynamicMaterialParameter& Parameter : Parameters)
+	{
+		Body->AddSlot()
+		.AutoHeight()
+		.Padding(0, 0, 0, 5)
+		[
+			BuildDynamicMaterialParameterControl(Parameter)
+		];
+	}
+
+	return SNew(SBorder)
+		.BorderImage(FAppStyle::Get().GetBrush("Brushes.Recessed"))
+		.BorderBackgroundColor_Lambda([this]() { return GetThemeColor(TEXT("Panel")); })
+		.Padding(6)
+		[
+			SNew(SExpandableArea)
+			.InitiallyCollapsed(false)
+			.AreaTitle(FText::FromString(GroupName))
+			.HeaderPadding(FMargin(0, 2))
+			.Padding(FMargin(0, 6, 0, 0))
+			.BorderImage(FAppStyle::Get().GetBrush("NoBorder"))
+			.BodyContent()
+			[
+				Body
+			]
+		];
+}
+
+TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildDynamicMaterialParameterControl(const FPBRMagicDynamicMaterialParameter& Parameter)
+{
+	const FText Label = FText::FromString(Parameter.ParameterName.ToString());
+	switch (Parameter.Kind)
+	{
+	case EPBRMagicDynamicMaterialParameterKind::Color:
+		return BuildMaterialVectorControl(Label, Parameter.ParameterName, Parameter.ColorValue);
+	case EPBRMagicDynamicMaterialParameterKind::Switch:
+		return BuildMaterialSwitchControl(Label, Parameter.ParameterName, Parameter.bSwitchValue);
+	case EPBRMagicDynamicMaterialParameterKind::Texture:
+		return BuildMaterialTextureControl(Label, Parameter.ParameterName);
+	case EPBRMagicDynamicMaterialParameterKind::Scalar:
+	default:
+		return BuildMaterialScalarControl(Label, Parameter.ParameterName, Parameter.ScalarMin, Parameter.ScalarMax, Parameter.ScalarValue, Parameter.ScalarStep);
+	}
+}
+
 TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialScalarControl(const FText& Label, const FName& ParameterName, float MinValue, float MaxValue, float DefaultValue, float StepValue)
 {
 	return SNew(SHorizontalBox)
@@ -3853,10 +4265,49 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialVectorControl(const FT
 			[
 				MakeChannelBox(1)
 			]
-			+ SHorizontalBox::Slot().FillWidth(1.0f)
+			+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0, 0, 4, 0)
 			[
 				MakeChannelBox(2)
 			]
+			+ SHorizontalBox::Slot().FillWidth(1.0f)
+			[
+				MakeChannelBox(3)
+			]
+		];
+}
+
+TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialTextureControl(const FText& Label, const FName& ParameterName)
+{
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 3)
+		[
+			SNew(STextBlock)
+			.Text(Label)
+			.Font(FAppStyle::GetFontStyle("SmallFont"))
+			.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SObjectPropertyEntryBox)
+			.AllowedClass(UTexture::StaticClass())
+			.AllowClear(true)
+			.AllowCreate(false)
+			.DisplayUseSelected(true)
+			.DisplayBrowse(true)
+			.DisplayThumbnail(true)
+			.ThumbnailPool(MaterialThumbnailPool)
+			.ObjectPath_Lambda([this, ParameterName]()
+			{
+				if (UTexture* Texture = GetEditableMaterialTexture(ParameterName))
+				{
+					return Texture->GetPathName();
+				}
+				return FString();
+			})
+			.OnObjectChanged_Lambda([this, ParameterName](const FAssetData& AssetData)
+			{
+				CommitEditableMaterialTexture(ParameterName, Cast<UTexture>(AssetData.GetAsset()));
+			})
 		];
 }
 
@@ -5013,6 +5464,8 @@ TOptional<float> SPBRMagicOutlinerWindow::GetEditableMaterialVectorChannel(const
 		return Value.G;
 	case 2:
 		return Value.B;
+	case 3:
+		return Value.A;
 	default:
 		return 0.0f;
 	}
@@ -5030,6 +5483,19 @@ bool SPBRMagicOutlinerWindow::GetEditableMaterialSwitch(const FName& ParameterNa
 		}
 	}
 	return bDefaultValue;
+}
+
+UTexture* SPBRMagicOutlinerWindow::GetEditableMaterialTexture(const FName& ParameterName) const
+{
+	if (UMaterialInstanceConstant* Instance = GetEditableMaterialInstance())
+	{
+		UTexture* Texture = nullptr;
+		if (Instance->GetTextureParameterValue(FMaterialParameterInfo(ParameterName), Texture))
+		{
+			return Texture;
+		}
+	}
+	return nullptr;
 }
 
 void SPBRMagicOutlinerWindow::CommitEditableMaterialScalar(const FName& ParameterName, float Value, float MinValue, float MaxValue)
@@ -5083,10 +5549,12 @@ void SPBRMagicOutlinerWindow::CommitEditableMaterialVectorChannel(const FName& P
 	case 2:
 		NewColor.B = ClampedValue;
 		break;
+	case 3:
+		NewColor.A = ClampedValue;
+		break;
 	default:
 		break;
 	}
-	NewColor.A = 1.0f;
 
 	FString Message;
 	if (FPBRSceneMaterialReplacer::SetVectorParameterForSlot(Component, SlotIndex, ParameterName, NewColor, Message))
@@ -5122,6 +5590,28 @@ void SPBRMagicOutlinerWindow::CommitEditableMaterialSwitch(const FName& Paramete
 	}
 }
 
+void SPBRMagicOutlinerWindow::CommitEditableMaterialTexture(const FName& ParameterName, UTexture* Texture)
+{
+	UPrimitiveComponent* Component = nullptr;
+	int32 SlotIndex = INDEX_NONE;
+	if (!ResolveEditableMaterialSlot(Component, SlotIndex))
+	{
+		StatusMessage = TEXT("没有可编辑的材质槽");
+		return;
+	}
+
+	FString Message;
+	if (FPBRSceneMaterialReplacer::SetTextureParameterForSlot(Component, SlotIndex, ParameterName, Texture, Message))
+	{
+		StatusMessage = Message;
+		Invalidate(EInvalidateWidgetReason::Paint);
+	}
+	else
+	{
+		StatusMessage = Message.IsEmpty() ? TEXT("贴图更新失败") : Message;
+	}
+}
+
 void SPBRMagicOutlinerWindow::StepEditableMaterialScalar(const FName& ParameterName, float DeltaValue, float MinValue, float MaxValue, float DefaultValue)
 {
 	const TOptional<float> CurrentValue = GetEditableMaterialScalar(ParameterName, DefaultValue);
@@ -5142,7 +5632,7 @@ void SPBRMagicOutlinerWindow::SelectEditableMaterialType(EPBRMaterialType Materi
 	if (FPBRSceneMaterialReplacer::SetMaterialTypeForSlot(Component, SlotIndex, MaterialType, Message))
 	{
 		StatusMessage = Message;
-		Invalidate(EInvalidateWidgetReason::LayoutAndVolatility);
+		RebuildRootContent();
 	}
 	else
 	{

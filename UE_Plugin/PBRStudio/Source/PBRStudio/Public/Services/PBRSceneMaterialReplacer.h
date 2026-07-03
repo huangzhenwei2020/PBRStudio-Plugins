@@ -9,6 +9,7 @@ class UMaterial;
 class UMaterialInstanceConstant;
 class UMaterialInterface;
 class UPrimitiveComponent;
+class UTexture;
 class UTexture2D;
 
 enum class EPBRMaterialType : uint8;
@@ -125,6 +126,7 @@ public:
 	static bool SetScalarParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, float Value, FString& OutMessage);
 	static bool SetVectorParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, const FLinearColor& Value, FString& OutMessage);
 	static bool SetStaticSwitchParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, bool bValue, FString& OutMessage);
+	static bool SetTextureParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, UTexture* Texture, FString& OutMessage);
 
 private:
 	static TArray<FPBRSceneMaterialSlot> LastReplacementSlots;

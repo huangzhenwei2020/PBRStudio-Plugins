@@ -4064,7 +4064,7 @@ static bool BuildSpecialMaterialGraph(UMaterial* Material, const FString& AssetN
 	return bBuilt;
 }
 
-static constexpr const TCHAR* PBRARMParentGraphLayoutMarker = TEXT("ARM Parent Graph Layout v8");
+static constexpr const TCHAR* PBRARMParentGraphLayoutMarker = TEXT("PBRStudio Parent Graph Layout v8");
 static constexpr float PBRARMDefaultWaterOpacity = 0.65f;
 
 struct FPBRARMGraphLane
@@ -4252,7 +4252,7 @@ static UMaterialExpressionCustom* PBRARMAddFlakeMask(UMaterial* Material, UMater
 	UMaterialExpressionCustom* Node = PBRARMAddCustom(
 		Material,
 		CMOT_Float1,
-		TEXT("AR Metal Flake Mask"),
+		TEXT("PBRStudio Metal Flake Mask"),
 		TEXT("float flakeScale = max(Scale, 1.0);\nfloat2 cell = floor(UV * flakeScale);\nfloat sparkle = frac(sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453);\nreturn step(0.975, sparkle);"),
 		2,
 		X,
@@ -4266,7 +4266,7 @@ static UMaterialExpressionCustom* PBRARMAddFlakeMask(UMaterial* Material, UMater
 
 static UMaterialExpressionCustom* PBRARMAddCenteredHeightOffset(UMaterial* Material, UMaterialExpression* HeightExpression, UMaterialExpression* StrengthExpression, int32 X, int32 Y)
 {
-	UMaterialExpressionCustom* Node = PBRARMAddCustom(Material, CMOT_Float1, TEXT("AR Centered Height Offset"), TEXT("return (Height - 0.5) * Strength;"), 2, X, Y);
+	UMaterialExpressionCustom* Node = PBRARMAddCustom(Material, CMOT_Float1, TEXT("PBRStudio Centered Height Offset"), TEXT("return (Height - 0.5) * Strength;"), 2, X, Y);
 	Node->Inputs[0].InputName = TEXT("Height");
 	Node->Inputs[0].Input.Connect(0, HeightExpression);
 	Node->Inputs[1].InputName = TEXT("Strength");
@@ -4288,7 +4288,7 @@ static UMaterialExpressionCustom* PBRARMAddWaterRippleMask(
 	UMaterialExpressionCustom* Node = PBRARMAddCustom(
 		Material,
 		CMOT_Float1,
-		TEXT("AR Water Ripple Mask"),
+		TEXT("PBRStudio Water Ripple Mask"),
 		TEXT("float2 movedUV = UV + Time * float2(FlowU, FlowV);\nfloat waveScale = max(Scale, 0.01) * 6.2831853;\nfloat waves = (sin(movedUV.x * waveScale) + sin(movedUV.y * waveScale * 1.37)) * 0.25 + 0.5;\nreturn saturate(waves) * Strength * 1.5;"),
 		6,
 		X,
@@ -4317,7 +4317,7 @@ static UMaterialExpressionCustom* PBRARMAddWaterFlowUV(
 	int32 X,
 	int32 Y)
 {
-	UMaterialExpressionCustom* Node = PBRARMAddCustom(Material, CMOT_Float2, TEXT("AR Water Flow UV"), TEXT("return UV + Time * float2(FlowU, FlowV);"), 4, X, Y);
+	UMaterialExpressionCustom* Node = PBRARMAddCustom(Material, CMOT_Float2, TEXT("PBRStudio Water Flow UV"), TEXT("return UV + Time * float2(FlowU, FlowV);"), 4, X, Y);
 	Node->Inputs[0].InputName = TEXT("UV");
 	Node->Inputs[0].Input.Connect(0, UVExpression);
 	Node->Inputs[1].InputName = TEXT("Time");
@@ -4343,7 +4343,7 @@ static UMaterialExpressionCustom* PBRARMAddWaterRippleNormal(
 	UMaterialExpressionCustom* Node = PBRARMAddCustom(
 		Material,
 		CMOT_Float3,
-		TEXT("AR Water Ripple Normal"),
+		TEXT("PBRStudio Water Ripple Normal"),
 		TEXT("float2 movedUV = UV + Time * float2(FlowU, FlowV);\nfloat waveScale = max(Scale, 0.01) * 6.2831853;\nfloat dx = cos(dot(movedUV, float2(1.0, 0.32)) * waveScale) * waveScale;\ndx += cos(dot(movedUV * 1.73 + 0.19, float2(-0.56, 0.83)) * waveScale * 0.61) * waveScale * 0.61;\nfloat dy = cos(dot(movedUV, float2(-0.27, 1.0)) * waveScale * 0.87) * waveScale * 0.87;\ndy += cos(dot(movedUV * 1.31 + 0.43, float2(0.72, 0.41)) * waveScale * 0.49) * waveScale * 0.49;\nfloat normalScale = Strength * 0.006;\nreturn normalize(float3(-dx * normalScale, dy * normalScale, 1.0));"),
 		6,
 		X,
@@ -4368,7 +4368,7 @@ static UMaterialExpressionCustom* PBRARMAddGlassCausticsMask(UMaterial* Material
 	UMaterialExpressionCustom* Node = PBRARMAddCustom(
 		Material,
 		CMOT_Float1,
-		TEXT("AR Glass Caustics Mask"),
+		TEXT("PBRStudio Glass Caustics Mask"),
 		TEXT("float causticScale = max(Scale, 0.01) * 6.2831853;\nfloat2 movedUV = UV * causticScale + Time * Speed * float2(1.17, -0.73);\nfloat waveA = sin(movedUV.x + sin(movedUV.y * 0.83));\nfloat waveB = sin(dot(movedUV, float2(-0.62, 1.21)) + Time * Speed * 1.7);\nfloat waveC = sin(dot(movedUV, float2(1.37, 0.48)) - Time * Speed * 1.31);\nfloat mask = saturate((waveA + waveB + waveC) * 0.22 + 0.52);\nmask = pow(mask, 5.0);\nreturn saturate(mask * Intensity * 3.0);"),
 		5,
 		X,
@@ -4391,7 +4391,7 @@ static UMaterialExpressionCustom* PBRARMAddUVRotateDegrees(UMaterial* Material, 
 	UMaterialExpressionCustom* Node = PBRARMAddCustom(
 		Material,
 		CMOT_Float2,
-		TEXT("AR UV Rotate Degrees"),
+		TEXT("PBRStudio UV Rotate Degrees"),
 		TEXT("float radiansValue = radians(Degrees);\nfloat s = sin(radiansValue);\nfloat c = cos(radiansValue);\nfloat2 centered = UV - float2(0.5, 0.5);\nfloat2 rotated = float2(centered.x * c - centered.y * s, centered.x * s + centered.y * c);\nreturn rotated + float2(0.5, 0.5);"),
 		2,
 		X,
@@ -5342,7 +5342,7 @@ static bool BuildARMStyleTemplateGraph(UMaterial* Material, EPBRMaterialType Mat
 
 	Material->PreEditChange(nullptr);
 	Material->PostEditChange();
-	OutMessage = TEXT("已按 ARM Parent Graph Layout v8 构建母材质图表");
+	OutMessage = TEXT("已按 PBRStudio Parent Graph Layout v8 构建母材质图表");
 	return true;
 }
 

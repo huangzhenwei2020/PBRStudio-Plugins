@@ -409,7 +409,7 @@ static bool BuildPBRWaterRippleMaskFunction(FString& OutMessage)
 	UMaterialExpressionFunctionInput* Strength = AddInput(Function, TEXT("强度"), FunctionInput_Scalar, FVector4f(PBRDefaultWaterRippleStrength, 0, 0, 0), 60, -1080, 380);
 	UMaterialExpressionCustom* Mask = AddNode<UMaterialExpressionCustom>(Function, -620, -80);
 	Mask->OutputType = CMOT_Float1;
-	Mask->Description = TEXT("AR Water Ripple Mask");
+	Mask->Description = TEXT("PBRStudio Water Ripple Mask");
 	Mask->Code = TEXT("float2 movedUV = UV + Time * float2(FlowU, FlowV);\nfloat waveScale = max(Scale, 0.01) * 6.2831853;\nfloat waves = (sin(movedUV.x * waveScale) + sin(movedUV.y * waveScale * 1.37)) * 0.25 + 0.5;\nreturn saturate(waves) * Strength * 1.5;");
 	Mask->Inputs.AddDefaulted(6);
 	Mask->Inputs[0].InputName = TEXT("UV");
@@ -445,7 +445,7 @@ static bool BuildPBRWaterRippleNormalFunction(FString& OutMessage)
 	UMaterialExpressionFunctionInput* Strength = AddInput(Function, TEXT("强度"), FunctionInput_Scalar, FVector4f(PBRDefaultWaterRippleStrength, 0, 0, 0), 60, -1080, 380);
 	UMaterialExpressionCustom* Normal = AddNode<UMaterialExpressionCustom>(Function, -620, -80);
 	Normal->OutputType = CMOT_Float3;
-	Normal->Description = TEXT("AR Water Ripple Normal");
+	Normal->Description = TEXT("PBRStudio Water Ripple Normal");
 	Normal->Code = TEXT("float2 movedUV = UV + Time * float2(FlowU, FlowV);\nfloat waveScale = max(Scale, 0.01) * 6.2831853;\nfloat dx = cos(dot(movedUV, float2(1.0, 0.32)) * waveScale) * waveScale;\ndx += cos(dot(movedUV * 1.73 + 0.19, float2(-0.56, 0.83)) * waveScale * 0.61) * waveScale * 0.61;\nfloat dy = cos(dot(movedUV, float2(-0.27, 1.0)) * waveScale * 0.87) * waveScale * 0.87;\ndy += cos(dot(movedUV * 1.31 + 0.43, float2(0.72, 0.41)) * waveScale * 0.49) * waveScale * 0.49;\nfloat normalScale = Strength * 0.006;\nreturn normalize(float3(-dx * normalScale, dy * normalScale, 1.0));");
 	Normal->Inputs.AddDefaulted(6);
 	Normal->Inputs[0].InputName = TEXT("UV");
