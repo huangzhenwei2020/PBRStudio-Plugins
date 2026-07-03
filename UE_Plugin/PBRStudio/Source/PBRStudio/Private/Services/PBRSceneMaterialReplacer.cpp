@@ -3347,12 +3347,9 @@ FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMateria
 
 	if (UMaterialInstanceConstant* ExistingInstance = Cast<UMaterialInstanceConstant>(CurrentMaterial))
 	{
-		if (IsPBRStudioGeneratedMaterial(ExistingInstance))
-		{
-			Result.Instance = ExistingInstance;
-			Result.Message = FString::Printf(TEXT("当前槽位已经是可编辑材质实例：%s"), *ExistingInstance->GetName());
-			return Result;
-		}
+		Result.Instance = ExistingInstance;
+		Result.Message = FString::Printf(TEXT("当前槽位已经是可编辑材质实例：%s"), *ExistingInstance->GetName());
+		return Result;
 	}
 
 	FPBRSceneMaterialCandidate Candidate;

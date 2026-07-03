@@ -90,6 +90,7 @@ class SPBRMagicOutlinerWindow : public SCompoundWidget
 {
 	friend class SPBRMagicOutlinerRow;
 	friend class SPBRMagicOutlinerPaintSurface;
+	friend class SPBRMagicMaterialParameterPopupSurface;
 
 public:
 	SLATE_BEGIN_ARGS(SPBRMagicOutlinerWindow) {}
@@ -202,6 +203,7 @@ private:
 	FReply OnMaterialSlotDrop(const FGeometry& Geometry, const FDragDropEvent& DragDropEvent, TSharedPtr<FPBRMagicOutlinerItem> Item, int32 MaterialSlotIndex);
 	FReply OnModelReplacementDrop(const FGeometry& Geometry, const FDragDropEvent& DragDropEvent, TSharedPtr<FPBRMagicOutlinerItem> Item);
 	FReply OnEditSelectedMaterialSlot(TSharedPtr<FPBRMagicOutlinerItem> Item, int32 MaterialSlotIndex = INDEX_NONE);
+	void OpenEditableMaterialParameterWindow();
 	void OpenMaterialEditor(TSharedPtr<FPBRMagicOutlinerItem> Item);
 	bool ResolveEditableMaterialSlot(UPrimitiveComponent*& OutComponent, int32& OutSlotIndex) const;
 	UMaterialInstanceConstant* GetEditableMaterialInstance() const;
@@ -297,6 +299,7 @@ private:
 	TMap<TWeakObjectPtr<ULightComponent>, float> LightBaseIntensities;
 	TMap<TWeakObjectPtr<UMaterialInterface>, TSharedPtr<FPBRMagicOutlinerItem>> MaterialItemsByMaterial;
 	TSharedPtr<FAssetThumbnailPool> MaterialThumbnailPool;
+	TWeakPtr<class SWindow> MaterialParameterWindow;
 	TMap<FString, TSharedPtr<FAssetThumbnail>> MaterialThumbnailCache;
 	TMap<FString, TSharedPtr<FSlateDynamicImageBrush>> MaterialThumbnailBrushCache;
 	TWeakObjectPtr<AActor> DetailsActor;

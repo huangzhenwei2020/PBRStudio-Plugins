@@ -5,6 +5,7 @@
 #include "Brushes/SlateDynamicImageBrush.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
+#include "ContentBrowserModule.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/LightComponent.h"
 #include "Components/MeshComponent.h"
@@ -29,6 +30,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Commands/InputBindingManager.h"
 #include "GameFramework/Actor.h"
+#include "IContentBrowserSingleton.h"
 #include "Materials/Material.h"
 #include "InputCoreTypes.h"
 #include "MaterialShared.h"
@@ -37,6 +39,7 @@
 #include "Materials/MaterialInstance.h"
 #include "Misc/ObjectThumbnail.h"
 #include "Misc/MessageDialog.h"
+#include "Modules/ModuleManager.h"
 #include "ObjectTools.h"
 #include "Models/PBRMaterialTypes.h"
 #include "PBRStudioModule.h"
@@ -2827,9 +2830,648 @@ private:
 	bool bSearchActive = false;
 };
 
+enum class EPBRMagicMaterialPopupAction : uint8
+{
+	None,
+	Search,
+	TypePrevious,
+	TypeNext,
+	ScalarDown,
+	ScalarUp,
+	ScalarTrack,
+	VectorTrack,
+	SwitchToggle,
+	TextureUseSelected,
+	TextureClear
+};
+
+struct FPBRMagicMaterialPopupHit
+{
+	FSlateRect Rect;
+	EPBRMagicMaterialPopupAction Action = EPBRMagicMaterialPopupAction::None;
+	FName ParameterName;
+	float ScalarMin = 0.0f;
+	float ScalarMax = 1.0f;
+	float ScalarDefault = 0.0f;
+	float ScalarStep = 0.01f;
+	int32 VectorChannel = 0;
+	FLinearColor VectorDefault = FLinearColor::White;
+	bool bSwitchDefault = false;
+};
+
+class SPBRMagicMaterialParameterPopupSurface : public SLeafWidget
+{
+public:
+	SLATE_BEGIN_ARGS(SPBRMagicMaterialParameterPopupSurface) {}
+		SLATE_ARGUMENT(SPBRMagicOutlinerWindow*, OwnerWindow)
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& InArgs)
+	{
+		OwnerWindow = InArgs._OwnerWindow;
+	}
+
+	virtual FVector2D ComputeDesiredSize(float) const override
+	{
+		return FVector2D(820.0f, 760.0f);
+	}
+
+	virtual bool SupportsKeyboardFocus() const override
+	{
+		return true;
+	}
+
+	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override
+	{
+		if (!OwnerWindow)
+		{
+			return LayerId;
+		}
+
+		HitRegions.Reset();
+		const FVector2D Size = AllottedGeometry.GetLocalSize();
+		const FPBRMagicTheme& Theme = FindMagicTheme(OwnerWindow->ActiveThemeId);
+		DrawBox(OutDrawElements, AllottedGeometry, LayerId, FVector2D::ZeroVector, Size, Theme.Background);
+		DrawBox(OutDrawElements, AllottedGeometry, LayerId + 1, FVector2D(0.0f, 0.0f), FVector2D(Size.X, 94.0f), Theme.Panel);
+
+		DrawText(OutDrawElements, AllottedGeometry, LayerId + 2, FVector2D(20.0f, 16.0f), TEXT("材质参数调节"), FAppStyle::GetFontStyle("NormalFontBold"), Theme.Text);
+		DrawTextInRect(OutDrawElements, AllottedGeometry, LayerId + 2, FVector2D(20.0f, 40.0f), Size.X - 40.0f, OwnerWindow->GetEditableMaterialNameText().ToString(), FAppStyle::GetFontStyle("SmallFont"), Theme.TextMuted);
+		DrawTextInRect(OutDrawElements, AllottedGeometry, LayerId + 2, FVector2D(20.0f, 62.0f), Size.X - 40.0f, OwnerWindow->GetEditableMaterialSlotText().ToString(), FAppStyle::GetFontStyle("SmallFont"), Theme.Primary);
+
+		const FVector2D TypeY(20.0f, 108.0f);
+		DrawButton(OutDrawElements, AllottedGeometry, LayerId + 2, TypeY, FVector2D(42.0f, 30.0f), TEXT("<"), EPBRMagicMaterialPopupAction::TypePrevious, Theme);
+		DrawBox(OutDrawElements, AllottedGeometry, LayerId + 2, TypeY + FVector2D(50.0f, 0.0f), FVector2D(220.0f, 30.0f), Theme.PanelRaised);
+		DrawTextInRect(OutDrawElements, AllottedGeometry, LayerId + 3, TypeY + FVector2D(60.0f, 7.0f), 200.0f, OwnerWindow->GetEditableMaterialTypeText().ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Selection);
+		DrawButton(OutDrawElements, AllottedGeometry, LayerId + 2, TypeY + FVector2D(278.0f, 0.0f), FVector2D(42.0f, 30.0f), TEXT(">"), EPBRMagicMaterialPopupAction::TypeNext, Theme);
+
+		const FVector2D SearchPos(Size.X - 340.0f, 108.0f);
+		const FVector2D SearchSize(320.0f, 30.0f);
+		DrawBox(OutDrawElements, AllottedGeometry, LayerId + 2, SearchPos, SearchSize, bSearchActive ? Theme.DropZone : Theme.PanelRaised);
+		DrawText(OutDrawElements, AllottedGeometry, LayerId + 3, SearchPos + FVector2D(10.0f, 7.0f), TEXT("⌕"), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Primary);
+		const FString SearchDisplay = SearchText.IsEmpty() ? TEXT("搜索参数 / 分组 / 贴图") : SearchText;
+		DrawTextInRect(OutDrawElements, AllottedGeometry, LayerId + 3, SearchPos + FVector2D(34.0f, 7.0f), SearchSize.X - 46.0f, SearchDisplay, FAppStyle::GetFontStyle("SmallFont"), SearchText.IsEmpty() ? Theme.TextMuted : Theme.Text);
+		AddHit(SearchPos, SearchSize, EPBRMagicMaterialPopupAction::Search);
+
+		TArray<FPBRMagicDynamicMaterialParameter> Parameters = OwnerWindow->CollectEditableDynamicMaterialParameters();
+		FilterParameters(Parameters);
+		const float ListTop = 154.0f;
+		const float ListBottom = Size.Y - 44.0f;
+		const float ListHeight = FMath::Max(60.0f, ListBottom - ListTop);
+		const float ContentHeight = ComputeContentHeight(Parameters);
+		MaxScrollOffset = FMath::Max(0.0f, ContentHeight - ListHeight);
+		ScrollOffset = FMath::Clamp(ScrollOffset, 0.0f, MaxScrollOffset);
+
+		DrawBox(OutDrawElements, AllottedGeometry, LayerId + 1, FVector2D(14.0f, ListTop - 8.0f), FVector2D(Size.X - 28.0f, ListHeight + 16.0f), Theme.Panel);
+
+		if (Parameters.IsEmpty())
+		{
+			DrawTextInRect(OutDrawElements, AllottedGeometry, LayerId + 2, FVector2D(34.0f, ListTop + 20.0f), Size.X - 68.0f, SearchText.IsEmpty() ? TEXT("当前材质实例没有可编辑参数。") : TEXT("没有匹配的参数。"), FAppStyle::GetFontStyle("SmallFont"), Theme.TextMuted);
+		}
+		else
+		{
+			DrawParameterList(OutDrawElements, AllottedGeometry, LayerId + 2, FVector2D(24.0f, ListTop), FVector2D(Size.X - 62.0f, ListHeight), Parameters, Theme);
+		}
+
+		DrawScrollBar(OutDrawElements, AllottedGeometry, LayerId + 3, FVector2D(Size.X - 30.0f, ListTop), FVector2D(8.0f, ListHeight), Theme);
+		DrawTextInRect(OutDrawElements, AllottedGeometry, LayerId + 2, FVector2D(20.0f, Size.Y - 28.0f), Size.X - 40.0f, TEXT("贴图参数：先在内容浏览器选择贴图，再点“用选中”；标量和颜色可点击滑条快速调整。"), FAppStyle::GetFontStyle("SmallFont"), Theme.TextMuted);
+
+		return LayerId + 6;
+	}
+
+	virtual FReply OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override
+	{
+		if (!OwnerWindow || MouseEvent.GetEffectingButton() != EKeys::LeftMouseButton)
+		{
+			return FReply::Unhandled();
+		}
+
+		const FVector2D LocalPosition = MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition());
+		for (int32 Index = HitRegions.Num() - 1; Index >= 0; --Index)
+		{
+			const FPBRMagicMaterialPopupHit& Hit = HitRegions[Index];
+			if (!Hit.Rect.ContainsPoint(LocalPosition))
+			{
+				continue;
+			}
+
+			PressedAction = Hit.Action;
+			PressedRect = Hit.Rect;
+			HandleHit(Hit, LocalPosition);
+			Invalidate(EInvalidateWidgetReason::Paint);
+			return FReply::Handled().SetUserFocus(AsShared(), EFocusCause::Mouse).CaptureMouse(AsShared());
+		}
+
+		bSearchActive = false;
+		Invalidate(EInvalidateWidgetReason::Paint);
+		return FReply::Handled().SetUserFocus(AsShared(), EFocusCause::Mouse);
+	}
+
+	virtual FReply OnMouseButtonUp(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override
+	{
+		if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton && PressedAction != EPBRMagicMaterialPopupAction::None)
+		{
+			PressedAction = EPBRMagicMaterialPopupAction::None;
+			PressedRect = FSlateRect();
+			Invalidate(EInvalidateWidgetReason::Paint);
+			return FReply::Handled().ReleaseMouseCapture();
+		}
+		return FReply::Unhandled();
+	}
+
+	virtual FReply OnMouseMove(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override
+	{
+		const FVector2D LocalPosition = MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition());
+		EPBRMagicMaterialPopupAction NewHoveredAction = EPBRMagicMaterialPopupAction::None;
+		FSlateRect NewHoveredRect;
+		for (int32 Index = HitRegions.Num() - 1; Index >= 0; --Index)
+		{
+			const FPBRMagicMaterialPopupHit& Hit = HitRegions[Index];
+			if (Hit.Rect.ContainsPoint(LocalPosition))
+			{
+				NewHoveredAction = Hit.Action;
+				NewHoveredRect = Hit.Rect;
+				break;
+			}
+		}
+		if (HoveredAction != NewHoveredAction || !RectMatches(HoveredRect, NewHoveredRect))
+		{
+			HoveredAction = NewHoveredAction;
+			HoveredRect = NewHoveredRect;
+			Invalidate(EInvalidateWidgetReason::Paint);
+		}
+		return FReply::Unhandled();
+	}
+
+	virtual FReply OnMouseWheel(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override
+	{
+		ScrollOffset = FMath::Clamp(ScrollOffset - MouseEvent.GetWheelDelta() * 72.0f, 0.0f, MaxScrollOffset);
+		Invalidate(EInvalidateWidgetReason::Paint);
+		return FReply::Handled();
+	}
+
+	virtual FReply OnKeyChar(const FGeometry& MyGeometry, const FCharacterEvent& InCharacterEvent) override
+	{
+		if (!bSearchActive)
+		{
+			return FReply::Unhandled();
+		}
+
+		const TCHAR Character = InCharacterEvent.GetCharacter();
+		if (Character >= 32)
+		{
+			SearchText.AppendChar(Character);
+			ScrollOffset = 0.0f;
+			Invalidate(EInvalidateWidgetReason::Paint);
+			return FReply::Handled();
+		}
+		return FReply::Unhandled();
+	}
+
+	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override
+	{
+		if (InKeyEvent.IsControlDown() && InKeyEvent.GetKey() == EKeys::F)
+		{
+			bSearchActive = true;
+			Invalidate(EInvalidateWidgetReason::Paint);
+			return FReply::Handled();
+		}
+
+		if (bSearchActive)
+		{
+			if (InKeyEvent.GetKey() == EKeys::BackSpace)
+			{
+				if (!SearchText.IsEmpty())
+				{
+					SearchText.LeftChopInline(1);
+					ScrollOffset = 0.0f;
+					Invalidate(EInvalidateWidgetReason::Paint);
+				}
+				return FReply::Handled();
+			}
+			if (InKeyEvent.GetKey() == EKeys::Escape)
+			{
+				bSearchActive = false;
+				SearchText.Reset();
+				ScrollOffset = 0.0f;
+				Invalidate(EInvalidateWidgetReason::Paint);
+				return FReply::Handled();
+			}
+		}
+
+		return FReply::Unhandled();
+	}
+
+private:
+	static float EstimateTextWidth(const FString& Text, const FSlateFontInfo& Font)
+	{
+		float Width = 0.0f;
+		for (int32 Index = 0; Index < Text.Len(); ++Index)
+		{
+			Width += Text[Index] > 0x2E80 ? Font.Size * 0.95f : Font.Size * 0.56f;
+		}
+		return Width;
+	}
+
+	static FString EllipsizeText(const FString& Text, float MaxWidth, const FSlateFontInfo& Font)
+	{
+		if (MaxWidth <= 8.0f || Text.IsEmpty())
+		{
+			return FString();
+		}
+		if (EstimateTextWidth(Text, Font) <= MaxWidth)
+		{
+			return Text;
+		}
+
+		const FString Suffix = TEXT("...");
+		const float SuffixWidth = EstimateTextWidth(Suffix, Font) + 8.0f;
+		FString Result;
+		float Width = 0.0f;
+		for (int32 Index = 0; Index < Text.Len(); ++Index)
+		{
+			const FString NextChar = Text.Mid(Index, 1);
+			const float NextWidth = EstimateTextWidth(NextChar, Font);
+			if (Width + NextWidth + SuffixWidth > MaxWidth)
+			{
+				break;
+			}
+			Result += NextChar;
+			Width += NextWidth;
+		}
+		return Result.IsEmpty() ? Suffix : Result + Suffix;
+	}
+
+	static bool RectMatches(const FSlateRect& A, const FSlateRect& B)
+	{
+		return FMath::IsNearlyEqual(A.Left, B.Left)
+			&& FMath::IsNearlyEqual(A.Top, B.Top)
+			&& FMath::IsNearlyEqual(A.Right, B.Right)
+			&& FMath::IsNearlyEqual(A.Bottom, B.Bottom);
+	}
+
+	static void DrawBox(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FLinearColor& Color)
+	{
+		FSlateDrawElement::MakeBox(
+			OutDrawElements,
+			Layer,
+			Geometry.ToPaintGeometry(FVector2f(Size.X, Size.Y), FSlateLayoutTransform(FVector2f(Position.X, Position.Y))),
+			FAppStyle::Get().GetBrush("WhiteBrush"),
+			ESlateDrawEffect::None,
+			Color);
+	}
+
+	static void DrawText(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FString& Text, const FSlateFontInfo& Font, const FLinearColor& Color)
+	{
+		FSlateDrawElement::MakeText(
+			OutDrawElements,
+			Layer,
+			Geometry.ToPaintGeometry(FVector2f(1.0f, 1.0f), FSlateLayoutTransform(FVector2f(Position.X, Position.Y))),
+			Text,
+			Font,
+			ESlateDrawEffect::None,
+			Color);
+	}
+
+	static void DrawTextInRect(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, float MaxWidth, const FString& Text, const FSlateFontInfo& Font, const FLinearColor& Color)
+	{
+		const float SafeWidth = FMath::Max(0.0f, MaxWidth - 8.0f);
+		if (SafeWidth <= 8.0f)
+		{
+			return;
+		}
+		DrawText(OutDrawElements, Geometry, Layer, Position, EllipsizeText(Text, SafeWidth, Font), Font, Color);
+	}
+
+	void DrawButton(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FString& Label, EPBRMagicMaterialPopupAction Action, const FPBRMagicTheme& Theme, const FPBRMagicMaterialPopupHit* Payload = nullptr) const
+	{
+		const FSlateRect Rect(Position.X, Position.Y, Position.X + Size.X, Position.Y + Size.Y);
+		const bool bHovered = HoveredAction == Action && RectMatches(HoveredRect, Rect);
+		const bool bPressed = PressedAction == Action && RectMatches(PressedRect, Rect);
+		DrawBox(OutDrawElements, Geometry, Layer, Position, Size, bPressed ? Theme.DropZone : (bHovered ? Theme.PrimarySoft : Theme.PanelRaised));
+		DrawTextInRect(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(8.0f, 7.0f), Size.X - 16.0f, Label, FAppStyle::GetFontStyle("SmallFontBold"), bPressed ? Theme.Selection : Theme.Text);
+		FPBRMagicMaterialPopupHit Hit = Payload ? *Payload : FPBRMagicMaterialPopupHit();
+		Hit.Rect = Rect;
+		Hit.Action = Action;
+		HitRegions.Add(Hit);
+	}
+
+	void AddHit(const FVector2D& Position, const FVector2D& Size, EPBRMagicMaterialPopupAction Action, const FPBRMagicMaterialPopupHit* Payload = nullptr) const
+	{
+		FPBRMagicMaterialPopupHit Hit = Payload ? *Payload : FPBRMagicMaterialPopupHit();
+		Hit.Rect = FSlateRect(Position.X, Position.Y, Position.X + Size.X, Position.Y + Size.Y);
+		Hit.Action = Action;
+		HitRegions.Add(Hit);
+	}
+
+	static float GetRowHeight(const FPBRMagicDynamicMaterialParameter& Parameter)
+	{
+		switch (Parameter.Kind)
+		{
+		case EPBRMagicDynamicMaterialParameterKind::Color:
+			return 74.0f;
+		case EPBRMagicDynamicMaterialParameterKind::Texture:
+			return 62.0f;
+		case EPBRMagicDynamicMaterialParameterKind::Switch:
+			return 44.0f;
+		case EPBRMagicDynamicMaterialParameterKind::Scalar:
+		default:
+			return 50.0f;
+		}
+	}
+
+	float ComputeContentHeight(const TArray<FPBRMagicDynamicMaterialParameter>& Parameters) const
+	{
+		float Height = 0.0f;
+		FString LastGroup;
+		for (const FPBRMagicDynamicMaterialParameter& Parameter : Parameters)
+		{
+			if (Parameter.Group != LastGroup)
+			{
+				Height += 34.0f;
+				LastGroup = Parameter.Group;
+			}
+			Height += GetRowHeight(Parameter) + 6.0f;
+		}
+		return Height;
+	}
+
+	void FilterParameters(TArray<FPBRMagicDynamicMaterialParameter>& Parameters) const
+	{
+		if (SearchText.IsEmpty() || !OwnerWindow)
+		{
+			return;
+		}
+
+		const FString Needle = SearchText.ToLower();
+		Parameters.RemoveAll([this, &Needle](const FPBRMagicDynamicMaterialParameter& Parameter)
+		{
+			FString Text = Parameter.ParameterName.ToString() + TEXT(" ") + Parameter.Group;
+			if (Parameter.Kind == EPBRMagicDynamicMaterialParameterKind::Texture)
+			{
+				if (UTexture* Texture = OwnerWindow->GetEditableMaterialTexture(Parameter.ParameterName))
+				{
+					Text += TEXT(" ") + Texture->GetName() + TEXT(" ") + Texture->GetPathName();
+				}
+			}
+			return !Text.ToLower().Contains(Needle);
+		});
+	}
+
+	void DrawParameterList(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const TArray<FPBRMagicDynamicMaterialParameter>& Parameters, const FPBRMagicTheme& Theme) const
+	{
+		float Y = Position.Y - ScrollOffset;
+		FString LastGroup;
+		const float ClipTop = Position.Y;
+		const float ClipBottom = Position.Y + Size.Y;
+
+		for (const FPBRMagicDynamicMaterialParameter& Parameter : Parameters)
+		{
+			if (Parameter.Group != LastGroup)
+			{
+				if (Y + 28.0f >= ClipTop && Y <= ClipBottom)
+				{
+					DrawBox(OutDrawElements, Geometry, Layer, FVector2D(Position.X, Y), FVector2D(Size.X, 28.0f), Theme.DropZone);
+					DrawTextInRect(OutDrawElements, Geometry, Layer + 1, FVector2D(Position.X + 12.0f, Y + 7.0f), Size.X - 24.0f, Parameter.Group, FAppStyle::GetFontStyle("SmallFontBold"), Theme.Selection);
+				}
+				Y += 34.0f;
+				LastGroup = Parameter.Group;
+			}
+
+			const float RowHeight = GetRowHeight(Parameter);
+			if (Y + RowHeight >= ClipTop && Y <= ClipBottom)
+			{
+				const FVector2D RowPos(Position.X, Y);
+				const FVector2D RowSize(Size.X, RowHeight);
+				DrawBox(OutDrawElements, Geometry, Layer, RowPos, RowSize, Theme.PanelRaised);
+				DrawBox(OutDrawElements, Geometry, Layer + 1, RowPos, FVector2D(3.0f, RowSize.Y), Theme.PrimarySoft);
+				switch (Parameter.Kind)
+				{
+				case EPBRMagicDynamicMaterialParameterKind::Color:
+					DrawVectorParameterRow(OutDrawElements, Geometry, Layer + 2, RowPos, RowSize, Parameter, Theme);
+					break;
+				case EPBRMagicDynamicMaterialParameterKind::Switch:
+					DrawSwitchParameterRow(OutDrawElements, Geometry, Layer + 2, RowPos, RowSize, Parameter, Theme);
+					break;
+				case EPBRMagicDynamicMaterialParameterKind::Texture:
+					DrawTextureParameterRow(OutDrawElements, Geometry, Layer + 2, RowPos, RowSize, Parameter, Theme);
+					break;
+				case EPBRMagicDynamicMaterialParameterKind::Scalar:
+				default:
+					DrawScalarParameterRow(OutDrawElements, Geometry, Layer + 2, RowPos, RowSize, Parameter, Theme);
+					break;
+				}
+			}
+			Y += RowHeight + 6.0f;
+		}
+	}
+
+	void DrawScalarParameterRow(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicDynamicMaterialParameter& Parameter, const FPBRMagicTheme& Theme) const
+	{
+		const TOptional<float> OptionalValue = OwnerWindow->GetEditableMaterialScalar(Parameter.ParameterName, Parameter.ScalarValue);
+		const float Value = OptionalValue.IsSet() ? OptionalValue.GetValue() : Parameter.ScalarValue;
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(14.0f, 8.0f), 250.0f, Parameter.ParameterName.ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(270.0f, 8.0f), 92.0f, FormatMagicEditableMaterialScalar(Value, Parameter.ScalarStep), FAppStyle::GetFontStyle("SmallFont"), Theme.Selection);
+
+		const FVector2D TrackPos(Position.X + 366.0f, Position.Y + 16.0f);
+		const FVector2D TrackSize(FMath::Max(80.0f, Size.X - 510.0f), 8.0f);
+		const float Alpha = FMath::Clamp((Value - Parameter.ScalarMin) / FMath::Max(KINDA_SMALL_NUMBER, Parameter.ScalarMax - Parameter.ScalarMin), 0.0f, 1.0f);
+		DrawBox(OutDrawElements, Geometry, Layer, TrackPos, TrackSize, Theme.Background);
+		DrawBox(OutDrawElements, Geometry, Layer + 1, TrackPos, FVector2D(TrackSize.X * Alpha, TrackSize.Y), Theme.Selection);
+		DrawBox(OutDrawElements, Geometry, Layer + 2, TrackPos + FVector2D(TrackSize.X * Alpha - 3.0f, -4.0f), FVector2D(6.0f, 16.0f), Theme.Primary);
+
+		FPBRMagicMaterialPopupHit TrackHit;
+		TrackHit.ParameterName = Parameter.ParameterName;
+		TrackHit.ScalarMin = Parameter.ScalarMin;
+		TrackHit.ScalarMax = Parameter.ScalarMax;
+		TrackHit.ScalarDefault = Parameter.ScalarValue;
+		TrackHit.ScalarStep = Parameter.ScalarStep;
+		AddHit(TrackPos - FVector2D(0.0f, 8.0f), TrackSize + FVector2D(0.0f, 16.0f), EPBRMagicMaterialPopupAction::ScalarTrack, &TrackHit);
+		DrawButton(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 112.0f, 9.0f), FVector2D(42.0f, 28.0f), TEXT("-"), EPBRMagicMaterialPopupAction::ScalarDown, Theme, &TrackHit);
+		DrawButton(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 58.0f, 9.0f), FVector2D(42.0f, 28.0f), TEXT("+"), EPBRMagicMaterialPopupAction::ScalarUp, Theme, &TrackHit);
+	}
+
+	void DrawSwitchParameterRow(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicDynamicMaterialParameter& Parameter, const FPBRMagicTheme& Theme) const
+	{
+		const bool bValue = OwnerWindow->GetEditableMaterialSwitch(Parameter.ParameterName, Parameter.bSwitchValue);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(14.0f, 12.0f), Size.X - 130.0f, Parameter.ParameterName.ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		const FVector2D TogglePos(Position.X + Size.X - 106.0f, Position.Y + 8.0f);
+		const FVector2D ToggleSize(90.0f, 28.0f);
+		DrawBox(OutDrawElements, Geometry, Layer, TogglePos, ToggleSize, bValue ? Theme.DropZone : Theme.Background);
+		DrawTextInRect(OutDrawElements, Geometry, Layer + 1, TogglePos + FVector2D(10.0f, 7.0f), ToggleSize.X - 20.0f, bValue ? TEXT("ON") : TEXT("OFF"), FAppStyle::GetFontStyle("SmallFontBold"), bValue ? Theme.Selection : Theme.TextMuted);
+		FPBRMagicMaterialPopupHit Hit;
+		Hit.ParameterName = Parameter.ParameterName;
+		Hit.bSwitchDefault = Parameter.bSwitchValue;
+		AddHit(TogglePos, ToggleSize, EPBRMagicMaterialPopupAction::SwitchToggle, &Hit);
+	}
+
+	void DrawVectorParameterRow(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicDynamicMaterialParameter& Parameter, const FPBRMagicTheme& Theme) const
+	{
+		FLinearColor Value = Parameter.ColorValue;
+		if (OwnerWindow)
+		{
+			const TOptional<float> R = OwnerWindow->GetEditableMaterialVectorChannel(Parameter.ParameterName, 0, Parameter.ColorValue);
+			const TOptional<float> G = OwnerWindow->GetEditableMaterialVectorChannel(Parameter.ParameterName, 1, Parameter.ColorValue);
+			const TOptional<float> B = OwnerWindow->GetEditableMaterialVectorChannel(Parameter.ParameterName, 2, Parameter.ColorValue);
+			const TOptional<float> A = OwnerWindow->GetEditableMaterialVectorChannel(Parameter.ParameterName, 3, Parameter.ColorValue);
+			Value.R = R.IsSet() ? R.GetValue() : Parameter.ColorValue.R;
+			Value.G = G.IsSet() ? G.GetValue() : Parameter.ColorValue.G;
+			Value.B = B.IsSet() ? B.GetValue() : Parameter.ColorValue.B;
+			Value.A = A.IsSet() ? A.GetValue() : Parameter.ColorValue.A;
+		}
+
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(14.0f, 8.0f), Size.X - 86.0f, Parameter.ParameterName.ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		DrawBox(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 62.0f, 8.0f), FVector2D(44.0f, 20.0f), FLinearColor(Value.R, Value.G, Value.B, 1.0f));
+
+		const TCHAR* Names[4] = { TEXT("R"), TEXT("G"), TEXT("B"), TEXT("A") };
+		const float Values[4] = { Value.R, Value.G, Value.B, Value.A };
+		const float TrackY = Position.Y + 40.0f;
+		const float TrackGap = 8.0f;
+		const float TrackW = FMath::Max(58.0f, (Size.X - 30.0f - TrackGap * 3.0f) / 4.0f);
+		for (int32 Channel = 0; Channel < 4; ++Channel)
+		{
+			const FVector2D TrackPos(Position.X + 14.0f + Channel * (TrackW + TrackGap), TrackY);
+			const float ChannelValue = FMath::Clamp(Values[Channel], 0.0f, 1.0f);
+			DrawText(OutDrawElements, Geometry, Layer, TrackPos, Names[Channel], FAppStyle::GetFontStyle("SmallFontBold"), Theme.TextMuted);
+			DrawBox(OutDrawElements, Geometry, Layer, TrackPos + FVector2D(18.0f, 4.0f), FVector2D(TrackW - 18.0f, 7.0f), Theme.Background);
+			DrawBox(OutDrawElements, Geometry, Layer + 1, TrackPos + FVector2D(18.0f, 4.0f), FVector2D((TrackW - 18.0f) * ChannelValue, 7.0f), Channel == 0 ? FLinearColor::Red : (Channel == 1 ? FLinearColor::Green : (Channel == 2 ? FLinearColor::Blue : Theme.Selection)));
+			DrawTextInRect(OutDrawElements, Geometry, Layer, TrackPos + FVector2D(18.0f, 15.0f), TrackW - 18.0f, FString::Printf(TEXT("%.2f"), Values[Channel]), FAppStyle::GetFontStyle("TinyText"), Theme.TextMuted);
+
+			FPBRMagicMaterialPopupHit Hit;
+			Hit.ParameterName = Parameter.ParameterName;
+			Hit.VectorChannel = Channel;
+			Hit.VectorDefault = Parameter.ColorValue;
+			AddHit(TrackPos + FVector2D(18.0f, -4.0f), FVector2D(TrackW - 18.0f, 22.0f), EPBRMagicMaterialPopupAction::VectorTrack, &Hit);
+		}
+	}
+
+	void DrawTextureParameterRow(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicDynamicMaterialParameter& Parameter, const FPBRMagicTheme& Theme) const
+	{
+		UTexture* Texture = OwnerWindow->GetEditableMaterialTexture(Parameter.ParameterName);
+		const FString TextureName = Texture ? Texture->GetName() : TEXT("未指定");
+		const FString TexturePath = Texture ? Texture->GetPathName() : FString();
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(14.0f, 8.0f), Size.X - 236.0f, Parameter.ParameterName.ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(14.0f, 31.0f), Size.X - 236.0f, TexturePath.IsEmpty() ? TextureName : TexturePath, FAppStyle::GetFontStyle("SmallFont"), Texture ? Theme.Selection : Theme.TextMuted);
+
+		FPBRMagicMaterialPopupHit Hit;
+		Hit.ParameterName = Parameter.ParameterName;
+		DrawButton(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 216.0f, 16.0f), FVector2D(118.0f, 30.0f), TEXT("用选中贴图"), EPBRMagicMaterialPopupAction::TextureUseSelected, Theme, &Hit);
+		DrawButton(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 88.0f, 16.0f), FVector2D(70.0f, 30.0f), TEXT("清空"), EPBRMagicMaterialPopupAction::TextureClear, Theme, &Hit);
+	}
+
+	void DrawScrollBar(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicTheme& Theme) const
+	{
+		DrawBox(OutDrawElements, Geometry, Layer, Position, Size, Theme.Background);
+		if (MaxScrollOffset <= KINDA_SMALL_NUMBER)
+		{
+			DrawBox(OutDrawElements, Geometry, Layer + 1, Position, Size, Theme.Border);
+			return;
+		}
+
+		const float ThumbH = FMath::Clamp(Size.Y * (Size.Y / (Size.Y + MaxScrollOffset)), 32.0f, Size.Y);
+		const float ThumbY = Position.Y + (Size.Y - ThumbH) * (ScrollOffset / MaxScrollOffset);
+		DrawBox(OutDrawElements, Geometry, Layer + 1, FVector2D(Position.X, ThumbY), FVector2D(Size.X, ThumbH), Theme.Primary);
+	}
+
+	void HandleHit(const FPBRMagicMaterialPopupHit& Hit, const FVector2D& LocalPosition)
+	{
+		switch (Hit.Action)
+		{
+		case EPBRMagicMaterialPopupAction::Search:
+			bSearchActive = true;
+			break;
+		case EPBRMagicMaterialPopupAction::TypePrevious:
+			bSearchActive = false;
+			OwnerWindow->CycleEditableMaterialType(-1);
+			ScrollOffset = 0.0f;
+			break;
+		case EPBRMagicMaterialPopupAction::TypeNext:
+			bSearchActive = false;
+			OwnerWindow->CycleEditableMaterialType(1);
+			ScrollOffset = 0.0f;
+			break;
+		case EPBRMagicMaterialPopupAction::ScalarDown:
+			bSearchActive = false;
+			OwnerWindow->StepEditableMaterialScalar(Hit.ParameterName, -Hit.ScalarStep, Hit.ScalarMin, Hit.ScalarMax, Hit.ScalarDefault);
+			break;
+		case EPBRMagicMaterialPopupAction::ScalarUp:
+			bSearchActive = false;
+			OwnerWindow->StepEditableMaterialScalar(Hit.ParameterName, Hit.ScalarStep, Hit.ScalarMin, Hit.ScalarMax, Hit.ScalarDefault);
+			break;
+		case EPBRMagicMaterialPopupAction::ScalarTrack:
+			bSearchActive = false;
+			ApplyScalarTrack(Hit, LocalPosition.X);
+			break;
+		case EPBRMagicMaterialPopupAction::VectorTrack:
+			bSearchActive = false;
+			ApplyVectorTrack(Hit, LocalPosition.X);
+			break;
+		case EPBRMagicMaterialPopupAction::SwitchToggle:
+			bSearchActive = false;
+			OwnerWindow->CommitEditableMaterialSwitch(Hit.ParameterName, !OwnerWindow->GetEditableMaterialSwitch(Hit.ParameterName, Hit.bSwitchDefault));
+			break;
+		case EPBRMagicMaterialPopupAction::TextureUseSelected:
+			bSearchActive = false;
+			UseSelectedTexture(Hit.ParameterName);
+			break;
+		case EPBRMagicMaterialPopupAction::TextureClear:
+			bSearchActive = false;
+			OwnerWindow->CommitEditableMaterialTexture(Hit.ParameterName, nullptr);
+			break;
+		case EPBRMagicMaterialPopupAction::None:
+		default:
+			break;
+		}
+	}
+
+	void ApplyScalarTrack(const FPBRMagicMaterialPopupHit& Hit, float LocalX)
+	{
+		const float Alpha = FMath::Clamp((LocalX - Hit.Rect.Left) / FMath::Max(1.0f, Hit.Rect.Right - Hit.Rect.Left), 0.0f, 1.0f);
+		const float Value = FMath::Lerp(Hit.ScalarMin, Hit.ScalarMax, Alpha);
+		OwnerWindow->CommitEditableMaterialScalar(Hit.ParameterName, Value, Hit.ScalarMin, Hit.ScalarMax);
+	}
+
+	void ApplyVectorTrack(const FPBRMagicMaterialPopupHit& Hit, float LocalX)
+	{
+		const float Value = FMath::Clamp((LocalX - Hit.Rect.Left) / FMath::Max(1.0f, Hit.Rect.Right - Hit.Rect.Left), 0.0f, 1.0f);
+		OwnerWindow->CommitEditableMaterialVectorChannel(Hit.ParameterName, Hit.VectorChannel, Value, Hit.VectorDefault);
+	}
+
+	void UseSelectedTexture(const FName& ParameterName)
+	{
+		FContentBrowserModule& ContentBrowserModule = FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
+		TArray<FAssetData> SelectedAssets;
+		ContentBrowserModule.Get().GetSelectedAssets(SelectedAssets);
+		for (const FAssetData& AssetData : SelectedAssets)
+		{
+			if (UTexture* Texture = Cast<UTexture>(AssetData.GetAsset()))
+			{
+				OwnerWindow->CommitEditableMaterialTexture(ParameterName, Texture);
+				return;
+			}
+		}
+		OwnerWindow->StatusMessage = TEXT("请先在内容浏览器中选择一个贴图资产");
+	}
+
+	SPBRMagicOutlinerWindow* OwnerWindow = nullptr;
+	mutable TArray<FPBRMagicMaterialPopupHit> HitRegions;
+	mutable float ScrollOffset = 0.0f;
+	mutable float MaxScrollOffset = 0.0f;
+	mutable EPBRMagicMaterialPopupAction HoveredAction = EPBRMagicMaterialPopupAction::None;
+	mutable EPBRMagicMaterialPopupAction PressedAction = EPBRMagicMaterialPopupAction::None;
+	mutable FSlateRect HoveredRect;
+	mutable FSlateRect PressedRect;
+	FString SearchText;
+	bool bSearchActive = false;
+};
+
 SPBRMagicOutlinerWindow::~SPBRMagicOutlinerWindow()
 {
 	FEditorDelegates::PostUndoRedo.RemoveAll(this);
+	if (TSharedPtr<SWindow> Window = MaterialParameterWindow.Pin())
+	{
+		Window->RequestDestroyWindow();
+		MaterialParameterWindow.Reset();
+	}
 	if (MaterialThumbnailPool.IsValid())
 	{
 		MaterialThumbnailPool->OnThumbnailRendered().RemoveAll(this);
@@ -5358,7 +6000,38 @@ FReply SPBRMagicOutlinerWindow::OnEditSelectedMaterialSlot(TSharedPtr<FPBRMagicO
 	StatusMessage = Result.Message;
 	RebuildItems();
 	Invalidate(EInvalidateWidgetReason::LayoutAndVolatility);
+	OpenEditableMaterialParameterWindow();
 	return FReply::Handled();
+}
+
+void SPBRMagicOutlinerWindow::OpenEditableMaterialParameterWindow()
+{
+	if (!GetEditableMaterialInstance())
+	{
+		StatusMessage = TEXT("没有可弹出调参的材质实例");
+		return;
+	}
+
+	if (TSharedPtr<SWindow> ExistingWindow = MaterialParameterWindow.Pin())
+	{
+		ExistingWindow->BringToFront();
+		ExistingWindow->SetContent(SNew(SPBRMagicMaterialParameterPopupSurface).OwnerWindow(this));
+		return;
+	}
+
+	TSharedRef<SWindow> Window = SNew(SWindow)
+		.Title(PBRText(TEXT("MagicMaterialParameterPopupTitle"), TEXT("PBRStudio 材质参数调节"), TEXT("PBRStudio Material Parameters")))
+		.ClientSize(FVector2D(840.0f, 780.0f))
+		.SizingRule(ESizingRule::UserSized)
+		.SupportsMaximize(true)
+		.SupportsMinimize(false)
+		[
+			SNew(SPBRMagicMaterialParameterPopupSurface)
+			.OwnerWindow(this)
+		];
+
+	MaterialParameterWindow = Window;
+	FSlateApplication::Get().AddWindow(Window);
 }
 
 bool SPBRMagicOutlinerWindow::ResolveEditableMaterialSlot(UPrimitiveComponent*& OutComponent, int32& OutSlotIndex) const
@@ -5379,7 +6052,7 @@ UMaterialInstanceConstant* SPBRMagicOutlinerWindow::GetEditableMaterialInstance(
 
 	UMaterialInterface* Material = Component->GetMaterial(SlotIndex);
 	UMaterialInstanceConstant* Instance = Cast<UMaterialInstanceConstant>(Material);
-	return Instance && FPBRSceneMaterialReplacer::IsPBRStudioGeneratedMaterial(Instance) ? Instance : nullptr;
+	return Instance;
 }
 
 EPBRMaterialType SPBRMagicOutlinerWindow::GetEditableMaterialType() const
