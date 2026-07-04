@@ -197,6 +197,7 @@ private:
 	void FocusMaterialItemsFromSet(const TSet<TWeakObjectPtr<UMaterialInterface>>& Materials, bool bForceScroll);
 	TSharedPtr<FAssetThumbnail> GetOrCreateMaterialThumbnail(UMaterialInterface* Material, const FVector2D& Size);
 	TSharedPtr<FSlateDynamicImageBrush> GetOrCreateMaterialThumbnailBrush(UMaterialInterface* Material, const FVector2D& Size);
+	TSharedPtr<FSlateDynamicImageBrush> GetOrCreateTextureThumbnailBrush(UTexture* Texture, const FVector2D& Size);
 	UMaterialInterface* GetDraggedMaterial(const FDragDropEvent& DragDropEvent) const;
 	UStaticMesh* GetDraggedStaticMesh(const FDragDropEvent& DragDropEvent) const;
 	FReply OnMaterialItemDrop(const FGeometry& Geometry, const FDragDropEvent& DragDropEvent, TSharedPtr<FPBRMagicOutlinerItem> Item);
@@ -302,6 +303,7 @@ private:
 	TWeakPtr<class SWindow> MaterialParameterWindow;
 	TMap<FString, TSharedPtr<FAssetThumbnail>> MaterialThumbnailCache;
 	TMap<FString, TSharedPtr<FSlateDynamicImageBrush>> MaterialThumbnailBrushCache;
+	TMap<FString, TSharedPtr<FSlateDynamicImageBrush>> TextureThumbnailBrushCache;
 	TWeakObjectPtr<AActor> DetailsActor;
 	EPBRMagicOutlinerCategory ActiveCategory = EPBRMagicOutlinerCategory::All;
 	EPBRMagicOutlinerMode ActiveMode = EPBRMagicOutlinerMode::Type;

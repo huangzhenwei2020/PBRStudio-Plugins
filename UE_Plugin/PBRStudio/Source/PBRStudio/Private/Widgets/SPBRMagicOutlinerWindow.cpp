@@ -3142,13 +3142,194 @@ private:
 		DrawText(OutDrawElements, Geometry, Layer, Position, EllipsizeText(Text, SafeWidth, Font), Font, Color);
 	}
 
+	static FLinearColor WithAlpha(FLinearColor Color, float Alpha)
+	{
+		Color.A = Alpha;
+		return Color;
+	}
+
+	static FLinearColor MixColor(const FLinearColor& A, const FLinearColor& B, float Alpha)
+	{
+		return FLinearColor(
+			FMath::Lerp(A.R, B.R, Alpha),
+			FMath::Lerp(A.G, B.G, Alpha),
+			FMath::Lerp(A.B, B.B, Alpha),
+			FMath::Lerp(A.A, B.A, Alpha));
+	}
+
+	static FString GetParameterDisplayName(const FName& ParameterName)
+	{
+		const FString RawName = ParameterName.ToString();
+		for (const FPBRMagicEditableMaterialParameter& Parameter : GetMagicEditableMaterialParameters())
+		{
+			if (Parameter.ParameterName == ParameterName)
+			{
+				return Parameter.GetLabel().ToString();
+			}
+		}
+
+		struct FKnownParameterName
+		{
+			const TCHAR* Raw;
+			const TCHAR* Display;
+		};
+
+		static const FKnownParameterName KnownNames[] =
+		{
+			{ TEXT("BaseColorTexture"), TEXT("基础色贴图") },
+			{ TEXT("BaseColorMap"), TEXT("基础色贴图") },
+			{ TEXT("BaseColorTint"), TEXT("基础色调") },
+			{ TEXT("BaseColorIntensity"), TEXT("基础色强度") },
+			{ TEXT("UseBaseColorTexture"), TEXT("使用基础色贴图") },
+			{ TEXT("NormalTexture"), TEXT("法线贴图") },
+			{ TEXT("NormalMap"), TEXT("法线贴图") },
+			{ TEXT("NormalStrength"), TEXT("法线强度") },
+			{ TEXT("UseNormalTexture"), TEXT("使用法线贴图") },
+			{ TEXT("RoughnessTexture"), TEXT("粗糙度贴图") },
+			{ TEXT("RoughnessMap"), TEXT("粗糙度贴图") },
+			{ TEXT("RoughnessIntensity"), TEXT("粗糙度强度") },
+			{ TEXT("RoughnessValue"), TEXT("粗糙度数值") },
+			{ TEXT("UseRoughnessTexture"), TEXT("使用粗糙度贴图") },
+			{ TEXT("SpecularTexture"), TEXT("高光贴图") },
+			{ TEXT("SpecularIntensity"), TEXT("高光强度") },
+			{ TEXT("UseSpecularTexture"), TEXT("使用高光贴图") },
+			{ TEXT("AOTexture"), TEXT("环境遮蔽贴图") },
+			{ TEXT("OcclusionTexture"), TEXT("环境遮蔽贴图") },
+			{ TEXT("UseAOTexture"), TEXT("使用环境遮蔽贴图") },
+			{ TEXT("MetallicTexture"), TEXT("金属度贴图") },
+			{ TEXT("MetallicValue"), TEXT("金属度数值") },
+			{ TEXT("UseMetallicTexture"), TEXT("使用金属度贴图") },
+			{ TEXT("OpacityTexture"), TEXT("透明贴图") },
+			{ TEXT("OpacityValue"), TEXT("透明度") },
+			{ TEXT("UseOpacityTexture"), TEXT("使用透明贴图") },
+			{ TEXT("EmissiveTexture"), TEXT("自发光贴图") },
+			{ TEXT("EmissiveIntensity"), TEXT("自发光强度") },
+			{ TEXT("UseEmissiveTexture"), TEXT("使用自发光贴图") },
+			{ TEXT("HeightTexture"), TEXT("高度贴图") },
+			{ TEXT("HeightStrength"), TEXT("高度强度") },
+			{ TEXT("UseHeightTexture"), TEXT("使用高度贴图") },
+			{ TEXT("IOR"), TEXT("折射率") },
+			{ TEXT("Refraction"), TEXT("折射强度") },
+			{ TEXT("GlassTint"), TEXT("玻璃颜色") },
+			{ TEXT("GlassDirtTexture"), TEXT("玻璃污渍贴图") },
+			{ TEXT("GlassDistortionTexture"), TEXT("玻璃扭曲贴图") },
+			{ TEXT("GlassFrostedTexture"), TEXT("玻璃磨砂贴图") },
+			{ TEXT("WaterRippleTexture"), TEXT("水纹贴图") }
+		};
+
+		for (const FKnownParameterName& KnownName : KnownNames)
+		{
+			if (RawName.Equals(KnownName.Raw, ESearchCase::IgnoreCase))
+			{
+				return KnownName.Display;
+			}
+		}
+
+		FString DisplayName;
+		DisplayName.Reserve(RawName.Len() + 8);
+		for (int32 Index = 0; Index < RawName.Len(); ++Index)
+		{
+			const TCHAR Character = RawName[Index];
+			if (Character == TCHAR('_') || Character == TCHAR('-'))
+			{
+				DisplayName.AppendChar(TEXT(' '));
+				continue;
+			}
+			if (Index > 0 && FChar::IsUpper(Character))
+			{
+				const TCHAR Previous = RawName[Index - 1];
+				if (FChar::IsLower(Previous) || FChar::IsDigit(Previous))
+				{
+					DisplayName.AppendChar(TEXT(' '));
+				}
+			}
+			DisplayName.AppendChar(Character);
+		}
+		DisplayName.TrimStartAndEndInline();
+		return DisplayName.IsEmpty() ? RawName : DisplayName;
+	}
+
+	static FString GetParameterKindLabel(const FPBRMagicDynamicMaterialParameter& Parameter)
+	{
+		switch (Parameter.Kind)
+		{
+		case EPBRMagicDynamicMaterialParameterKind::Color:
+			return TEXT("颜色");
+		case EPBRMagicDynamicMaterialParameterKind::Texture:
+			return TEXT("贴图");
+		case EPBRMagicDynamicMaterialParameterKind::Switch:
+			return TEXT("开关");
+		case EPBRMagicDynamicMaterialParameterKind::Scalar:
+		default:
+			return TEXT("数值");
+		}
+	}
+
+	static FLinearColor GetChannelColor(int32 Channel, const FPBRMagicTheme& Theme)
+	{
+		switch (Channel)
+		{
+		case 0:
+			return FLinearColor(0.98f, 0.05f, 0.04f, 1.0f);
+		case 1:
+			return FLinearColor(0.05f, 0.86f, 0.12f, 1.0f);
+		case 2:
+			return FLinearColor(0.08f, 0.20f, 1.0f, 1.0f);
+		case 3:
+		default:
+			return Theme.Selection;
+		}
+	}
+
+	void DrawSurface(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FLinearColor& Fill, const FLinearColor& Border) const
+	{
+		DrawBox(OutDrawElements, Geometry, Layer, Position, Size, Border);
+		if (Size.X > 2.0f && Size.Y > 2.0f)
+		{
+			DrawBox(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(1.0f, 1.0f), Size - FVector2D(2.0f, 2.0f), Fill);
+		}
+	}
+
+	void DrawTrack(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, float Alpha, const FLinearColor& FillColor, const FPBRMagicTheme& Theme) const
+	{
+		const float ClampedAlpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
+		DrawBox(OutDrawElements, Geometry, Layer, Position, Size, Theme.Background);
+		DrawBox(OutDrawElements, Geometry, Layer + 1, Position, FVector2D(Size.X * ClampedAlpha, Size.Y), FillColor);
+		DrawBox(OutDrawElements, Geometry, Layer + 2, Position + FVector2D(Size.X * ClampedAlpha - 3.0f, -5.0f), FVector2D(6.0f, Size.Y + 10.0f), Theme.Primary);
+	}
+
+	void DrawTextureThumbnail(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, UTexture* Texture, const FPBRMagicTheme& Theme) const
+	{
+		DrawSurface(OutDrawElements, Geometry, Layer, Position, Size, Theme.Background, Theme.Border);
+		const FVector2D InnerPos = Position + FVector2D(3.0f, 3.0f);
+		const FVector2D InnerSize = Size - FVector2D(6.0f, 6.0f);
+		TSharedPtr<FSlateDynamicImageBrush> Brush = OwnerWindow && Texture
+			? OwnerWindow->GetOrCreateTextureThumbnailBrush(Texture, InnerSize)
+			: nullptr;
+		if (Brush.IsValid())
+		{
+			FSlateDrawElement::MakeBox(
+				OutDrawElements,
+				Layer + 2,
+				Geometry.ToPaintGeometry(FVector2f(InnerSize.X, InnerSize.Y), FSlateLayoutTransform(FVector2f(InnerPos.X, InnerPos.Y))),
+				Brush.Get(),
+				ESlateDrawEffect::None,
+				FLinearColor::White);
+			return;
+		}
+
+		DrawBox(OutDrawElements, Geometry, Layer + 2, InnerPos, InnerSize, Texture ? MixColor(Theme.PrimarySoft, Theme.PanelRaised, 0.36f) : Theme.PanelRaised);
+		DrawTextInRect(OutDrawElements, Geometry, Layer + 3, InnerPos + FVector2D(4.0f, InnerSize.Y * 0.5f - 7.0f), InnerSize.X - 8.0f, Texture ? TEXT("贴图") : TEXT("无图"), FAppStyle::GetFontStyle("SmallFontBold"), Texture ? Theme.Selection : Theme.TextMuted);
+	}
+
 	void DrawButton(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FString& Label, EPBRMagicMaterialPopupAction Action, const FPBRMagicTheme& Theme, const FPBRMagicMaterialPopupHit* Payload = nullptr) const
 	{
 		const FSlateRect Rect(Position.X, Position.Y, Position.X + Size.X, Position.Y + Size.Y);
 		const bool bHovered = HoveredAction == Action && RectMatches(HoveredRect, Rect);
 		const bool bPressed = PressedAction == Action && RectMatches(PressedRect, Rect);
-		DrawBox(OutDrawElements, Geometry, Layer, Position, Size, bPressed ? Theme.DropZone : (bHovered ? Theme.PrimarySoft : Theme.PanelRaised));
-		DrawTextInRect(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(8.0f, 7.0f), Size.X - 16.0f, Label, FAppStyle::GetFontStyle("SmallFontBold"), bPressed ? Theme.Selection : Theme.Text);
+		const FLinearColor Fill = bPressed ? MixColor(Theme.DropZone, Theme.Background, 0.18f) : (bHovered ? MixColor(Theme.PanelRaised, Theme.Primary, 0.14f) : Theme.PanelRaised);
+		DrawSurface(OutDrawElements, Geometry, Layer, Position, Size, Fill, bHovered || bPressed ? Theme.PrimarySoft : Theme.Border);
+		DrawTextInRect(OutDrawElements, Geometry, Layer + 2, Position + FVector2D(8.0f, 7.0f), Size.X - 16.0f, Label, FAppStyle::GetFontStyle("SmallFontBold"), bPressed ? Theme.Selection : Theme.Text);
 		FPBRMagicMaterialPopupHit Hit = Payload ? *Payload : FPBRMagicMaterialPopupHit();
 		Hit.Rect = Rect;
 		Hit.Action = Action;
@@ -3168,14 +3349,14 @@ private:
 		switch (Parameter.Kind)
 		{
 		case EPBRMagicDynamicMaterialParameterKind::Color:
-			return 74.0f;
+			return 104.0f;
 		case EPBRMagicDynamicMaterialParameterKind::Texture:
-			return 62.0f;
+			return 92.0f;
 		case EPBRMagicDynamicMaterialParameterKind::Switch:
-			return 44.0f;
+			return 52.0f;
 		case EPBRMagicDynamicMaterialParameterKind::Scalar:
 		default:
-			return 50.0f;
+			return 58.0f;
 		}
 	}
 
@@ -3187,10 +3368,10 @@ private:
 		{
 			if (Parameter.Group != LastGroup)
 			{
-				Height += 34.0f;
+				Height += 38.0f;
 				LastGroup = Parameter.Group;
 			}
-			Height += GetRowHeight(Parameter) + 6.0f;
+			Height += GetRowHeight(Parameter) + 8.0f;
 		}
 		return Height;
 	}
@@ -3205,7 +3386,7 @@ private:
 		const FString Needle = SearchText.ToLower();
 		Parameters.RemoveAll([this, &Needle](const FPBRMagicDynamicMaterialParameter& Parameter)
 		{
-			FString Text = Parameter.ParameterName.ToString() + TEXT(" ") + Parameter.Group;
+			FString Text = Parameter.ParameterName.ToString() + TEXT(" ") + GetParameterDisplayName(Parameter.ParameterName) + TEXT(" ") + Parameter.Group + TEXT(" ") + GetParameterKindLabel(Parameter);
 			if (Parameter.Kind == EPBRMagicDynamicMaterialParameterKind::Texture)
 			{
 				if (UTexture* Texture = OwnerWindow->GetEditableMaterialTexture(Parameter.ParameterName))
@@ -3228,12 +3409,15 @@ private:
 		{
 			if (Parameter.Group != LastGroup)
 			{
-				if (Y + 28.0f >= ClipTop && Y <= ClipBottom)
+				if (Y + 30.0f >= ClipTop && Y <= ClipBottom)
 				{
-					DrawBox(OutDrawElements, Geometry, Layer, FVector2D(Position.X, Y), FVector2D(Size.X, 28.0f), Theme.DropZone);
-					DrawTextInRect(OutDrawElements, Geometry, Layer + 1, FVector2D(Position.X + 12.0f, Y + 7.0f), Size.X - 24.0f, Parameter.Group, FAppStyle::GetFontStyle("SmallFontBold"), Theme.Selection);
+					const FVector2D GroupPos(Position.X, Y);
+					const FVector2D GroupSize(Size.X, 30.0f);
+					DrawSurface(OutDrawElements, Geometry, Layer, GroupPos, GroupSize, MixColor(Theme.DropZone, Theme.PanelRaised, 0.18f), Theme.Border);
+					DrawBox(OutDrawElements, Geometry, Layer + 2, GroupPos + FVector2D(0.0f, 0.0f), FVector2D(4.0f, GroupSize.Y), Theme.Primary);
+					DrawTextInRect(OutDrawElements, Geometry, Layer + 3, GroupPos + FVector2D(14.0f, 7.0f), Size.X - 28.0f, Parameter.Group, FAppStyle::GetFontStyle("SmallFontBold"), Theme.Selection);
 				}
-				Y += 34.0f;
+				Y += 38.0f;
 				LastGroup = Parameter.Group;
 			}
 
@@ -3242,8 +3426,11 @@ private:
 			{
 				const FVector2D RowPos(Position.X, Y);
 				const FVector2D RowSize(Size.X, RowHeight);
-				DrawBox(OutDrawElements, Geometry, Layer, RowPos, RowSize, Theme.PanelRaised);
-				DrawBox(OutDrawElements, Geometry, Layer + 1, RowPos, FVector2D(3.0f, RowSize.Y), Theme.PrimarySoft);
+				const FLinearColor RowFill = Parameter.Kind == EPBRMagicDynamicMaterialParameterKind::Texture
+					? MixColor(Theme.PanelRaised, Theme.PrimarySoft, 0.08f)
+					: Theme.PanelRaised;
+				DrawSurface(OutDrawElements, Geometry, Layer, RowPos, RowSize, RowFill, Theme.Border);
+				DrawBox(OutDrawElements, Geometry, Layer + 2, RowPos, FVector2D(4.0f, RowSize.Y), Parameter.Kind == EPBRMagicDynamicMaterialParameterKind::Texture ? Theme.Primary : Theme.PrimarySoft);
 				switch (Parameter.Kind)
 				{
 				case EPBRMagicDynamicMaterialParameterKind::Color:
@@ -3261,7 +3448,7 @@ private:
 					break;
 				}
 			}
-			Y += RowHeight + 6.0f;
+			Y += RowHeight + 8.0f;
 		}
 	}
 
@@ -3269,15 +3456,17 @@ private:
 	{
 		const TOptional<float> OptionalValue = OwnerWindow->GetEditableMaterialScalar(Parameter.ParameterName, Parameter.ScalarValue);
 		const float Value = OptionalValue.IsSet() ? OptionalValue.GetValue() : Parameter.ScalarValue;
-		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(14.0f, 8.0f), 250.0f, Parameter.ParameterName.ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
-		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(270.0f, 8.0f), 92.0f, FormatMagicEditableMaterialScalar(Value, Parameter.ScalarStep), FAppStyle::GetFontStyle("SmallFont"), Theme.Selection);
+		const float LabelW = FMath::Clamp(Size.X * 0.28f, 150.0f, 250.0f);
+		const float ValueW = 82.0f;
+		const FVector2D TextPos(Position.X + 18.0f, Position.Y + 10.0f);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, TextPos, LabelW, GetParameterDisplayName(Parameter.ParameterName), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, TextPos + FVector2D(0.0f, 21.0f), LabelW, FString::Printf(TEXT("%.2f - %.2f"), Parameter.ScalarMin, Parameter.ScalarMax), FAppStyle::GetFontStyle("TinyText"), Theme.TextMuted);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(22.0f + LabelW, 10.0f), ValueW, FormatMagicEditableMaterialScalar(Value, Parameter.ScalarStep), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Selection);
 
-		const FVector2D TrackPos(Position.X + 366.0f, Position.Y + 16.0f);
-		const FVector2D TrackSize(FMath::Max(80.0f, Size.X - 510.0f), 8.0f);
+		const FVector2D TrackPos(Position.X + 34.0f + LabelW + ValueW, Position.Y + 26.0f);
+		const FVector2D TrackSize(FMath::Max(90.0f, Size.X - (TrackPos.X - Position.X) - 138.0f), 9.0f);
 		const float Alpha = FMath::Clamp((Value - Parameter.ScalarMin) / FMath::Max(KINDA_SMALL_NUMBER, Parameter.ScalarMax - Parameter.ScalarMin), 0.0f, 1.0f);
-		DrawBox(OutDrawElements, Geometry, Layer, TrackPos, TrackSize, Theme.Background);
-		DrawBox(OutDrawElements, Geometry, Layer + 1, TrackPos, FVector2D(TrackSize.X * Alpha, TrackSize.Y), Theme.Selection);
-		DrawBox(OutDrawElements, Geometry, Layer + 2, TrackPos + FVector2D(TrackSize.X * Alpha - 3.0f, -4.0f), FVector2D(6.0f, 16.0f), Theme.Primary);
+		DrawTrack(OutDrawElements, Geometry, Layer, TrackPos, TrackSize, Alpha, Theme.Selection, Theme);
 
 		FPBRMagicMaterialPopupHit TrackHit;
 		TrackHit.ParameterName = Parameter.ParameterName;
@@ -3286,18 +3475,19 @@ private:
 		TrackHit.ScalarDefault = Parameter.ScalarValue;
 		TrackHit.ScalarStep = Parameter.ScalarStep;
 		AddHit(TrackPos - FVector2D(0.0f, 8.0f), TrackSize + FVector2D(0.0f, 16.0f), EPBRMagicMaterialPopupAction::ScalarTrack, &TrackHit);
-		DrawButton(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 112.0f, 9.0f), FVector2D(42.0f, 28.0f), TEXT("-"), EPBRMagicMaterialPopupAction::ScalarDown, Theme, &TrackHit);
-		DrawButton(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 58.0f, 9.0f), FVector2D(42.0f, 28.0f), TEXT("+"), EPBRMagicMaterialPopupAction::ScalarUp, Theme, &TrackHit);
+		DrawButton(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 112.0f, 15.0f), FVector2D(42.0f, 28.0f), TEXT("-"), EPBRMagicMaterialPopupAction::ScalarDown, Theme, &TrackHit);
+		DrawButton(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 58.0f, 15.0f), FVector2D(42.0f, 28.0f), TEXT("+"), EPBRMagicMaterialPopupAction::ScalarUp, Theme, &TrackHit);
 	}
 
 	void DrawSwitchParameterRow(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicDynamicMaterialParameter& Parameter, const FPBRMagicTheme& Theme) const
 	{
 		const bool bValue = OwnerWindow->GetEditableMaterialSwitch(Parameter.ParameterName, Parameter.bSwitchValue);
-		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(14.0f, 12.0f), Size.X - 130.0f, Parameter.ParameterName.ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
-		const FVector2D TogglePos(Position.X + Size.X - 106.0f, Position.Y + 8.0f);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(18.0f, 10.0f), Size.X - 134.0f, GetParameterDisplayName(Parameter.ParameterName), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(18.0f, 31.0f), Size.X - 134.0f, TEXT("静态开关，切换后会更新当前材质实例"), FAppStyle::GetFontStyle("TinyText"), Theme.TextMuted);
+		const FVector2D TogglePos(Position.X + Size.X - 110.0f, Position.Y + 12.0f);
 		const FVector2D ToggleSize(90.0f, 28.0f);
-		DrawBox(OutDrawElements, Geometry, Layer, TogglePos, ToggleSize, bValue ? Theme.DropZone : Theme.Background);
-		DrawTextInRect(OutDrawElements, Geometry, Layer + 1, TogglePos + FVector2D(10.0f, 7.0f), ToggleSize.X - 20.0f, bValue ? TEXT("ON") : TEXT("OFF"), FAppStyle::GetFontStyle("SmallFontBold"), bValue ? Theme.Selection : Theme.TextMuted);
+		DrawSurface(OutDrawElements, Geometry, Layer, TogglePos, ToggleSize, bValue ? Theme.DropZone : Theme.Background, bValue ? Theme.Primary : Theme.Border);
+		DrawTextInRect(OutDrawElements, Geometry, Layer + 2, TogglePos + FVector2D(10.0f, 7.0f), ToggleSize.X - 20.0f, bValue ? TEXT("ON") : TEXT("OFF"), FAppStyle::GetFontStyle("SmallFontBold"), bValue ? Theme.Selection : Theme.TextMuted);
 		FPBRMagicMaterialPopupHit Hit;
 		Hit.ParameterName = Parameter.ParameterName;
 		Hit.bSwitchDefault = Parameter.bSwitchValue;
@@ -3319,28 +3509,31 @@ private:
 			Value.A = A.IsSet() ? A.GetValue() : Parameter.ColorValue.A;
 		}
 
-		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(14.0f, 8.0f), Size.X - 86.0f, Parameter.ParameterName.ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
-		DrawBox(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 62.0f, 8.0f), FVector2D(44.0f, 20.0f), FLinearColor(Value.R, Value.G, Value.B, 1.0f));
+		const FColor SRGB = Value.GetClamped().ToFColor(true);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(18.0f, 10.0f), Size.X - 178.0f, GetParameterDisplayName(Parameter.ParameterName), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(18.0f, 31.0f), 168.0f, FString::Printf(TEXT("RGB %d, %d, %d"), SRGB.R, SRGB.G, SRGB.B), FAppStyle::GetFontStyle("TinyText"), Theme.TextMuted);
+		DrawSurface(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 82.0f, 12.0f), FVector2D(58.0f, 30.0f), FLinearColor(Value.R, Value.G, Value.B, 1.0f), Theme.Border);
 
 		const TCHAR* Names[4] = { TEXT("R"), TEXT("G"), TEXT("B"), TEXT("A") };
 		const float Values[4] = { Value.R, Value.G, Value.B, Value.A };
-		const float TrackY = Position.Y + 40.0f;
-		const float TrackGap = 8.0f;
-		const float TrackW = FMath::Max(58.0f, (Size.X - 30.0f - TrackGap * 3.0f) / 4.0f);
+		const float TrackY = Position.Y + 58.0f;
+		const float TrackGap = 10.0f;
+		const float TrackW = FMath::Max(76.0f, (Size.X - 36.0f - TrackGap * 3.0f) / 4.0f);
 		for (int32 Channel = 0; Channel < 4; ++Channel)
 		{
-			const FVector2D TrackPos(Position.X + 14.0f + Channel * (TrackW + TrackGap), TrackY);
+			const FVector2D TrackPos(Position.X + 18.0f + Channel * (TrackW + TrackGap), TrackY);
 			const float ChannelValue = FMath::Clamp(Values[Channel], 0.0f, 1.0f);
 			DrawText(OutDrawElements, Geometry, Layer, TrackPos, Names[Channel], FAppStyle::GetFontStyle("SmallFontBold"), Theme.TextMuted);
-			DrawBox(OutDrawElements, Geometry, Layer, TrackPos + FVector2D(18.0f, 4.0f), FVector2D(TrackW - 18.0f, 7.0f), Theme.Background);
-			DrawBox(OutDrawElements, Geometry, Layer + 1, TrackPos + FVector2D(18.0f, 4.0f), FVector2D((TrackW - 18.0f) * ChannelValue, 7.0f), Channel == 0 ? FLinearColor::Red : (Channel == 1 ? FLinearColor::Green : (Channel == 2 ? FLinearColor::Blue : Theme.Selection)));
-			DrawTextInRect(OutDrawElements, Geometry, Layer, TrackPos + FVector2D(18.0f, 15.0f), TrackW - 18.0f, FString::Printf(TEXT("%.2f"), Values[Channel]), FAppStyle::GetFontStyle("TinyText"), Theme.TextMuted);
+			const FVector2D ChannelTrackPos = TrackPos + FVector2D(18.0f, 4.0f);
+			const FVector2D ChannelTrackSize(TrackW - 18.0f, 8.0f);
+			DrawTrack(OutDrawElements, Geometry, Layer, ChannelTrackPos, ChannelTrackSize, ChannelValue, GetChannelColor(Channel, Theme), Theme);
+			DrawTextInRect(OutDrawElements, Geometry, Layer, TrackPos + FVector2D(18.0f, 18.0f), TrackW - 18.0f, FString::Printf(TEXT("%.2f"), Values[Channel]), FAppStyle::GetFontStyle("TinyText"), Theme.TextMuted);
 
 			FPBRMagicMaterialPopupHit Hit;
 			Hit.ParameterName = Parameter.ParameterName;
 			Hit.VectorChannel = Channel;
 			Hit.VectorDefault = Parameter.ColorValue;
-			AddHit(TrackPos + FVector2D(18.0f, -4.0f), FVector2D(TrackW - 18.0f, 22.0f), EPBRMagicMaterialPopupAction::VectorTrack, &Hit);
+			AddHit(ChannelTrackPos - FVector2D(0.0f, 8.0f), ChannelTrackSize + FVector2D(0.0f, 16.0f), EPBRMagicMaterialPopupAction::VectorTrack, &Hit);
 		}
 	}
 
@@ -3349,13 +3542,19 @@ private:
 		UTexture* Texture = OwnerWindow->GetEditableMaterialTexture(Parameter.ParameterName);
 		const FString TextureName = Texture ? Texture->GetName() : TEXT("未指定");
 		const FString TexturePath = Texture ? Texture->GetPathName() : FString();
-		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(14.0f, 8.0f), Size.X - 236.0f, Parameter.ParameterName.ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
-		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(14.0f, 31.0f), Size.X - 236.0f, TexturePath.IsEmpty() ? TextureName : TexturePath, FAppStyle::GetFontStyle("SmallFont"), Texture ? Theme.Selection : Theme.TextMuted);
+		const FVector2D ThumbPos(Position.X + 18.0f, Position.Y + 17.0f);
+		DrawTextureThumbnail(OutDrawElements, Geometry, Layer, ThumbPos, FVector2D(58.0f, 58.0f), Texture, Theme);
+		const float TextX = Position.X + 88.0f;
+		const float ButtonAreaW = 212.0f;
+		const float TextW = FMath::Max(120.0f, Size.X - 106.0f - ButtonAreaW);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, FVector2D(TextX, Position.Y + 13.0f), TextW, GetParameterDisplayName(Parameter.ParameterName), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, FVector2D(TextX, Position.Y + 36.0f), TextW, TextureName, FAppStyle::GetFontStyle("SmallFont"), Texture ? Theme.Selection : Theme.TextMuted);
+		DrawTextInRect(OutDrawElements, Geometry, Layer, FVector2D(TextX, Position.Y + 58.0f), TextW, TexturePath.IsEmpty() ? TEXT("内容浏览器选择贴图后可一键替换") : TexturePath, FAppStyle::GetFontStyle("TinyText"), Theme.TextMuted);
 
 		FPBRMagicMaterialPopupHit Hit;
 		Hit.ParameterName = Parameter.ParameterName;
-		DrawButton(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 216.0f, 16.0f), FVector2D(118.0f, 30.0f), TEXT("用选中贴图"), EPBRMagicMaterialPopupAction::TextureUseSelected, Theme, &Hit);
-		DrawButton(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 88.0f, 16.0f), FVector2D(70.0f, 30.0f), TEXT("清空"), EPBRMagicMaterialPopupAction::TextureClear, Theme, &Hit);
+		DrawButton(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 212.0f, 24.0f), FVector2D(120.0f, 30.0f), TEXT("用选中贴图"), EPBRMagicMaterialPopupAction::TextureUseSelected, Theme, &Hit);
+		DrawButton(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 82.0f, 24.0f), FVector2D(64.0f, 30.0f), TEXT("清空"), EPBRMagicMaterialPopupAction::TextureClear, Theme, &Hit);
 	}
 
 	void DrawScrollBar(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicTheme& Theme) const
@@ -5614,6 +5813,44 @@ TSharedPtr<FSlateDynamicImageBrush> SPBRMagicOutlinerWindow::GetOrCreateMaterial
 	}
 
 	const FString ResourceName = FString::Printf(TEXT("PBRMagicMaterialThumb_%08x_%dx%d"), GetTypeHash(Material->GetPathName()), ImageWidth, ImageHeight);
+	Brush = FSlateDynamicImageBrush::CreateWithImageData(FName(*ResourceName), FVector2D(ImageWidth, ImageHeight), BrushImageData);
+	return Brush;
+}
+
+TSharedPtr<FSlateDynamicImageBrush> SPBRMagicOutlinerWindow::GetOrCreateTextureThumbnailBrush(UTexture* Texture, const FVector2D& Size)
+{
+	if (!Texture)
+	{
+		return nullptr;
+	}
+
+	const int32 Width = FMath::Max(16, FMath::RoundToInt(Size.X));
+	const int32 Height = FMath::Max(16, FMath::RoundToInt(Size.Y));
+	const FString CacheKey = Texture->GetPathName() + FString::Printf(TEXT("_texture_%dx%d"), Width, Height);
+	TSharedPtr<FSlateDynamicImageBrush>& Brush = TextureThumbnailBrushCache.FindOrAdd(CacheKey);
+	if (Brush.IsValid())
+	{
+		return Brush;
+	}
+
+	FObjectThumbnail ObjectThumbnail;
+	ThumbnailTools::RenderThumbnail(Texture, static_cast<uint32>(Width), static_cast<uint32>(Height), ThumbnailTools::EThumbnailTextureFlushMode::NeverFlush, nullptr, &ObjectThumbnail);
+
+	const TArray<uint8>& ImageData = ObjectThumbnail.GetUncompressedImageData();
+	const int32 ImageWidth = ObjectThumbnail.GetImageWidth();
+	const int32 ImageHeight = ObjectThumbnail.GetImageHeight();
+	if (ImageWidth <= 0 || ImageHeight <= 0 || ImageData.Num() < ImageWidth * ImageHeight * 4)
+	{
+		return nullptr;
+	}
+
+	TArray<uint8> BrushImageData = ImageData;
+	for (int32 PixelOffset = 3; PixelOffset < BrushImageData.Num(); PixelOffset += 4)
+	{
+		BrushImageData[PixelOffset] = 255;
+	}
+
+	const FString ResourceName = FString::Printf(TEXT("PBRMagicTextureThumb_%08x_%dx%d"), GetTypeHash(Texture->GetPathName()), ImageWidth, ImageHeight);
 	Brush = FSlateDynamicImageBrush::CreateWithImageData(FName(*ResourceName), FVector2D(ImageWidth, ImageHeight), BrushImageData);
 	return Brush;
 }
