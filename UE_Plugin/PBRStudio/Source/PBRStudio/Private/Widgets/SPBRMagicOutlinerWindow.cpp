@@ -939,6 +939,101 @@ static FName GetMagicTextureUsageSwitchName(const FName& TextureParameterName)
 	return FName(*FString::Printf(TEXT("Use%sTexture"), *Name));
 }
 
+static const TArray<FName>& GetMagicIndependentUVChannels()
+{
+	static const TArray<FName> Channels =
+	{
+		FName(TEXT("基础色")),
+		FName(TEXT("法线")),
+		FName(TEXT("粗糙度")),
+		FName(TEXT("高光")),
+		FName(TEXT("金属度")),
+		FName(TEXT("环境遮蔽")),
+		FName(TEXT("透明")),
+		FName(TEXT("高度")),
+		FName(TEXT("自发光")),
+		FName(TEXT("水纹"))
+	};
+	return Channels;
+}
+
+static bool GetMagicChannelUVInfo(const FName& ParameterName, FName& OutChannelName, bool& bOutSwitch, bool& bOutScalar)
+{
+	for (const FName& ChannelName : GetMagicIndependentUVChannels())
+	{
+		const FPBRChannelUVParameterNames ChannelUV = FPBRMaterialParameters::GetChannelUVNames(ChannelName);
+		if (ParameterName == ChannelUV.UseIndependentUV)
+		{
+			OutChannelName = ChannelName;
+			bOutSwitch = true;
+			bOutScalar = false;
+			return true;
+		}
+		if (ParameterName == ChannelUV.UTiling ||
+			ParameterName == ChannelUV.VTiling ||
+			ParameterName == ChannelUV.UOffset ||
+			ParameterName == ChannelUV.VOffset ||
+			ParameterName == ChannelUV.RotationDegrees)
+		{
+			OutChannelName = ChannelName;
+			bOutSwitch = false;
+			bOutScalar = true;
+			return true;
+		}
+	}
+
+	OutChannelName = NAME_None;
+	bOutSwitch = false;
+	bOutScalar = false;
+	return false;
+}
+
+static FName InferMagicChannelFromMaterialParameter(const FName& ParameterName)
+{
+	const FString Name = ParameterName.ToString();
+	if (Name.Contains(TEXT("BaseColor"), ESearchCase::IgnoreCase) || Name.Contains(TEXT("基础色")) || Name.Contains(TEXT("基础颜色")))
+	{
+		return FName(TEXT("基础色"));
+	}
+	if (Name.Contains(TEXT("Normal"), ESearchCase::IgnoreCase) || Name.Contains(TEXT("法线")))
+	{
+		return FName(TEXT("法线"));
+	}
+	if (Name.Contains(TEXT("Roughness"), ESearchCase::IgnoreCase) || Name.Contains(TEXT("粗糙度")))
+	{
+		return FName(TEXT("粗糙度"));
+	}
+	if (Name.Contains(TEXT("Specular"), ESearchCase::IgnoreCase) || Name.Contains(TEXT("高光")))
+	{
+		return FName(TEXT("高光"));
+	}
+	if (Name.Contains(TEXT("Metallic"), ESearchCase::IgnoreCase) || Name.Contains(TEXT("金属度")))
+	{
+		return FName(TEXT("金属度"));
+	}
+	if (Name.Contains(TEXT("AO"), ESearchCase::CaseSensitive) || Name.Contains(TEXT("Occlusion"), ESearchCase::IgnoreCase) || Name.Contains(TEXT("环境遮蔽")))
+	{
+		return FName(TEXT("环境遮蔽"));
+	}
+	if (Name.Contains(TEXT("Opacity"), ESearchCase::IgnoreCase) || Name.Contains(TEXT("透明")))
+	{
+		return FName(TEXT("透明"));
+	}
+	if (Name.Contains(TEXT("Height"), ESearchCase::IgnoreCase) || Name.Contains(TEXT("高度")))
+	{
+		return FName(TEXT("高度"));
+	}
+	if (Name.Contains(TEXT("Emissive"), ESearchCase::IgnoreCase) || Name.Contains(TEXT("自发光")))
+	{
+		return FName(TEXT("自发光"));
+	}
+	if (Name.Contains(TEXT("WaterRipple"), ESearchCase::IgnoreCase) || Name.Contains(TEXT("水纹")))
+	{
+		return FName(TEXT("水纹"));
+	}
+	return NAME_None;
+}
+
 class SPBRMagicOutlinerRow : public STableRow<TSharedPtr<FPBRMagicOutlinerItem>>
 {
 public:
@@ -5202,6 +5297,37 @@ TArray<FPBRMagicDynamicMaterialParameter> SPBRMagicOutlinerWindow::CollectEditab
 		AddMagicDynamicParameter(Parameters, MoveTemp(Parameter));
 	}
 
+	TMap<FName, FString> ChannelGroups;
+	for (const FPBRMagicDynamicMaterialParameter& Parameter : Parameters)
+	{
+		FName ChannelName = InferMagicChannelFromMaterialParameter(Parameter.ParameterName);
+		if (!ChannelName.IsNone())
+		{
+			FName UVChannelName;
+			bool bIsUVSwitch = false;
+			bool bIsUVScalar = false;
+			if (!GetMagicChannelUVInfo(Parameter.ParameterName, UVChannelName, bIsUVSwitch, bIsUVScalar))
+			{
+				ChannelGroups.FindOrAdd(ChannelName) = Parameter.Group;
+			}
+		}
+	}
+
+	for (FPBRMagicDynamicMaterialParameter& Parameter : Parameters)
+	{
+		FName UVChannelName;
+		bool bIsUVSwitch = false;
+		bool bIsUVScalar = false;
+		if (GetMagicChannelUVInfo(Parameter.ParameterName, UVChannelName, bIsUVSwitch, bIsUVScalar))
+		{
+			if (const FString* GroupName = ChannelGroups.Find(UVChannelName))
+			{
+				Parameter.Group = *GroupName;
+			}
+			Parameter.SortPriority += bIsUVSwitch ? 900 : 910;
+		}
+	}
+
 	Parameters.Sort([](const FPBRMagicDynamicMaterialParameter& A, const FPBRMagicDynamicMaterialParameter& B)
 	{
 		if (A.Group != B.Group)
@@ -5227,6 +5353,18 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildDynamicMaterialParameterGroup(
 	TSharedRef<SVerticalBox> Body = SNew(SVerticalBox);
 	for (const FPBRMagicDynamicMaterialParameter& Parameter : Parameters)
 	{
+		FName UVChannelName;
+		bool bIsUVSwitch = false;
+		bool bIsUVScalar = false;
+		if (GetMagicChannelUVInfo(Parameter.ParameterName, UVChannelName, bIsUVSwitch, bIsUVScalar) && bIsUVScalar)
+		{
+			const FPBRChannelUVParameterNames ChannelUV = FPBRMaterialParameters::GetChannelUVNames(UVChannelName);
+			if (!GetEditableMaterialSwitch(ChannelUV.UseIndependentUV, false))
+			{
+				continue;
+			}
+		}
+
 		Body->AddSlot()
 		.AutoHeight()
 		.Padding(0, 0, 0, 5)
