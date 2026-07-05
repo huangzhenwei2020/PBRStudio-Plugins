@@ -273,6 +273,150 @@ static bool PBRMagicTextHasAny(const FString& Text, std::initializer_list<const 
 	return false;
 }
 
+static FName PBRMagicGetAITextureUsageSwitchName(const FName& TextureParameterName)
+{
+	if (TextureParameterName == FPBRMaterialParameters::BaseColorTexture) { return FPBRMaterialParameters::UseBaseColorTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::NormalTexture) { return FPBRMaterialParameters::UseNormalTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::RoughnessTexture) { return FPBRMaterialParameters::UseRoughnessTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::SpecularTexture) { return FPBRMaterialParameters::UseSpecularTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::MetallicTexture) { return FPBRMaterialParameters::UseMetallicTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::AOTexture) { return FPBRMaterialParameters::UseAOTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::OpacityTexture) { return FPBRMaterialParameters::UseOpacityTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::HeightTexture) { return FPBRMaterialParameters::UseHeightTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::EmissiveTexture) { return FPBRMaterialParameters::UseEmissiveTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::WaterRippleTexture) { return FPBRMaterialParameters::UseWaterRippleTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::GlassDirtTexture) { return FPBRMaterialParameters::UseGlassDirtTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::GlassDistortionTexture) { return FPBRMaterialParameters::UseGlassDistortionTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::GlassFrostedTexture) { return FPBRMaterialParameters::UseGlassFrostedTexture; }
+	return NAME_None;
+}
+
+static bool PBRMagicGetStaticSwitchValue(UMaterialInstanceConstant* Instance, const FName& SwitchName, bool bDefaultValue)
+{
+	if (!Instance || SwitchName.IsNone())
+	{
+		return bDefaultValue;
+	}
+	bool bValue = bDefaultValue;
+	FGuid ExpressionGuid;
+	return Instance->GetStaticSwitchParameterValue(FMaterialParameterInfo(SwitchName), bValue, ExpressionGuid) ? bValue : bDefaultValue;
+}
+
+static bool PBRMagicLooksLikeDefaultTemplateTexture(UTexture* Texture)
+{
+	if (!Texture)
+	{
+		return false;
+	}
+	const FString Path = Texture->GetPathName();
+	return Path.Contains(TEXT("/PBRStudio/Textures/T_ARM_Default_"), ESearchCase::IgnoreCase) ||
+		Path.Contains(TEXT("/ArchRenderMaster/Textures/T_ARM_Default_"), ESearchCase::IgnoreCase);
+}
+
+static int32 PBRMagicGetAITexturePriority(const FName& ParameterName, const FString& TextureName)
+{
+	const FString Text = (ParameterName.ToString() + TEXT(" ") + TextureName).ToLower();
+	if (Text.Contains(TEXT("base")) || Text.Contains(TEXT("albedo")) || Text.Contains(TEXT("diffuse")) || Text.Contains(TEXT("color")) || Text.Contains(TEXT("colour")) || Text.Contains(TEXT("基础色")) || Text.Contains(TEXT("颜色")))
+	{
+		return 0;
+	}
+	if (Text.Contains(TEXT("opacity")) || Text.Contains(TEXT("alpha")) || Text.Contains(TEXT("透明")))
+	{
+		return 5;
+	}
+	if (Text.Contains(TEXT("normal")) || Text.Contains(TEXT("nrm")) || Text.Contains(TEXT("法线")) ||
+		Text.Contains(TEXT("rough")) || Text.Contains(TEXT("gloss")) || Text.Contains(TEXT("metal")) || Text.Contains(TEXT("spec")) || Text.Contains(TEXT("ao")) || Text.Contains(TEXT("mask")) || Text.Contains(TEXT("masks")) || Text.Contains(TEXT("粗糙")) || Text.Contains(TEXT("金属")) || Text.Contains(TEXT("遮蔽")))
+	{
+		return 100;
+	}
+	return 10;
+}
+
+static bool PBRMagicShouldExposeTextureToAI(UMaterialInstanceConstant* Instance, const FMaterialParameterInfo& Info, UTexture* Texture)
+{
+	if (!Texture)
+	{
+		return false;
+	}
+	if (PBRMagicGetAITexturePriority(Info.Name, Texture->GetName()) >= 100)
+	{
+		return false;
+	}
+	const FName SwitchName = PBRMagicGetAITextureUsageSwitchName(Info.Name);
+	const bool bTextureEnabled = SwitchName.IsNone() || PBRMagicGetStaticSwitchValue(Instance, SwitchName, false);
+	return bTextureEnabled || !PBRMagicLooksLikeDefaultTemplateTexture(Texture);
+}
+
+static bool PBRMagicShouldUseTextureForParameterSignal(UMaterialInstanceConstant* Instance, const FMaterialParameterInfo& Info, UTexture* Texture)
+{
+	if (!Texture || PBRMagicLooksLikeDefaultTemplateTexture(Texture))
+	{
+		return false;
+	}
+	const FName SwitchName = PBRMagicGetAITextureUsageSwitchName(Info.Name);
+	return SwitchName.IsNone() || PBRMagicGetStaticSwitchValue(Instance, SwitchName, false);
+}
+
+static bool PBRMagicTryGetTextureAverageLuma(UTexture2D* Texture, float& OutLuma)
+{
+	OutLuma = 0.0f;
+	if (!Texture)
+	{
+		return false;
+	}
+
+	FImage SourceImage;
+	if (!FImageUtils::GetTexture2DSourceImage(Texture, SourceImage) || !SourceImage.IsImageInfoValid() || SourceImage.GetNumPixels() <= 0)
+	{
+		return false;
+	}
+
+	SourceImage.ChangeFormat(ERawImageFormat::BGRA8, EGammaSpace::Linear);
+	const TArrayView64<const FColor> Pixels = SourceImage.AsBGRA8();
+	if (Pixels.Num() <= 0)
+	{
+		return false;
+	}
+
+	double Sum = 0.0;
+	for (const FColor& Pixel : Pixels)
+	{
+		Sum += (0.2126 * static_cast<double>(Pixel.R) + 0.7152 * static_cast<double>(Pixel.G) + 0.0722 * static_cast<double>(Pixel.B)) / 255.0;
+	}
+	OutLuma = FMath::Clamp(static_cast<float>(Sum / static_cast<double>(Pixels.Num())), 0.0f, 1.0f);
+	return true;
+}
+
+static FString PBRMagicGetTextureSignalRole(const FName& ParameterName, const FString& TextureName)
+{
+	const FString Text = (ParameterName.ToString() + TEXT(" ") + TextureName).ToLower();
+	if (Text.Contains(TEXT("rough")) || Text.Contains(TEXT("gloss")) || Text.Contains(TEXT("粗糙")))
+	{
+		return TEXT("roughness/gloss");
+	}
+	if (Text.Contains(TEXT("metal")) || Text.Contains(TEXT("金属")))
+	{
+		return TEXT("metallic");
+	}
+	if (Text.Contains(TEXT("spec")) || Text.Contains(TEXT("高光")))
+	{
+		return TEXT("specular");
+	}
+	if (Text.Contains(TEXT("ao")) || Text.Contains(TEXT("occlusion")) || Text.Contains(TEXT("遮蔽")))
+	{
+		return TEXT("ambient_occlusion");
+	}
+	if (Text.Contains(TEXT("normal")) || Text.Contains(TEXT("nrm")) || Text.Contains(TEXT("法线")))
+	{
+		return TEXT("normal");
+	}
+	if (Text.Contains(TEXT("height")) || Text.Contains(TEXT("displacement")) || Text.Contains(TEXT("高度")) || Text.Contains(TEXT("置换")))
+	{
+		return TEXT("height");
+	}
+	return FString();
+}
+
 static FString PBRMagicCollectMaterialAIText(UMaterialInstanceConstant* Instance)
 {
 	if (!Instance)
@@ -281,20 +425,13 @@ static FString PBRMagicCollectMaterialAIText(UMaterialInstanceConstant* Instance
 	}
 
 	FString Text = Instance->GetName();
-	if (Instance->Parent)
-	{
-		Text += TEXT(" ");
-		Text += Instance->Parent->GetName();
-	}
 
 	TMap<FMaterialParameterInfo, FMaterialParameterMetadata> TextureParameters;
 	Instance->GetAllParametersOfType(EMaterialParameterType::Texture, TextureParameters);
 	for (const TPair<FMaterialParameterInfo, FMaterialParameterMetadata>& Pair : TextureParameters)
 	{
-		Text += TEXT(" ");
-		Text += Pair.Key.Name.ToString();
 		UTexture* Texture = nullptr;
-		if (Instance->GetTextureParameterValue(Pair.Key, Texture) && Texture)
+		if (Instance->GetTextureParameterValue(Pair.Key, Texture) && PBRMagicShouldExposeTextureToAI(Instance, Pair.Key, Texture))
 		{
 			Text += TEXT(" ");
 			Text += Texture->GetName();
@@ -617,14 +754,6 @@ static FPBRMagicAISuggestion PBRMagicBuildLocalAISuggestion(UMaterialInstanceCon
 		Suggestion.Colors.Add(FPBRMaterialParameters::EmissiveColor, FLinearColor::White);
 		Suggestion.Summary = TEXT("AI 本地规则判断为自发光材质，已建议发光强度和颜色。");
 	}
-	else if (PBRMagicTextHasAny(Text, { TEXT("metal"), TEXT("steel"), TEXT("iron"), TEXT("aluminum"), TEXT("金属"), TEXT("不锈钢"), TEXT("铝") }))
-	{
-		Suggestion.MaterialType = EPBRMaterialType::Metal;
-		Suggestion.Scalars.Add(FPBRMaterialParameters::MetallicValue, 1.0f);
-		Suggestion.Scalars.Add(FPBRMaterialParameters::MetallicMultiplier, 1.0f);
-		Suggestion.Scalars.Add(FPBRMaterialParameters::RoughnessValue, 0.28f);
-		Suggestion.Summary = TEXT("AI 本地规则判断为金属材质，已建议金属度和粗糙度。");
-	}
 	else if (PBRMagicTextHasAny(Text, { TEXT("wood"), TEXT("timber"), TEXT("oak"), TEXT("木"), TEXT("木纹"), TEXT("木材") }))
 	{
 		Suggestion.MaterialType = EPBRMaterialType::Wood;
@@ -647,7 +776,7 @@ static FPBRMagicAISuggestion PBRMagicBuildLocalAISuggestion(UMaterialInstanceCon
 		Suggestion.Scalars.Add(FPBRMaterialParameters::SpecularLevel, 0.52f);
 		Suggestion.Summary = TEXT("AI 本地规则判断为瓷砖，已建议较低粗糙度和较高高光。");
 	}
-	else if (PBRMagicTextHasAny(Text, { TEXT("fabric"), TEXT("cloth"), TEXT("curtain"), TEXT("布"), TEXT("布料"), TEXT("窗帘") }))
+	else if (PBRMagicTextHasAny(Text, { TEXT("fabric"), TEXT("cotton"), TEXT("twill"), TEXT("cloth"), TEXT("carpet"), TEXT("rug"), TEXT("textile"), TEXT("curtain"), TEXT("布"), TEXT("布料"), TEXT("织物"), TEXT("棉"), TEXT("地毯"), TEXT("窗帘") }))
 	{
 		Suggestion.MaterialType = EPBRMaterialType::Fabric;
 		Suggestion.Scalars.Add(FPBRMaterialParameters::RoughnessValue, 0.86f);
@@ -658,6 +787,14 @@ static FPBRMagicAISuggestion PBRMagicBuildLocalAISuggestion(UMaterialInstanceCon
 		Suggestion.Switches.Add(FPBRMaterialParameters::UseMetallicTexture, false);
 		Suggestion.Switches.Add(FPBRMaterialParameters::UseEmissiveTexture, false);
 		Suggestion.Summary = TEXT("AI 本地规则判断为布料，已建议高粗糙度和绒毛参数。");
+	}
+	else if (PBRMagicTextHasAny(Text, { TEXT("metal"), TEXT("steel"), TEXT("iron"), TEXT("aluminum"), TEXT("copper"), TEXT("brass"), TEXT("chrome"), TEXT("金属"), TEXT("不锈钢"), TEXT("铝"), TEXT("铜"), TEXT("黄铜") }))
+	{
+		Suggestion.MaterialType = EPBRMaterialType::Metal;
+		Suggestion.Scalars.Add(FPBRMaterialParameters::MetallicValue, 1.0f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::MetallicMultiplier, 1.0f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::RoughnessValue, 0.28f);
+		Suggestion.Summary = TEXT("AI 本地规则判断为金属材质，已建议金属度和粗糙度。");
 	}
 	else
 	{
@@ -680,8 +817,9 @@ static FString PBRMagicBuildRemoteAIUserText(UMaterialInstanceConstant* Instance
 {
 	FString Text;
 	Text += TEXT("Analyze this Unreal Engine material and return ONLY a compact JSON object.\n");
-	Text += TEXT("You will receive texture thumbnails when available. Use the images first, then texture names and material names. Identify whether the surface is wood, stone, tile, fabric, leather, plastic, metal, transparent, glass, water, emissive, or standard PBR.\n");
+	Text += TEXT("You will receive base color/albedo style texture thumbnails when available. Use those color images as the primary evidence for material_type, then texture names and material instance names. Identify whether the surface is wood, stone, tile, fabric, leather, plastic, metal, transparent, glass, water, emissive, or standard PBR.\n");
 	Text += TEXT("Important: names like Fabric, Cotton, Twill, Cloth, Carpet, Rug, Textile, 布料, 织物, 地毯 strongly indicate Fabric. Gray roughness/mask textures are not metal evidence. Only choose Metal when a base color image/name clearly shows metal, steel, iron, aluminum, copper, brass, or chrome.\n");
+	Text += TEXT("Generic parameter names listed later, including metallic parameter names, are only writable controls and are NOT evidence for material classification.\n");
 	Text += TEXT("Allowed material_type values: Standard, Wood, Stone, Tile, Fabric, Leather, Plastic, Metal, Transparent, Glass, Water, Emissive. Use Standard for grass, moss, plants, soil, sand, and ordinary non-metal PBR surfaces.\n");
 	Text += TEXT("JSON schema: {\"material_type\":\"Standard\",\"surface_label\":\"grass/vegetation\",\"confidence\":0.0-1.0,\"evidence\":\"short reason\",\"scalar_suggestions\":[{\"parameter\":\"粗糙度数值\",\"value\":0.82,\"min\":0,\"max\":1,\"reason\":\"...\"}],\"switch_suggestions\":[{\"parameter\":\"使用基础色贴图\",\"value\":true,\"reason\":\"...\"}],\"color_suggestions\":[{\"parameter\":\"基础色调\",\"rgba\":[1,1,1,1],\"reason\":\"...\"}]}.\n");
 	Text += TEXT("Prefer physically plausible parameters. Do not mark vegetation, grass, soil, brick, stone, wood, plastic, fabric, leather, glass, or water as Metal unless the evidence is clearly metallic.\n");
@@ -690,20 +828,50 @@ static FString PBRMagicBuildRemoteAIUserText(UMaterialInstanceConstant* Instance
 	if (Instance)
 	{
 		Text += FString::Printf(TEXT("Material instance: %s\n"), *Instance->GetPathName());
-		if (Instance->Parent)
-		{
-			Text += FString::Printf(TEXT("Parent material: %s\n"), *Instance->Parent->GetPathName());
-		}
+		Text += TEXT("Current parent/template material is intentionally omitted because it may be the result of a previous conversion and is not classification evidence.\n");
 
 		Text += TEXT("Textures:\n");
 		TMap<FMaterialParameterInfo, FMaterialParameterMetadata> TextureParameters;
 		Instance->GetAllParametersOfType(EMaterialParameterType::Texture, TextureParameters);
+		TArray<FString> ParameterSignals;
 		for (const TPair<FMaterialParameterInfo, FMaterialParameterMetadata>& Pair : TextureParameters)
 		{
 			UTexture* Texture = nullptr;
-			if (Instance->GetTextureParameterValue(Pair.Key, Texture) && Texture)
+			if (!Instance->GetTextureParameterValue(Pair.Key, Texture) || !Texture)
+			{
+				continue;
+			}
+			if (PBRMagicShouldExposeTextureToAI(Instance, Pair.Key, Texture))
 			{
 				Text += FString::Printf(TEXT("- %s: %s (%s)\n"), *Pair.Key.Name.ToString(), *Texture->GetName(), *Texture->GetPathName());
+			}
+			if (PBRMagicShouldUseTextureForParameterSignal(Instance, Pair.Key, Texture))
+			{
+				const FString Role = PBRMagicGetTextureSignalRole(Pair.Key.Name, Texture->GetName());
+				UTexture2D* Texture2D = Cast<UTexture2D>(Texture);
+				float AverageLuma = 0.0f;
+				if (!Role.IsEmpty() && Texture2D && PBRMagicTryGetTextureAverageLuma(Texture2D, AverageLuma))
+				{
+					ParameterSignals.Add(FString::Printf(TEXT("- %s map %s average_luma=%.3f; use this only for parameter suggestions, not material_type."),
+						*Role,
+						*Texture->GetName(),
+						AverageLuma));
+				}
+				else if (!Role.IsEmpty())
+				{
+					ParameterSignals.Add(FString::Printf(TEXT("- %s map %s is present; use this only for parameter suggestions, not material_type."),
+						*Role,
+						*Texture->GetName()));
+				}
+			}
+		}
+		if (ParameterSignals.Num() > 0)
+		{
+			Text += TEXT("Non-color texture signals for parameter estimation only. Do NOT classify material_type from these maps:\n");
+			for (const FString& Signal : ParameterSignals)
+			{
+				Text += Signal;
+				Text += TEXT("\n");
 			}
 		}
 	}
@@ -712,28 +880,6 @@ static FString PBRMagicBuildRemoteAIUserText(UMaterialInstanceConstant* Instance
 	Text += TEXT("Useful switch parameter names: 使用基础色贴图, 使用法线贴图, 使用粗糙度贴图, 使用高光贴图, 使用金属度贴图, 使用环境遮蔽贴图, 使用高度贴图, 使用透明贴图, 使用自发光贴图.\n");
 	Text += TEXT("Useful color parameter names: 基础色调, 自发光颜色, 织物绒毛颜色, 水颜色, 玻璃吸收颜色, 玻璃污渍颜色.\n");
 	return Text;
-}
-
-static int32 PBRMagicGetAITexturePriority(const FName& ParameterName, const FString& TextureName)
-{
-	const FString Text = (ParameterName.ToString() + TEXT(" ") + TextureName).ToLower();
-	if (Text.Contains(TEXT("base")) || Text.Contains(TEXT("albedo")) || Text.Contains(TEXT("diffuse")) || Text.Contains(TEXT("color")) || Text.Contains(TEXT("colour")) || Text.Contains(TEXT("基础色")) || Text.Contains(TEXT("颜色")))
-	{
-		return 0;
-	}
-	if (Text.Contains(TEXT("normal")) || Text.Contains(TEXT("nrm")) || Text.Contains(TEXT("法线")))
-	{
-		return 1;
-	}
-	if (Text.Contains(TEXT("opacity")) || Text.Contains(TEXT("alpha")) || Text.Contains(TEXT("透明")))
-	{
-		return 2;
-	}
-	if (Text.Contains(TEXT("rough")) || Text.Contains(TEXT("gloss")) || Text.Contains(TEXT("metal")) || Text.Contains(TEXT("spec")) || Text.Contains(TEXT("ao")) || Text.Contains(TEXT("mask")) || Text.Contains(TEXT("masks")) || Text.Contains(TEXT("粗糙")) || Text.Contains(TEXT("金属")) || Text.Contains(TEXT("遮蔽")))
-	{
-		return 100;
-	}
-	return 10;
 }
 
 static bool PBRMagicEncodeTextureDataUrl(UTexture2D* Texture, int32 MaxDimension, FString& OutDataUrl)
@@ -820,6 +966,10 @@ static TArray<FPBRMagicAIImagePayload> PBRMagicBuildRemoteAIImagePayloads(UMater
 
 		UTexture2D* Texture2D = Cast<UTexture2D>(Texture);
 		if (!Texture2D)
+		{
+			continue;
+		}
+		if (!PBRMagicShouldExposeTextureToAI(Instance, Pair.Key, Texture2D))
 		{
 			continue;
 		}
@@ -1255,6 +1405,14 @@ static bool PBRMagicLooksLikeFabricText(const FString& Text)
 	});
 }
 
+static bool PBRMagicLooksLikeMetalText(const FString& Text)
+{
+	return PBRMagicTextHasAny(Text, {
+		TEXT("metal"), TEXT("steel"), TEXT("iron"), TEXT("aluminum"), TEXT("aluminium"), TEXT("copper"), TEXT("brass"), TEXT("chrome"), TEXT("stainless"),
+		TEXT("金属"), TEXT("钢"), TEXT("铁"), TEXT("铝"), TEXT("铜"), TEXT("黄铜"), TEXT("铬"), TEXT("不锈钢")
+	});
+}
+
 static bool PBRMagicTryRemoteAISuggestion(UMaterialInstanceConstant* Instance, const FPBRMagicAISuggestion& LocalSuggestion, FPBRMagicAISuggestion& OutSuggestion, FString& OutStatus)
 {
 	const FPBRMagicAIProviderSettings Settings = PBRMagicLoadAIProviderSettings();
@@ -1301,10 +1459,16 @@ static bool PBRMagicTryRemoteAISuggestion(UMaterialInstanceConstant* Instance, c
 		OutStatus = FString::Printf(TEXT("远端 AI 返回未知材质类型：%s，已使用本地规则。"), *TypeText);
 		return false;
 	}
-	const bool bCorrectedFabricMetal = RemoteType == EPBRMaterialType::Metal && PBRMagicLooksLikeFabricText(PBRMagicCollectMaterialAIText(Instance));
+	const FString ClassificationText = PBRMagicCollectMaterialAIText(Instance);
+	const bool bCorrectedFabricMetal = RemoteType == EPBRMaterialType::Metal && PBRMagicLooksLikeFabricText(ClassificationText);
+	const bool bRejectedWeakMetal = RemoteType == EPBRMaterialType::Metal && LocalSuggestion.MaterialType != EPBRMaterialType::Metal && !PBRMagicLooksLikeMetalText(ClassificationText);
 	if (bCorrectedFabricMetal)
 	{
 		RemoteType = EPBRMaterialType::Fabric;
+	}
+	else if (bRejectedWeakMetal)
+	{
+		RemoteType = LocalSuggestion.MaterialType;
 	}
 
 	OutSuggestion = LocalSuggestion;
@@ -1316,6 +1480,10 @@ static bool PBRMagicTryRemoteAISuggestion(UMaterialInstanceConstant* Instance, c
 	{
 		OutSuggestion.Summary += TEXT(" 已根据贴图/材质名称中的 Fabric/Cotton/地毯特征，将金属误判纠正为布料。");
 	}
+	else if (bRejectedWeakMetal)
+	{
+		OutSuggestion.Summary += TEXT(" 远端返回金属，但当前材质名和关键贴图没有明确金属证据，已回退到本地判断。");
+	}
 
 	const TArray<TSharedPtr<FJsonValue>>* Scalars = nullptr;
 	if (Root->TryGetArrayField(TEXT("scalar_suggestions"), Scalars) && Scalars)
@@ -1326,6 +1494,11 @@ static bool PBRMagicTryRemoteAISuggestion(UMaterialInstanceConstant* Instance, c
 			const FName ParameterName = PBRMagicResolveScalarParameterName(PBRMagicJsonStringField(Object, TEXT("parameter"), PBRMagicJsonStringField(Object, TEXT("name"))));
 			if (!ParameterName.IsNone())
 			{
+				if (RemoteType != EPBRMaterialType::Metal &&
+					(ParameterName == FPBRMaterialParameters::MetallicValue || ParameterName == FPBRMaterialParameters::MetallicMultiplier))
+				{
+					continue;
+				}
 				OutSuggestion.Scalars.Add(ParameterName, PBRMagicJsonNumberField(Object, TEXT("value"), 0.0f));
 			}
 		}
@@ -1340,6 +1513,10 @@ static bool PBRMagicTryRemoteAISuggestion(UMaterialInstanceConstant* Instance, c
 			const FName ParameterName = PBRMagicResolveSwitchParameterName(PBRMagicJsonStringField(Object, TEXT("parameter"), PBRMagicJsonStringField(Object, TEXT("name"))));
 			if (!ParameterName.IsNone())
 			{
+				if (RemoteType != EPBRMaterialType::Metal && ParameterName == FPBRMaterialParameters::UseMetallicTexture)
+				{
+					continue;
+				}
 				OutSuggestion.Switches.Add(ParameterName, PBRMagicJsonBoolField(Object, TEXT("value"), false));
 			}
 		}
@@ -1360,9 +1537,25 @@ static bool PBRMagicTryRemoteAISuggestion(UMaterialInstanceConstant* Instance, c
 		}
 	}
 
+	if (RemoteType != EPBRMaterialType::Metal)
+	{
+		OutSuggestion.Scalars.Add(FPBRMaterialParameters::MetallicValue, 0.0f);
+		OutSuggestion.Scalars.Add(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		OutSuggestion.Switches.Add(FPBRMaterialParameters::UseMetallicTexture, false);
+	}
+
+	FString SentTextureNames;
+	for (const FPBRMagicAIImagePayload& Image : Images)
+	{
+		if (!SentTextureNames.IsEmpty())
+		{
+			SentTextureNames += TEXT(", ");
+		}
+		SentTextureNames += Image.TextureName;
+	}
 	OutStatus = Images.Num() > 0
-		? FString::Printf(TEXT("远端 AI 识图完成：%s / %s，发送 %d 张贴图"), *Settings.Provider, *Settings.Model, Images.Num())
-		: FString::Printf(TEXT("远端 AI 文本识别完成：%s / %s，未找到可发送贴图"), *Settings.Provider, *Settings.Model);
+		? FString::Printf(TEXT("远端 AI 识图完成：%s / %s，发送 %d 张颜色贴图：%s"), *Settings.Provider, *Settings.Model, Images.Num(), *SentTextureNames)
+		: FString::Printf(TEXT("远端 AI 文本识别完成：%s / %s，未找到可发送颜色贴图"), *Settings.Provider, *Settings.Model);
 	return true;
 }
 
