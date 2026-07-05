@@ -122,6 +122,7 @@ private:
 	TSharedRef<SWidget> BuildEditableMaterialTypeMenu();
 	TSharedRef<SWidget> BuildMaterialParameterControl(const struct FPBRMagicEditableMaterialParameter& Parameter);
 	TArray<FPBRMagicDynamicMaterialParameter> CollectEditableDynamicMaterialParameters() const;
+	bool IsDynamicMaterialParameterVisible(const FPBRMagicDynamicMaterialParameter& Parameter) const;
 	TSharedRef<SWidget> BuildDynamicMaterialParameterGroup(const FString& GroupName, const TArray<FPBRMagicDynamicMaterialParameter>& Parameters);
 	TSharedRef<SWidget> BuildDynamicMaterialParameterControl(const FPBRMagicDynamicMaterialParameter& Parameter);
 	TSharedRef<SWidget> BuildMaterialScalarControl(const FText& Label, const FName& ParameterName, float MinValue, float MaxValue, float DefaultValue, float StepValue = 0.05f);

@@ -2690,11 +2690,21 @@ private:
 		const float RowH = 27.0f;
 		const int32 MaxRows = FMath::Clamp(FMath::FloorToInt((Size.Y - 112.0f) / RowH), 0, 7);
 		const TArray<FPBRMagicDynamicMaterialParameter> DynamicParameters = OwnerWindow->CollectEditableDynamicMaterialParameters();
-		if (DynamicParameters.Num() > 0)
+		TArray<FPBRMagicDynamicMaterialParameter> VisibleDynamicParameters;
+		VisibleDynamicParameters.Reserve(DynamicParameters.Num());
+		for (const FPBRMagicDynamicMaterialParameter& Parameter : DynamicParameters)
 		{
-			for (int32 Index = 0; Index < FMath::Min(MaxRows, DynamicParameters.Num()); ++Index)
+			if (OwnerWindow->IsDynamicMaterialParameterVisible(Parameter))
 			{
-				const FPBRMagicDynamicMaterialParameter& Parameter = DynamicParameters[Index];
+				VisibleDynamicParameters.Add(Parameter);
+			}
+		}
+
+		if (VisibleDynamicParameters.Num() > 0)
+		{
+			for (int32 Index = 0; Index < FMath::Min(MaxRows, VisibleDynamicParameters.Num()); ++Index)
+			{
+				const FPBRMagicDynamicMaterialParameter& Parameter = VisibleDynamicParameters[Index];
 				const FVector2D RowPos(Position.X + 12.0f, RowY);
 				const FVector2D RowSize(Size.X - 24.0f, RowH);
 				switch (Parameter.Kind)
@@ -2715,9 +2725,9 @@ private:
 				RowY += RowH;
 			}
 
-			if (DynamicParameters.Num() > MaxRows && MaxRows > 0)
+			if (VisibleDynamicParameters.Num() > MaxRows && MaxRows > 0)
 			{
-				DrawTextInRect(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, Size.Y - 25.0f), Size.X - 24.0f, FString::Printf(TEXT("还有 %d 个参数，切换经典 UI 可完整编辑"), DynamicParameters.Num() - MaxRows), FAppStyle::GetFontStyle("SmallFont"), Theme.TextMuted);
+				DrawTextInRect(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, Size.Y - 25.0f), Size.X - 24.0f, FString::Printf(TEXT("还有 %d 个参数，切换经典 UI 可完整编辑"), VisibleDynamicParameters.Num() - MaxRows), FAppStyle::GetFontStyle("SmallFont"), Theme.TextMuted);
 			}
 			return;
 		}
@@ -5192,6 +5202,11 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildEditableMaterialTypeMenu()
 			.OnClicked_Lambda([this, MaterialType = Option.Type]()
 			{
 				SelectEditableMaterialType(MaterialType);
+				if (TSharedPtr<SWindow> ExistingWindow = MaterialParameterWindow.Pin())
+				{
+					ExistingWindow->SetContent(BuildMaterialParameterPopupContent());
+				}
+				FSlateApplication::Get().DismissAllMenus();
 				return FReply::Handled();
 			})
 			[
@@ -5348,28 +5363,36 @@ TArray<FPBRMagicDynamicMaterialParameter> SPBRMagicOutlinerWindow::CollectEditab
 	return Parameters;
 }
 
+bool SPBRMagicOutlinerWindow::IsDynamicMaterialParameterVisible(const FPBRMagicDynamicMaterialParameter& Parameter) const
+{
+	FName UVChannelName;
+	bool bIsUVSwitch = false;
+	bool bIsUVScalar = false;
+	if (GetMagicChannelUVInfo(Parameter.ParameterName, UVChannelName, bIsUVSwitch, bIsUVScalar) && bIsUVScalar)
+	{
+		const FPBRChannelUVParameterNames ChannelUV = FPBRMaterialParameters::GetChannelUVNames(UVChannelName);
+		return GetEditableMaterialSwitch(ChannelUV.UseIndependentUV, false);
+	}
+	return true;
+}
+
 TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildDynamicMaterialParameterGroup(const FString& GroupName, const TArray<FPBRMagicDynamicMaterialParameter>& Parameters)
 {
 	TSharedRef<SVerticalBox> Body = SNew(SVerticalBox);
 	for (const FPBRMagicDynamicMaterialParameter& Parameter : Parameters)
 	{
-		FName UVChannelName;
-		bool bIsUVSwitch = false;
-		bool bIsUVScalar = false;
-		if (GetMagicChannelUVInfo(Parameter.ParameterName, UVChannelName, bIsUVSwitch, bIsUVScalar) && bIsUVScalar)
-		{
-			const FPBRChannelUVParameterNames ChannelUV = FPBRMaterialParameters::GetChannelUVNames(UVChannelName);
-			if (!GetEditableMaterialSwitch(ChannelUV.UseIndependentUV, false))
-			{
-				continue;
-			}
-		}
-
 		Body->AddSlot()
 		.AutoHeight()
 		.Padding(0, 0, 0, 5)
 		[
-			BuildDynamicMaterialParameterControl(Parameter)
+			SNew(SBox)
+			.Visibility_Lambda([this, Parameter]()
+			{
+				return IsDynamicMaterialParameterVisible(Parameter) ? EVisibility::Visible : EVisibility::Collapsed;
+			})
+			[
+				BuildDynamicMaterialParameterControl(Parameter)
+			]
 		];
 	}
 
@@ -6988,6 +7011,10 @@ void SPBRMagicOutlinerWindow::CommitEditableMaterialSwitch(const FName& Paramete
 	{
 		StatusMessage = Message;
 		Invalidate(EInvalidateWidgetReason::Paint);
+		if (TSharedPtr<SWindow> ExistingWindow = MaterialParameterWindow.Pin())
+		{
+			ExistingWindow->SetContent(BuildMaterialParameterPopupContent());
+		}
 	}
 	else
 	{
