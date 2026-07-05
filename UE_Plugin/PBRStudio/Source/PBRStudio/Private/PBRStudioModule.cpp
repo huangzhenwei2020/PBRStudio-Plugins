@@ -1,12 +1,17 @@
 ﻿#include "PBRStudioModule.h"
 #include "PBRStudioCommands.h"
 #include "PBRStudioStyle.h"
+#include "ContentBrowserDataLegacyBridge.h"
+#include "ContentBrowserDataMenuContexts.h"
+#include "ContentBrowserDataSubsystem.h"
+#include "IContentBrowserDataModule.h"
 #include "Services/PBRDataStore.h"
 #include "Services/PBRHttpServer.h"
 #include "Services/PBRLocalization.h"
 #include "Services/PBRMaterialFunctionLibrary.h"
 #include "Services/PBRSubstrateMaterialTemplateManager.h"
 #include "Services/PBRMaterialTemplateManager.h"
+#include "AssetToolsModule.h"
 #include "Widgets/SPBRMagicOutlinerWindow.h"
 #include "Widgets/SPBRStudioMainWindow.h"
 #include "EditorAssetLibrary.h"
@@ -20,11 +25,13 @@
 #include "Framework/Docking/TabManager.h"
 #include "HAL/IConsoleManager.h"
 #include "InputCoreTypes.h"
+#include "Materials/MaterialInstanceConstant.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionLinearInterpolate.h"
 #include "Materials/MaterialExpressionMaterialFunctionCall.h"
 #include "Materials/MaterialExpressionStaticSwitchParameter.h"
 #include "Materials/MaterialFunctionInterface.h"
+#include "Factories/MaterialInstanceConstantFactoryNew.h"
 #include "WorkspaceMenuStructure.h"
 #include "WorkspaceMenuStructureModule.h"
 #include "ToolMenus.h"
@@ -175,6 +182,107 @@ static bool PBRTryParseShortcut(const FString& Text, FInputChord& OutChord)
 
 	OutChord = FInputChord(Key, bShift, bCtrl, bAlt, bCmd);
 	return OutChord.IsValidChord();
+}
+
+struct FPBRContentBrowserMaterialTypeEntry
+{
+	FPBRContentBrowserMaterialTypeEntry(EPBRMaterialType InType, const TCHAR* InAssetPrefix, const TCHAR* InLabelKey, const TCHAR* InChineseLabel, const TCHAR* InEnglishLabel)
+		: Type(InType)
+		, AssetPrefix(InAssetPrefix)
+		, LabelKey(InLabelKey)
+		, ChineseLabel(InChineseLabel)
+		, EnglishLabel(InEnglishLabel)
+	{
+	}
+
+	EPBRMaterialType Type;
+	const TCHAR* AssetPrefix;
+	const TCHAR* LabelKey;
+	const TCHAR* ChineseLabel;
+	const TCHAR* EnglishLabel;
+};
+
+static const TArray<FPBRContentBrowserMaterialTypeEntry>& GetPBRContentBrowserMaterialTypes()
+{
+	static TArray<FPBRContentBrowserMaterialTypeEntry> Types;
+	if (Types.IsEmpty())
+	{
+		Types.Emplace(EPBRMaterialType::Standard, TEXT("MI_PBR_Standard"), TEXT("PBRCreateStandardMaterialInstance"), TEXT("标准材质实例"), TEXT("Standard Material Instance"));
+		Types.Emplace(EPBRMaterialType::Wood, TEXT("MI_PBR_Wood"), TEXT("PBRCreateWoodMaterialInstance"), TEXT("木材材质实例"), TEXT("Wood Material Instance"));
+		Types.Emplace(EPBRMaterialType::Stone, TEXT("MI_PBR_Stone"), TEXT("PBRCreateStoneMaterialInstance"), TEXT("石材材质实例"), TEXT("Stone Material Instance"));
+		Types.Emplace(EPBRMaterialType::Tile, TEXT("MI_PBR_Tile"), TEXT("PBRCreateTileMaterialInstance"), TEXT("瓷砖材质实例"), TEXT("Tile Material Instance"));
+		Types.Emplace(EPBRMaterialType::Fabric, TEXT("MI_PBR_Fabric"), TEXT("PBRCreateFabricMaterialInstance"), TEXT("布料材质实例"), TEXT("Fabric Material Instance"));
+		Types.Emplace(EPBRMaterialType::Leather, TEXT("MI_PBR_Leather"), TEXT("PBRCreateLeatherMaterialInstance"), TEXT("皮革材质实例"), TEXT("Leather Material Instance"));
+		Types.Emplace(EPBRMaterialType::Plastic, TEXT("MI_PBR_Plastic"), TEXT("PBRCreatePlasticMaterialInstance"), TEXT("塑料材质实例"), TEXT("Plastic Material Instance"));
+		Types.Emplace(EPBRMaterialType::Metal, TEXT("MI_PBR_Metal"), TEXT("PBRCreateMetalMaterialInstance"), TEXT("金属材质实例"), TEXT("Metal Material Instance"));
+		Types.Emplace(EPBRMaterialType::Transparent, TEXT("MI_PBR_Transparent"), TEXT("PBRCreateTransparentMaterialInstance"), TEXT("半透明材质实例"), TEXT("Transparent Material Instance"));
+		Types.Emplace(EPBRMaterialType::Glass, TEXT("MI_PBR_Glass"), TEXT("PBRCreateGlassMaterialInstance"), TEXT("玻璃材质实例"), TEXT("Glass Material Instance"));
+		Types.Emplace(EPBRMaterialType::Water, TEXT("MI_PBR_Water"), TEXT("PBRCreateWaterMaterialInstance"), TEXT("水材质实例"), TEXT("Water Material Instance"));
+		Types.Emplace(EPBRMaterialType::Emissive, TEXT("MI_PBR_Emissive"), TEXT("PBRCreateEmissiveMaterialInstance"), TEXT("自发光材质实例"), TEXT("Emissive Material Instance"));
+	}
+	return Types;
+}
+
+static FName ResolvePBRContentBrowserPackagePath(const UContentBrowserDataMenuContext_AddNewMenu* Context)
+{
+	FName VirtualPath = Context && Context->SelectedPaths.Num() > 0 ? Context->SelectedPaths[0] : FName(TEXT("/Game"));
+	if (VirtualPath.IsNone())
+	{
+		VirtualPath = FName(TEXT("/Game"));
+	}
+
+	FName InternalPath;
+	if (UContentBrowserDataSubsystem* ContentBrowserData = IContentBrowserDataModule::Get().GetSubsystem())
+	{
+		const EContentBrowserPathType PathType = ContentBrowserData->TryConvertVirtualPath(VirtualPath, InternalPath);
+		if (PathType != EContentBrowserPathType::None && !InternalPath.IsNone())
+		{
+			return InternalPath;
+		}
+	}
+
+	const FString PathString = VirtualPath.ToString();
+	if (PathString.StartsWith(TEXT("/All/")))
+	{
+		return FName(*PathString.RightChop(4));
+	}
+	return VirtualPath;
+}
+
+static void CreatePBRContentBrowserMaterialInstance(EPBRMaterialType MaterialType, FString AssetPrefix, UContentBrowserDataMenuContext_AddNewMenu* Context)
+{
+	if (!Context || !Context->bCanBeModified || !Context->bContainsValidPackagePath)
+	{
+		return;
+	}
+
+	FString ParentMessage;
+	UMaterial* ParentMaterial = FPBRMaterialTemplateManager::EnsureTemplateMaterial(MaterialType, ParentMessage);
+	if (!ParentMaterial)
+	{
+		UE_LOG(LogPBRStudio, Warning, TEXT("Unable to create PBRStudio material instance: %s"), *ParentMessage);
+		return;
+	}
+
+	FString PackagePath = ResolvePBRContentBrowserPackagePath(Context).ToString();
+	if (PackagePath.IsEmpty())
+	{
+		PackagePath = TEXT("/Game");
+	}
+
+	FString UniquePackageName;
+	FString UniqueAssetName;
+	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
+	AssetToolsModule.Get().CreateUniqueAssetName(PackagePath / AssetPrefix, TEXT(""), UniquePackageName, UniqueAssetName);
+
+	UMaterialInstanceConstantFactoryNew* Factory = NewObject<UMaterialInstanceConstantFactoryNew>();
+	Factory->InitialParent = ParentMaterial;
+	ContentBrowserDataLegacyBridge::OnCreateNewAsset().ExecuteIfBound(
+		FName(*UniqueAssetName),
+		FName(*FPackageName::GetLongPackagePath(UniquePackageName)),
+		UMaterialInstanceConstant::StaticClass(),
+		Factory,
+		Context->OnBeginItemCreation);
 }
 
 class FPBRMagicOutlinerInputProcessor : public IInputProcessor
@@ -714,6 +822,41 @@ void FPBRStudioModule::RegisterMenus()
 	AddToolbarWidget("LevelEditor.LevelEditorToolBar.User", "PBRStudio");
 	AddToolbarWidget("AssetEditor.MaterialEditor.ToolBar", "PBRStudio");
 	AddToolbarWidget("AssetEditor.BlueprintEditor.ToolBar", "PBRStudio");
+	RegisterContentBrowserMaterialMenu();
+}
+
+void FPBRStudioModule::RegisterContentBrowserMaterialMenu()
+{
+	UToolMenu* AddNewMenu = UToolMenus::Get()->ExtendMenu("ContentBrowser.AddNewContextMenu");
+	FToolMenuSection& Section = AddNewMenu->FindOrAddSection("ContentBrowserNewAsset");
+	Section.AddSubMenu(
+		"PBRStudioMaterialInstances",
+		PBRText(TEXT("PBRStudioCreateMaterialInstanceSubMenu"), TEXT("PBRStudio 材质实例"), TEXT("PBRStudio Material Instance")),
+		PBRText(TEXT("PBRStudioCreateMaterialInstanceSubMenuTip"), TEXT("创建基于 PBRStudio 母材质的材质实例"), TEXT("Create a material instance based on a PBRStudio master material.")),
+		FNewToolMenuDelegate::CreateLambda([](UToolMenu* SubMenu)
+		{
+			UContentBrowserDataMenuContext_AddNewMenu* Context = SubMenu->FindContext<UContentBrowserDataMenuContext_AddNewMenu>();
+			FToolMenuSection& MaterialSection = SubMenu->AddSection("PBRStudioMaterialTypes");
+			for (const FPBRContentBrowserMaterialTypeEntry& Entry : GetPBRContentBrowserMaterialTypes())
+			{
+				const FText Label = PBRText(Entry.LabelKey, Entry.ChineseLabel, Entry.EnglishLabel);
+				const FString AssetPrefix = Entry.AssetPrefix;
+				MaterialSection.AddMenuEntry(
+					FName(*(FString(TEXT("PBRStudioCreate_")) + AssetPrefix)),
+					Label,
+					PBRText(TEXT("PBRStudioCreateMaterialInstanceTip"), TEXT("在当前文件夹创建对应类型的 PBRStudio 材质实例"), TEXT("Create this PBRStudio material instance in the current folder.")),
+					FSlateIcon(FAppStyle::GetAppStyleSetName(), "ClassIcon.MaterialInstanceConstant"),
+					FUIAction(
+						FExecuteAction::CreateStatic(&CreatePBRContentBrowserMaterialInstance, Entry.Type, AssetPrefix, Context),
+						FCanExecuteAction::CreateLambda([Context]()
+						{
+							return Context && Context->bCanBeModified && Context->bContainsValidPackagePath && Context->SelectedPaths.Num() == 1;
+						}),
+						EUIActionRepeatMode::RepeatDisabled));
+			}
+		}),
+		false,
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "ClassIcon.MaterialInstanceConstant"));
 }
 
 void FPBRStudioModule::RegisterTabSpawner()

@@ -45,6 +45,7 @@ public class PBRStudio : ModuleRules
 		{
 			"AppFramework",
 			"ContentBrowser",
+			"ContentBrowserData",
 			"DeveloperSettings",
 			"EditorFramework",
 			"MaterialBaking",

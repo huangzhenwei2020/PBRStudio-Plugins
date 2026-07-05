@@ -32,6 +32,7 @@ private:
 	void UnregisterConsoleCommands();
 	void RegisterInputProcessor();
 	void UnregisterInputProcessor();
+	void RegisterContentBrowserMaterialMenu();
 
 	static TSharedRef<SDockTab> SpawnMainWindowTab(const FSpawnTabArgs& Args);
 	static TSharedRef<SDockTab> SpawnMagicOutlinerTab(const FSpawnTabArgs& Args);
