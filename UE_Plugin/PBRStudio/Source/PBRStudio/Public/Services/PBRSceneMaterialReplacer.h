@@ -65,6 +65,7 @@ struct PBRSTUDIO_API FPBRSceneMaterialCandidate
 	bool bLooksTransparent = false;
 	bool bUseBPRReplacement = true;
 	bool bIsPBRStudioMaterial = false;
+	bool bBaseColorNeedsBake = false;
 	bool bChecked = true;
 	TArray<FPBRSceneMaterialSlot> Slots;
 };

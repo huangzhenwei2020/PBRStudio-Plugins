@@ -8408,6 +8408,7 @@ FReply SPBRMagicOutlinerWindow::OnApplyAIMaterialSuggestionClicked()
 	SlowTask.EnterProgressFrame(1.0f, PBRText(TEXT("MaterialAIProgressPreview"), TEXT("打开建议预览，等待用户确认"), TEXT("Opening suggestion preview for confirmation")));
 	const FPBRMagicAISuggestion PreviewSuggestion = Suggestion;
 	const FString PreviewText = PBRMagicBuildAISuggestionPreviewText(PreviewSuggestion);
+	TSharedRef<TWeakPtr<SWindow>> PreviewWindowWeak = MakeShared<TWeakPtr<SWindow>>();
 	TSharedRef<SWindow> PreviewWindow = SNew(SWindow)
 		.Title(PBRText(TEXT("MaterialAIPreviewTitle"), TEXT("AI 材质建议预览"), TEXT("AI Material Suggestion Preview")))
 		.ClientSize(FVector2D(620.0f, 460.0f))
@@ -8444,9 +8445,12 @@ FReply SPBRMagicOutlinerWindow::OnApplyAIMaterialSuggestionClicked()
 					[
 						SNew(SButton)
 						.Text(PBRText(TEXT("MaterialAIPreviewCancel"), TEXT("不应用"), TEXT("Cancel")))
-						.OnClicked_Lambda([PreviewWindow]()
+						.OnClicked_Lambda([PreviewWindowWeak]()
 						{
-							PreviewWindow->RequestDestroyWindow();
+							if (TSharedPtr<SWindow> Window = PreviewWindowWeak->Pin())
+							{
+								Window->RequestDestroyWindow();
+							}
 							return FReply::Handled();
 						})
 					]
@@ -8454,7 +8458,7 @@ FReply SPBRMagicOutlinerWindow::OnApplyAIMaterialSuggestionClicked()
 					[
 						SNew(SButton)
 						.Text(PBRText(TEXT("MaterialAIPreviewApply"), TEXT("应用建议"), TEXT("Apply Suggestions")))
-						.OnClicked_Lambda([this, PreviewWindow, PreviewSuggestion]()
+						.OnClicked_Lambda([this, PreviewWindowWeak, PreviewSuggestion]()
 						{
 							SelectEditableMaterialType(PreviewSuggestion.MaterialType);
 							for (const TPair<FName, float>& Pair : PreviewSuggestion.Scalars)
@@ -8478,13 +8482,17 @@ FReply SPBRMagicOutlinerWindow::OnApplyAIMaterialSuggestionClicked()
 							{
 								ExistingWindow->SetContent(BuildMaterialParameterPopupContent());
 							}
-							PreviewWindow->RequestDestroyWindow();
+							if (TSharedPtr<SWindow> Window = PreviewWindowWeak->Pin())
+							{
+								Window->RequestDestroyWindow();
+							}
 							return FReply::Handled();
 						})
 					]
 				]
 			]
 		];
+	*PreviewWindowWeak = PreviewWindow;
 	FSlateApplication::Get().AddWindow(PreviewWindow);
 	return FReply::Handled();
 }

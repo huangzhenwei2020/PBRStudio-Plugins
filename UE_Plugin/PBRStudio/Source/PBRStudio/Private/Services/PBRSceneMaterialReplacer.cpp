@@ -2740,6 +2740,31 @@ UTexture2D* FPBRSceneMaterialReplacer::FindBaseColorTexture(UMaterialInterface* 
 	return nullptr;
 }
 
+static bool DoesBaseColorNeedMaterialBake(UMaterialInterface* Material)
+{
+	if (!Material)
+	{
+		return false;
+	}
+
+	TArray<UTexture*> UsedTextures;
+	TArray<FName> BaseColorParamNames;
+	if (!Material->GetTexturesInPropertyChain(MP_BaseColor, UsedTextures, &BaseColorParamNames, nullptr))
+	{
+		return false;
+	}
+
+	TSet<FSoftObjectPath> UniqueTextures;
+	for (UTexture* Texture : UsedTextures)
+	{
+		if (Texture)
+		{
+			UniqueTextures.Add(FSoftObjectPath(Texture));
+		}
+	}
+	return UniqueTextures.Num() > 1;
+}
+
 UTexture2D* FPBRSceneMaterialReplacer::FindNormalTexture(UMaterialInterface* Material, FString& OutSourcePath)
 {
 	OutSourcePath.Empty();
@@ -3148,6 +3173,7 @@ static void FillSelectionEditableCandidate(
 	Candidate.OutputMaterialName = BuildSelectionEditableMaterialOutputName(Component, MaterialIndex, SourceMaterial);
 	Candidate.MaterialPath = SourceMaterial ? SourceMaterial->GetPathName() : FString();
 	Candidate.InheritedBaseColor = GetInheritedBaseColor(SourceMaterial);
+	Candidate.bBaseColorNeedsBake = DoesBaseColorNeedMaterialBake(SourceMaterial);
 
 	FLinearColor DiffuseOverrideColor;
 	if (TryGetDiffuseColorFromInstanceOverrides(SourceMaterial, DiffuseOverrideColor))
@@ -3394,6 +3420,7 @@ FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMateria
 	FString SourcePath;
 	Candidate.BaseColorTexture = FindBaseColorTexture(CurrentMaterial, SourcePath);
 	Candidate.BaseColorSourcePath = SourcePath;
+	Candidate.bBaseColorNeedsBake = DoesBaseColorNeedMaterialBake(CurrentMaterial);
 	Candidate.NormalTexture = FindNormalTexture(CurrentMaterial, Candidate.NormalSourcePath);
 	Candidate.RoughnessTexture = FindRoughnessTexture(CurrentMaterial, Candidate.RoughnessSourcePath);
 	Candidate.MetallicTexture = FindMetallicTexture(CurrentMaterial, Candidate.MetallicSourcePath);
@@ -3444,6 +3471,10 @@ FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMateria
 
 	Result.Instance = Instance;
 	Result.Message = ConvertMessage.IsEmpty() ? FString::Printf(TEXT("已接管材质槽：%s"), *Instance->GetName()) : ConvertMessage;
+	if (Candidate.bBaseColorNeedsBake)
+	{
+		Result.Message += TEXT("；注意：原材质基础色由多张贴图/节点混合，目前未烘焙最终颜色，只提取最优基础色贴图。");
+	}
 	Result.bCreatedOrUpdatedInstance = true;
 	Result.bAssignedToSlot = true;
 	return Result;
@@ -3620,6 +3651,7 @@ void FPBRSceneMaterialReplacer::ScanCurrentLevel(TArray<TSharedPtr<FPBRSceneMate
 					Candidate->OutputMaterialName = TEXT("MI_PBRSR_") + Candidate->MaterialName;
 					Candidate->MaterialPath = Material->GetPathName();
 					Candidate->InheritedBaseColor = GetInheritedBaseColor(Material);
+					Candidate->bBaseColorNeedsBake = DoesBaseColorNeedMaterialBake(Material);
 					FLinearColor DiffuseOverrideColor;
 					if (TryGetDiffuseColorFromInstanceOverrides(Material, DiffuseOverrideColor))
 					{
