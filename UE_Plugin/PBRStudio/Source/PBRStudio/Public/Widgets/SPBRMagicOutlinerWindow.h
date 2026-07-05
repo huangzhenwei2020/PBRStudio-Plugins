@@ -117,7 +117,6 @@ private:
 	TSharedRef<SWidget> BuildNameCheckPanel();
 	TSharedRef<SWidget> BuildCheckedListPanel();
 	TSharedRef<SWidget> BuildSelectedMaterialPanel();
-	TSharedRef<SWidget> BuildSelectedMaterialEditorPanel();
 	TSharedRef<SWidget> BuildMaterialParameterPopupContent();
 	TSharedRef<SWidget> BuildEditableMaterialTypeMenu();
 	TSharedRef<SWidget> BuildMaterialParameterControl(const struct FPBRMagicEditableMaterialParameter& Parameter);

@@ -2673,114 +2673,18 @@ private:
 	void DrawMaterialControls(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicTheme& Theme) const
 	{
 		DrawPanelSurface(OutDrawElements, Geometry, Layer, Position, Size, Theme.PanelRaised, 6.0f, Theme.Border, 1.0f);
-		DrawText(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, 10.0f), TEXT("材质直接调整"), FAppStyle::GetFontStyle("NormalFontBold"), Theme.Text);
+		DrawText(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, 10.0f), TEXT("材质调参"), FAppStyle::GetFontStyle("NormalFontBold"), Theme.Text);
 		if (!OwnerWindow->GetEditableMaterialInstance())
 		{
-			DrawTextInRect(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, 36.0f), Size.X - 24.0f, TEXT("点材质槽右侧“调参”后可直接改当前材质。"), FAppStyle::GetFontStyle("SmallFont"), Theme.TextMuted);
+			DrawTextInRect(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, 36.0f), Size.X - 24.0f, TEXT("点材质槽右侧“调参”打开弹窗编辑当前材质。"), FAppStyle::GetFontStyle("SmallFont"), Theme.TextMuted);
 			return;
 		}
 
 		DrawTextInRect(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, 34.0f), Size.X - 24.0f, OwnerWindow->GetEditableMaterialNameText().ToString(), FAppStyle::GetFontStyle("SmallFont"), Theme.TextMuted);
-		DrawButton(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, 58.0f), FVector2D(40.0f, 26.0f), TEXT("<"), TEXT(""), EPBRMagicPaintHitAction::MaterialTypePrevious, Theme);
-		DrawRoundedBox(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(58.0f, 58.0f), FVector2D(Size.X - 116.0f, 26.0f), Theme.Background, 4.0f, Theme.Border, 1.0f);
-		DrawTextInRect(OutDrawElements, Geometry, Layer + 2, Position + FVector2D(66.0f, 64.0f), Size.X - 132.0f, OwnerWindow->GetEditableMaterialTypeText().ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Selection);
-		DrawButton(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(Size.X - 52.0f, 58.0f), FVector2D(40.0f, 26.0f), TEXT(">"), TEXT(""), EPBRMagicPaintHitAction::MaterialTypeNext, Theme);
-
-		float RowY = Position.Y + 100.0f;
-		const float RowH = 27.0f;
-		const int32 MaxRows = FMath::Clamp(FMath::FloorToInt((Size.Y - 112.0f) / RowH), 0, 7);
-		const TArray<FPBRMagicDynamicMaterialParameter> DynamicParameters = OwnerWindow->CollectEditableDynamicMaterialParameters();
-		TArray<FPBRMagicDynamicMaterialParameter> VisibleDynamicParameters;
-		VisibleDynamicParameters.Reserve(DynamicParameters.Num());
-		for (const FPBRMagicDynamicMaterialParameter& Parameter : DynamicParameters)
-		{
-			if (OwnerWindow->IsDynamicMaterialParameterVisible(Parameter))
-			{
-				VisibleDynamicParameters.Add(Parameter);
-			}
-		}
-
-		if (VisibleDynamicParameters.Num() > 0)
-		{
-			for (int32 Index = 0; Index < FMath::Min(MaxRows, VisibleDynamicParameters.Num()); ++Index)
-			{
-				const FPBRMagicDynamicMaterialParameter& Parameter = VisibleDynamicParameters[Index];
-				const FVector2D RowPos(Position.X + 12.0f, RowY);
-				const FVector2D RowSize(Size.X - 24.0f, RowH);
-				switch (Parameter.Kind)
-				{
-				case EPBRMagicDynamicMaterialParameterKind::Scalar:
-					DrawDynamicMaterialScalarStepper(OutDrawElements, Geometry, Layer + 1, RowPos, RowSize, Parameter, Theme);
-					break;
-				case EPBRMagicDynamicMaterialParameterKind::Switch:
-					DrawDynamicMaterialSwitchRow(OutDrawElements, Geometry, Layer + 1, RowPos, RowSize, Parameter, Theme);
-					break;
-				case EPBRMagicDynamicMaterialParameterKind::Color:
-					DrawDynamicMaterialColorRow(OutDrawElements, Geometry, Layer + 1, RowPos, RowSize, Parameter, Theme);
-					break;
-				case EPBRMagicDynamicMaterialParameterKind::Texture:
-					DrawDynamicMaterialTextureRow(OutDrawElements, Geometry, Layer + 1, RowPos, RowSize, Parameter, Theme);
-					break;
-				}
-				RowY += RowH;
-			}
-
-			if (VisibleDynamicParameters.Num() > MaxRows && MaxRows > 0)
-			{
-				DrawTextInRect(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, Size.Y - 25.0f), Size.X - 24.0f, FString::Printf(TEXT("还有 %d 个参数，切换经典 UI 可完整编辑"), VisibleDynamicParameters.Num() - MaxRows), FAppStyle::GetFontStyle("SmallFont"), Theme.TextMuted);
-			}
-			return;
-		}
-
-		TArray<const FPBRMagicEditableMaterialParameter*> PriorityParameters;
-		TArray<const FPBRMagicEditableMaterialParameter*> CoreParameters;
-		const EPBRMaterialType MaterialType = OwnerWindow->GetEditableMaterialType();
-		for (const FPBRMagicEditableMaterialParameter& Parameter : GetMagicEditableMaterialParameters())
-		{
-			if (!Parameter.bShowOnPaintSurface || !IsMagicEditableParameterVisibleForType(Parameter, MaterialType))
-			{
-				continue;
-			}
-
-			const bool bTypeSpecific = Parameter.TypeMask != MagicEditableMaterialAllTypesMask;
-			if (bTypeSpecific)
-			{
-				PriorityParameters.Add(&Parameter);
-			}
-			else
-			{
-				CoreParameters.Add(&Parameter);
-			}
-		}
-
-		TArray<const FPBRMagicEditableMaterialParameter*> VisibleParameters;
-		VisibleParameters.Append(PriorityParameters);
-		VisibleParameters.Append(CoreParameters);
-
-		for (int32 Index = 0; Index < FMath::Min(MaxRows, VisibleParameters.Num()); ++Index)
-		{
-			const FPBRMagicEditableMaterialParameter* Parameter = VisibleParameters[Index];
-			if (!Parameter)
-			{
-				continue;
-			}
-
-			const FVector2D RowPos(Position.X + 12.0f, RowY);
-			const FVector2D RowSize(Size.X - 24.0f, RowH);
-			switch (Parameter->Kind)
-			{
-			case EPBRMagicEditableMaterialParameterKind::Scalar:
-				DrawMaterialScalarStepper(OutDrawElements, Geometry, Layer + 1, RowPos, RowSize, *Parameter, Theme);
-				break;
-			case EPBRMagicEditableMaterialParameterKind::Switch:
-				DrawMaterialSwitchRow(OutDrawElements, Geometry, Layer + 1, RowPos, RowSize, *Parameter, Theme);
-				break;
-			case EPBRMagicEditableMaterialParameterKind::Color:
-				DrawMaterialColorRow(OutDrawElements, Geometry, Layer + 1, RowPos, RowSize, *Parameter, Theme);
-				break;
-			}
-			RowY += RowH;
-		}
+		DrawRoundedBox(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, 58.0f), FVector2D(Size.X - 24.0f, 26.0f), Theme.Background, 4.0f, Theme.Border, 1.0f);
+		DrawTextInRect(OutDrawElements, Geometry, Layer + 2, Position + FVector2D(20.0f, 64.0f), Size.X - 40.0f, OwnerWindow->GetEditableMaterialTypeText().ToString(), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Selection);
+		DrawButton(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, 96.0f), FVector2D(Size.X - 24.0f, 30.0f), TEXT("打开调参弹窗"), TEXT(""), EPBRMagicPaintHitAction::AdjustMaterial, Theme);
+		DrawTextInRect(OutDrawElements, Geometry, Layer + 1, Position + FVector2D(12.0f, 138.0f), Size.X - 24.0f, TEXT("所有材质参数、贴图、颜色和类型切换都在弹窗中统一调整。"), FAppStyle::GetFontStyle("SmallFont"), Theme.TextMuted);
 	}
 
 	void DrawLightControls(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicTheme& Theme) const
@@ -4907,174 +4811,11 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildSelectedMaterialPanel()
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
 			[
-				BuildSelectedMaterialEditorPanel()
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
-			[
 				SNew(STextBlock)
 				.Text(PBRText(TEXT("MaterialReplaceHint"), TEXT("拖入其它材质到左侧材质行，可替换场景中所有使用旧材质的材质槽；点“调参”可把当前槽位接管成 PBRStudio 可编辑材质。"), TEXT("Drop another material onto the material row to replace every matching scene slot. Use Adjust to make the current slot an editable PBRStudio material.")))
 				.AutoWrapText(true)
 				.Font(FAppStyle::GetFontStyle("SmallFont"))
 				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
-			]
-		];
-}
-
-TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildSelectedMaterialEditorPanel()
-{
-	auto MakeHeaderText = [this](const FText& Text)
-	{
-		return SNew(STextBlock)
-			.Text(Text)
-			.Font(FAppStyle::GetFontStyle("SmallFontBold"))
-			.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Text"))); });
-	};
-
-	TSharedRef<SVerticalBox> ParameterBox = SNew(SVerticalBox);
-	const TArray<FPBRMagicDynamicMaterialParameter> DynamicParameters = CollectEditableDynamicMaterialParameters();
-	if (DynamicParameters.Num() > 0)
-	{
-		FString LastGroupName;
-		TArray<FPBRMagicDynamicMaterialParameter> GroupParameters;
-		auto FlushDynamicGroup = [this, &ParameterBox, &LastGroupName, &GroupParameters]()
-		{
-			if (GroupParameters.Num() == 0)
-			{
-				return;
-			}
-
-			ParameterBox->AddSlot()
-			.AutoHeight()
-			.Padding(0, 8, 0, 4)
-			[
-				BuildDynamicMaterialParameterGroup(LastGroupName, GroupParameters)
-			];
-			GroupParameters.Reset();
-		};
-
-		for (const FPBRMagicDynamicMaterialParameter& Parameter : DynamicParameters)
-		{
-			if (Parameter.Group != LastGroupName)
-			{
-				FlushDynamicGroup();
-				LastGroupName = Parameter.Group;
-			}
-			GroupParameters.Add(Parameter);
-		}
-		FlushDynamicGroup();
-	}
-	else
-	{
-		FString LastGroupKey;
-		for (const FPBRMagicEditableMaterialParameter& Parameter : GetMagicEditableMaterialParameters())
-		{
-			const FString GroupKey(Parameter.GroupKey);
-			if (GroupKey != LastGroupKey)
-			{
-				LastGroupKey = GroupKey;
-				ParameterBox->AddSlot()
-				.AutoHeight()
-				.Padding(0, 8, 0, 4)
-				[
-					SNew(STextBlock)
-					.Visibility_Lambda([this, GroupKey]()
-					{
-						return HasMagicEditableGroupVisibleForType(*GroupKey, GetEditableMaterialType()) ? EVisibility::Visible : EVisibility::Collapsed;
-					})
-					.Text(Parameter.GetGroupLabel())
-					.Font(FAppStyle::GetFontStyle("SmallFontBold"))
-					.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Selection"))); })
-				];
-			}
-
-			ParameterBox->AddSlot()
-			.AutoHeight()
-			.Padding(0, 0, 0, 4)
-			[
-				SNew(SBox)
-				.Visibility_Lambda([this, TypeMask = Parameter.TypeMask]()
-				{
-					return (TypeMask & MagicEditableMaterialTypeBit(GetEditableMaterialType())) != 0 ? EVisibility::Visible : EVisibility::Collapsed;
-				})
-				[
-					BuildMaterialParameterControl(Parameter)
-				]
-			];
-		}
-	}
-
-	return SNew(SBorder)
-		.Visibility(this, &SPBRMagicOutlinerWindow::GetEditableMaterialPanelVisibility)
-		.BorderImage(FAppStyle::Get().GetBrush("Brushes.Recessed"))
-		.BorderBackgroundColor_Lambda([this]() { return GetThemeColor(TEXT("PanelRaised")); })
-		.Padding(8)
-		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-				[
-					SNew(SVerticalBox)
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						MakeHeaderText(PBRText(TEXT("MagicMaterialDirectAdjust"), TEXT("材质直接调整"), TEXT("Direct Material Adjust")))
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
-					[
-						SNew(STextBlock)
-						.Text(this, &SPBRMagicOutlinerWindow::GetEditableMaterialNameText)
-						.Font(FAppStyle::GetFontStyle("TinyText"))
-						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
-					]
-				]
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-				[
-					SNew(STextBlock)
-					.Text(this, &SPBRMagicOutlinerWindow::GetEditableMaterialSlotText)
-					.Font(FAppStyle::GetFontStyle("TinyText"))
-					.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Selection"))); })
-				]
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
-				[
-					SNew(STextBlock)
-					.Text(PBRText(TEXT("MagicMaterialTypeLabel"), TEXT("材质类型"), TEXT("Material Type")))
-					.Font(FAppStyle::GetFontStyle("SmallFont"))
-					.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
-				]
-				+ SHorizontalBox::Slot().FillWidth(1.0f)
-				[
-					SNew(SComboButton)
-					.ButtonStyle(FAppStyle::Get(), "FlatButton")
-					.ContentPadding(FMargin(8, 4))
-					.MenuContent()
-					[
-						BuildEditableMaterialTypeMenu()
-					]
-					.ButtonContent()
-					[
-						SNew(STextBlock)
-						.Text(this, &SPBRMagicOutlinerWindow::GetEditableMaterialTypeText)
-						.Font(FAppStyle::GetFontStyle("SmallFontBold"))
-						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Text"))); })
-					]
-				]
-			]
-			+ SVerticalBox::Slot().AutoHeight()
-			[
-				SNew(SBox)
-				.HeightOverride(360.0f)
-				[
-					SNew(SScrollBox)
-					+ SScrollBox::Slot()
-					[
-						ParameterBox
-					]
-				]
 			]
 		];
 }
