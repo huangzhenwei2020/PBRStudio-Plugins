@@ -652,7 +652,11 @@ static FPBRMagicAISuggestion PBRMagicBuildLocalAISuggestion(UMaterialInstanceCon
 		Suggestion.MaterialType = EPBRMaterialType::Fabric;
 		Suggestion.Scalars.Add(FPBRMaterialParameters::RoughnessValue, 0.86f);
 		Suggestion.Scalars.Add(FPBRMaterialParameters::SpecularLevel, 0.18f);
-		Suggestion.Scalars.Add(FPBRMaterialParameters::FabricFuzzStrength, 0.42f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::MetallicValue, 0.0f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::FabricFuzzStrength, 0.14f);
+		Suggestion.Switches.Add(FPBRMaterialParameters::UseMetallicTexture, false);
+		Suggestion.Switches.Add(FPBRMaterialParameters::UseEmissiveTexture, false);
 		Suggestion.Summary = TEXT("AI 本地规则判断为布料，已建议高粗糙度和绒毛参数。");
 	}
 	else
@@ -677,6 +681,7 @@ static FString PBRMagicBuildRemoteAIUserText(UMaterialInstanceConstant* Instance
 	FString Text;
 	Text += TEXT("Analyze this Unreal Engine material and return ONLY a compact JSON object.\n");
 	Text += TEXT("You will receive texture thumbnails when available. Use the images first, then texture names and material names. Identify whether the surface is wood, stone, tile, fabric, leather, plastic, metal, transparent, glass, water, emissive, or standard PBR.\n");
+	Text += TEXT("Important: names like Fabric, Cotton, Twill, Cloth, Carpet, Rug, Textile, 布料, 织物, 地毯 strongly indicate Fabric. Gray roughness/mask textures are not metal evidence. Only choose Metal when a base color image/name clearly shows metal, steel, iron, aluminum, copper, brass, or chrome.\n");
 	Text += TEXT("Allowed material_type values: Standard, Wood, Stone, Tile, Fabric, Leather, Plastic, Metal, Transparent, Glass, Water, Emissive. Use Standard for grass, moss, plants, soil, sand, and ordinary non-metal PBR surfaces.\n");
 	Text += TEXT("JSON schema: {\"material_type\":\"Standard\",\"surface_label\":\"grass/vegetation\",\"confidence\":0.0-1.0,\"evidence\":\"short reason\",\"scalar_suggestions\":[{\"parameter\":\"粗糙度数值\",\"value\":0.82,\"min\":0,\"max\":1,\"reason\":\"...\"}],\"switch_suggestions\":[{\"parameter\":\"使用基础色贴图\",\"value\":true,\"reason\":\"...\"}],\"color_suggestions\":[{\"parameter\":\"基础色调\",\"rgba\":[1,1,1,1],\"reason\":\"...\"}]}.\n");
 	Text += TEXT("Prefer physically plausible parameters. Do not mark vegetation, grass, soil, brick, stone, wood, plastic, fabric, leather, glass, or water as Metal unless the evidence is clearly metallic.\n");
@@ -707,6 +712,28 @@ static FString PBRMagicBuildRemoteAIUserText(UMaterialInstanceConstant* Instance
 	Text += TEXT("Useful switch parameter names: 使用基础色贴图, 使用法线贴图, 使用粗糙度贴图, 使用高光贴图, 使用金属度贴图, 使用环境遮蔽贴图, 使用高度贴图, 使用透明贴图, 使用自发光贴图.\n");
 	Text += TEXT("Useful color parameter names: 基础色调, 自发光颜色, 织物绒毛颜色, 水颜色, 玻璃吸收颜色, 玻璃污渍颜色.\n");
 	return Text;
+}
+
+static int32 PBRMagicGetAITexturePriority(const FName& ParameterName, const FString& TextureName)
+{
+	const FString Text = (ParameterName.ToString() + TEXT(" ") + TextureName).ToLower();
+	if (Text.Contains(TEXT("base")) || Text.Contains(TEXT("albedo")) || Text.Contains(TEXT("diffuse")) || Text.Contains(TEXT("color")) || Text.Contains(TEXT("colour")) || Text.Contains(TEXT("基础色")) || Text.Contains(TEXT("颜色")))
+	{
+		return 0;
+	}
+	if (Text.Contains(TEXT("normal")) || Text.Contains(TEXT("nrm")) || Text.Contains(TEXT("法线")))
+	{
+		return 1;
+	}
+	if (Text.Contains(TEXT("opacity")) || Text.Contains(TEXT("alpha")) || Text.Contains(TEXT("透明")))
+	{
+		return 2;
+	}
+	if (Text.Contains(TEXT("rough")) || Text.Contains(TEXT("gloss")) || Text.Contains(TEXT("metal")) || Text.Contains(TEXT("spec")) || Text.Contains(TEXT("ao")) || Text.Contains(TEXT("mask")) || Text.Contains(TEXT("masks")) || Text.Contains(TEXT("粗糙")) || Text.Contains(TEXT("金属")) || Text.Contains(TEXT("遮蔽")))
+	{
+		return 100;
+	}
+	return 10;
 }
 
 static bool PBRMagicEncodeTextureDataUrl(UTexture2D* Texture, int32 MaxDimension, FString& OutDataUrl)
@@ -774,15 +801,17 @@ static TArray<FPBRMagicAIImagePayload> PBRMagicBuildRemoteAIImagePayloads(UMater
 	}
 
 	TSet<FString> AddedTextures;
+	struct FTextureCandidate
+	{
+		FMaterialParameterInfo Info;
+		UTexture2D* Texture = nullptr;
+		int32 Priority = 100;
+	};
+	TArray<FTextureCandidate> Candidates;
 	TMap<FMaterialParameterInfo, FMaterialParameterMetadata> TextureParameters;
 	Instance->GetAllParametersOfType(EMaterialParameterType::Texture, TextureParameters);
 	for (const TPair<FMaterialParameterInfo, FMaterialParameterMetadata>& Pair : TextureParameters)
 	{
-		if (Payloads.Num() >= 5)
-		{
-			break;
-		}
-
 		UTexture* Texture = nullptr;
 		if (!Instance->GetTextureParameterValue(Pair.Key, Texture) || !Texture)
 		{
@@ -794,7 +823,34 @@ static TArray<FPBRMagicAIImagePayload> PBRMagicBuildRemoteAIImagePayloads(UMater
 		{
 			continue;
 		}
+		const int32 Priority = PBRMagicGetAITexturePriority(Pair.Key.Name, Texture2D->GetName());
+		if (Priority >= 100)
+		{
+			continue;
+		}
+		Candidates.Add({ Pair.Key, Texture2D, Priority });
+	}
 
+	Candidates.Sort([](const FTextureCandidate& A, const FTextureCandidate& B)
+	{
+		if (A.Priority != B.Priority)
+		{
+			return A.Priority < B.Priority;
+		}
+		return A.Texture && B.Texture ? A.Texture->GetName() < B.Texture->GetName() : A.Texture != nullptr;
+	});
+
+	for (const FTextureCandidate& Candidate : Candidates)
+	{
+		if (Payloads.Num() >= 3)
+		{
+			break;
+		}
+		UTexture2D* Texture2D = Candidate.Texture;
+		if (!Texture2D)
+		{
+			continue;
+		}
 		const FString TexturePath = Texture2D->GetPathName();
 		if (AddedTextures.Contains(TexturePath))
 		{
@@ -802,13 +858,13 @@ static TArray<FPBRMagicAIImagePayload> PBRMagicBuildRemoteAIImagePayloads(UMater
 		}
 
 		FString DataUrl;
-		if (!PBRMagicEncodeTextureDataUrl(Texture2D, 256, DataUrl))
+		if (!PBRMagicEncodeTextureDataUrl(Texture2D, 768, DataUrl))
 		{
 			continue;
 		}
 
 		FPBRMagicAIImagePayload Payload;
-		Payload.Label = Pair.Key.Name.ToString();
+		Payload.Label = Candidate.Info.Name.ToString();
 		Payload.TextureName = Texture2D->GetName();
 		Payload.TexturePath = TexturePath;
 		Payload.DataUrl = MoveTemp(DataUrl);
@@ -865,7 +921,7 @@ static bool PBRMagicBuildRemoteAIRequestBody(const FPBRMagicAIProviderSettings& 
 			ImagePart->SetStringField(TEXT("type"), TEXT("image_url"));
 			TSharedRef<FJsonObject> ImageUrl = MakeShared<FJsonObject>();
 			ImageUrl->SetStringField(TEXT("url"), Image.DataUrl);
-			ImageUrl->SetStringField(TEXT("detail"), TEXT("low"));
+			ImageUrl->SetStringField(TEXT("detail"), TEXT("high"));
 			ImagePart->SetObjectField(TEXT("image_url"), ImageUrl);
 			ContentParts.Add(MakeShared<FJsonValueObject>(ImagePart));
 		}
@@ -1191,6 +1247,14 @@ static bool PBRMagicParseRemoteColor(const TSharedPtr<FJsonObject>& Object, FLin
 	return false;
 }
 
+static bool PBRMagicLooksLikeFabricText(const FString& Text)
+{
+	return PBRMagicTextHasAny(Text, {
+		TEXT("fabric"), TEXT("cotton"), TEXT("twill"), TEXT("cloth"), TEXT("carpet"), TEXT("rug"), TEXT("textile"),
+		TEXT("布"), TEXT("布料"), TEXT("织物"), TEXT("棉"), TEXT("地毯")
+	});
+}
+
 static bool PBRMagicTryRemoteAISuggestion(UMaterialInstanceConstant* Instance, const FPBRMagicAISuggestion& LocalSuggestion, FPBRMagicAISuggestion& OutSuggestion, FString& OutStatus)
 {
 	const FPBRMagicAIProviderSettings Settings = PBRMagicLoadAIProviderSettings();
@@ -1237,12 +1301,21 @@ static bool PBRMagicTryRemoteAISuggestion(UMaterialInstanceConstant* Instance, c
 		OutStatus = FString::Printf(TEXT("远端 AI 返回未知材质类型：%s，已使用本地规则。"), *TypeText);
 		return false;
 	}
+	const bool bCorrectedFabricMetal = RemoteType == EPBRMaterialType::Metal && PBRMagicLooksLikeFabricText(PBRMagicCollectMaterialAIText(Instance));
+	if (bCorrectedFabricMetal)
+	{
+		RemoteType = EPBRMaterialType::Fabric;
+	}
 
 	OutSuggestion = LocalSuggestion;
 	OutSuggestion.MaterialType = RemoteType;
 	OutSuggestion.Summary = FString::Printf(TEXT("远端 AI 建议为%s：%s"),
 		*GetMagicMaterialTypeLabel(RemoteType).ToString(),
 		*PBRMagicJsonStringField(Root, TEXT("evidence"), TEXT("已按接口返回参数应用")));
+	if (bCorrectedFabricMetal)
+	{
+		OutSuggestion.Summary += TEXT(" 已根据贴图/材质名称中的 Fabric/Cotton/地毯特征，将金属误判纠正为布料。");
+	}
 
 	const TArray<TSharedPtr<FJsonValue>>* Scalars = nullptr;
 	if (Root->TryGetArrayField(TEXT("scalar_suggestions"), Scalars) && Scalars)

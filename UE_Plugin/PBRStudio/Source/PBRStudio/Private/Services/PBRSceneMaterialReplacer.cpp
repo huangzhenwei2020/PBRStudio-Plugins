@@ -3221,7 +3221,20 @@ static void ApplySelectionMaterialTypeDefaults(UMaterialInstanceConstant* Instan
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::ClearCoatRoughness, 0.25f);
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Anisotropy, 0.0f);
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::FabricFuzzStrength, 0.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::BaseColorIntensity, 1.0f);
 	Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseEmissiveTemperature), false);
+	if (MaterialType != EPBRMaterialType::Metal)
+	{
+		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseMetallicTexture), false);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+	}
+	if (MaterialType != EPBRMaterialType::Emissive)
+	{
+		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseEmissiveTexture), false);
+		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::EmissiveColor, FLinearColor::Black);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::EmissiveIntensity, 0.0f);
+	}
 
 	switch (MaterialType)
 	{
@@ -3262,7 +3275,7 @@ static void ApplySelectionMaterialTypeDefaults(UMaterialInstanceConstant* Instan
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicValue, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
 		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::FabricFuzzColor, FLinearColor(0.6f, 0.58f, 0.52f, 1.0f));
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::FabricFuzzStrength, 0.42f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::FabricFuzzStrength, 0.14f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 1.0f);
 		break;
 	case EPBRMaterialType::Leather:

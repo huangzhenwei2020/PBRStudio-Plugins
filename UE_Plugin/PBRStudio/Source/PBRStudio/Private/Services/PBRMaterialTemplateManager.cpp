@@ -4951,7 +4951,7 @@ static bool BuildARMStyleTemplateGraph(UMaterial* Material, EPBRMaterialType Mat
 		FabricBase->A.Connect(0, BaseColorOutput);
 		FabricBase->B.Connect(0, FuzzColor);
 		BaseColorOutput = FabricBase;
-		EditorData->SubsurfaceColor.Connect(0, FabricFuzzColor);
+		EditorData->SubsurfaceColor.Connect(0, FuzzColor);
 	}
 	else if (MaterialType == EPBRMaterialType::Leather)
 	{
