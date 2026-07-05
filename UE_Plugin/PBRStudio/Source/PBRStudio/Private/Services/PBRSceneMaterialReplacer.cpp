@@ -1583,6 +1583,28 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 	}
 }
 
+static bool SyncSceneTextureUsageSwitches(UMaterialInstanceConstant* Instance)
+{
+	if (!Instance)
+	{
+		return false;
+	}
+
+	bool bChanged = false;
+	for (const FPBRSceneTextureParameterBinding& Binding : GetSceneTextureParameterBindings())
+	{
+		UTexture* Texture = nullptr;
+		Instance->GetTextureParameterValue(FMaterialParameterInfo(Binding.TextureParameterName), Texture);
+		const bool bShouldUseTexture = IsValidSceneSourceMigrationTexture(Texture);
+		if (ReadSceneStaticSwitchParameter(Instance, Binding.SwitchParameterName, false) != bShouldUseTexture)
+		{
+			Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(Binding.SwitchParameterName), bShouldUseTexture);
+			bChanged = true;
+		}
+	}
+	return bChanged;
+}
+
 static FString BuildSceneManagedInstancePackagePath(const FString& OutputRoot, const FString& OutputName)
 {
 	FString Root = OutputRoot.IsEmpty() ? FString(TEXT("/Game/PBRStudio/SceneReplaced")) : OutputRoot;
@@ -1684,6 +1706,7 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 		Candidate.Slots.Num() > 0 ? Candidate.Slots[0].Component.Get() : nullptr,
 		Candidate.Slots.Num() > 0 ? Candidate.Slots[0].MaterialIndex : INDEX_NONE,
 		Settings.OutputRoot);
+	SyncSceneTextureUsageSwitches(Instance);
 
 	if (!ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseBaseColorTexture, false))
 	{
@@ -3347,9 +3370,23 @@ FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMateria
 
 	if (UMaterialInstanceConstant* ExistingInstance = Cast<UMaterialInstanceConstant>(CurrentMaterial))
 	{
-		Result.Instance = ExistingInstance;
-		Result.Message = FString::Printf(TEXT("当前槽位已经是可编辑材质实例：%s"), *ExistingInstance->GetName());
-		return Result;
+		if (IsPBRStudioGeneratedMaterial(ExistingInstance))
+		{
+			const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRSyncEditableMaterialTextureSwitches", "PBRStudio Sync Editable Material Texture Switches"));
+			ExistingInstance->Modify();
+			if (SyncSceneTextureUsageSwitches(ExistingInstance))
+			{
+				ExistingInstance->InitStaticPermutation();
+				UMaterialEditingLibrary::UpdateMaterialInstance(ExistingInstance);
+				ExistingInstance->PostEditChange();
+				ExistingInstance->MarkPackageDirty();
+				RefreshPrimitiveAfterMaterialChange(Component, true);
+			}
+
+			Result.Instance = ExistingInstance;
+			Result.Message = FString::Printf(TEXT("当前槽位已经是可编辑材质实例：%s"), *ExistingInstance->GetName());
+			return Result;
+		}
 	}
 
 	FPBRSceneMaterialCandidate Candidate;
@@ -3523,10 +3560,16 @@ bool FPBRSceneMaterialReplacer::SetTextureParameterForSlot(UPrimitiveComponent* 
 	const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRSetSelectedMaterialTexture", "PBRStudio Set Selected Material Texture"));
 	Instance->Modify();
 	Instance->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(ParameterName), Texture);
+	const FName SwitchParameterName = GetSceneTextureSwitchParameterName(ParameterName);
+	if (!SwitchParameterName.IsNone())
+	{
+		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(SwitchParameterName), Texture != nullptr);
+		Instance->InitStaticPermutation();
+	}
 	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
 	Instance->PostEditChange();
 	Instance->MarkPackageDirty();
-	RefreshPrimitiveAfterMaterialChange(Component, false);
+	RefreshPrimitiveAfterMaterialChange(Component, !SwitchParameterName.IsNone());
 	OutMessage = FString::Printf(TEXT("已更新贴图：%s"), *ParameterName.ToString());
 	return true;
 }
