@@ -119,6 +119,7 @@ private:
 	TSharedRef<SWidget> BuildSelectedMaterialPanel();
 	TSharedRef<SWidget> BuildMaterialParameterPopupContent();
 	TSharedRef<SWidget> BuildEditableMaterialTypeMenu();
+	TSharedRef<SWidget> BuildMaterialAISettingsContent();
 	TSharedRef<SWidget> BuildMaterialParameterControl(const struct FPBRMagicEditableMaterialParameter& Parameter);
 	TArray<FPBRMagicDynamicMaterialParameter> CollectEditableDynamicMaterialParameters() const;
 	bool IsDynamicMaterialParameterVisible(const FPBRMagicDynamicMaterialParameter& Parameter) const;
@@ -224,6 +225,8 @@ private:
 	void CommitEditableMaterialTexture(const FName& ParameterName, UTexture* Texture);
 	void OpenEditableMaterialColorPicker(const FName& ParameterName, const FLinearColor& DefaultValue);
 	void StepEditableMaterialScalar(const FName& ParameterName, float DeltaValue, float MinValue, float MaxValue, float DefaultValue);
+	FReply OnApplyAIMaterialSuggestionClicked();
+	FReply OnMaterialAISettingsClicked();
 	void SelectEditableMaterialType(EPBRMaterialType MaterialType);
 	void CycleEditableMaterialType(int32 Direction);
 	int32 ReplaceMaterialItem(TSharedPtr<FPBRMagicOutlinerItem> Item, UMaterialInterface* NewMaterial);
@@ -304,6 +307,11 @@ private:
 	TMap<TWeakObjectPtr<UMaterialInterface>, TSharedPtr<FPBRMagicOutlinerItem>> MaterialItemsByMaterial;
 	TSharedPtr<FAssetThumbnailPool> MaterialThumbnailPool;
 	TWeakPtr<class SWindow> MaterialParameterWindow;
+	TWeakPtr<class SWindow> MaterialAISettingsWindow;
+	TSharedPtr<class SEditableTextBox> AIProviderBox;
+	TSharedPtr<class SEditableTextBox> AIEndpointBox;
+	TSharedPtr<class SEditableTextBox> AIModelBox;
+	TSharedPtr<class SEditableTextBox> AIKeyBox;
 	TMap<FString, TSharedPtr<FAssetThumbnail>> MaterialThumbnailCache;
 	TMap<FString, TSharedPtr<FSlateDynamicImageBrush>> MaterialThumbnailBrushCache;
 	TMap<FString, TSharedPtr<FSlateDynamicImageBrush>> TextureThumbnailBrushCache;

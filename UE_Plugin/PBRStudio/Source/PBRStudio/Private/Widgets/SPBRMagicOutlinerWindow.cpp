@@ -16,6 +16,7 @@
 #include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "DragAndDrop/AssetDragDropOp.h"
+#include "Dom/JsonObject.h"
 #include "Editor.h"
 #include "Editor/EditorEngine.h"
 #include "Engine/BlueprintGeneratedClass.h"
@@ -30,7 +31,11 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Commands/InputBindingManager.h"
 #include "GameFramework/Actor.h"
+#include "HttpManager.h"
+#include "HttpModule.h"
 #include "IContentBrowserSingleton.h"
+#include "Interfaces/IHttpRequest.h"
+#include "Interfaces/IHttpResponse.h"
 #include "Materials/Material.h"
 #include "InputCoreTypes.h"
 #include "MaterialShared.h"
@@ -51,6 +56,8 @@
 #include "Services/PBRSceneMaterialReplacer.h"
 #include "Styling/AppStyle.h"
 #include "ScopedTransaction.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Colors/SColorBlock.h"
@@ -96,6 +103,15 @@ struct FPBRMagicMaterialTypeOption
 	const TCHAR* Key;
 	const TCHAR* Chinese;
 	const TCHAR* English;
+};
+
+struct FPBRMagicAISuggestion
+{
+	EPBRMaterialType MaterialType = EPBRMaterialType::Standard;
+	FString Summary;
+	TMap<FName, float> Scalars;
+	TMap<FName, FLinearColor> Colors;
+	TMap<FName, bool> Switches;
 };
 
 static const TArray<FPBRMagicMaterialTypeOption>& GetMagicMaterialTypeOptions()
@@ -183,6 +199,768 @@ static EPBRMaterialType GuessMagicMaterialTypeFromMaterial(UMaterialInterface* M
 		return EPBRMaterialType::Emissive;
 	}
 	return EPBRMaterialType::Standard;
+}
+
+static bool PBRMagicTextHasAny(const FString& Text, std::initializer_list<const TCHAR*> Tokens)
+{
+	for (const TCHAR* Token : Tokens)
+	{
+		if (Text.Contains(Token, ESearchCase::IgnoreCase))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+static FString PBRMagicCollectMaterialAIText(UMaterialInstanceConstant* Instance)
+{
+	if (!Instance)
+	{
+		return FString();
+	}
+
+	FString Text = Instance->GetName();
+	if (Instance->Parent)
+	{
+		Text += TEXT(" ");
+		Text += Instance->Parent->GetName();
+	}
+
+	TMap<FMaterialParameterInfo, FMaterialParameterMetadata> TextureParameters;
+	Instance->GetAllParametersOfType(EMaterialParameterType::Texture, TextureParameters);
+	for (const TPair<FMaterialParameterInfo, FMaterialParameterMetadata>& Pair : TextureParameters)
+	{
+		Text += TEXT(" ");
+		Text += Pair.Key.Name.ToString();
+		UTexture* Texture = nullptr;
+		if (Instance->GetTextureParameterValue(Pair.Key, Texture) && Texture)
+		{
+			Text += TEXT(" ");
+			Text += Texture->GetName();
+			Text += TEXT(" ");
+			Text += Texture->GetPathName();
+		}
+	}
+	return Text;
+}
+
+static FString PBRMagicGetAIConfigString(const TCHAR* Key, const TCHAR* DefaultValue)
+{
+	TSharedPtr<FJsonObject> Config;
+	if (FPBRDataStore::LoadConfig(Config) && Config.IsValid())
+	{
+		FString Value;
+		if (Config->TryGetStringField(Key, Value))
+		{
+			return Value;
+		}
+	}
+	return DefaultValue;
+}
+
+static void PBRMagicSaveAIConfigString(const TCHAR* Key, const FString& Value)
+{
+	TSharedPtr<FJsonObject> Config;
+	if (!FPBRDataStore::LoadConfig(Config) || !Config.IsValid())
+	{
+		Config = MakeShared<FJsonObject>();
+	}
+	Config->SetStringField(Key, Value);
+	FPBRDataStore::SaveConfig(Config);
+}
+
+struct FPBRMagicAIProviderSettings
+{
+	FString Provider = TEXT("LocalRules");
+	FString EndpointUrl;
+	FString Model = TEXT("gpt-4.1-mini");
+	FString ApiKeyOrEnvironmentVariable = TEXT("PBRSTUDIO_AI_API_KEY");
+	float RequestTimeoutSeconds = 20.0f;
+
+	bool ShouldUseRemoteModel() const
+	{
+		return Provider.Equals(TEXT("OpenAICompatible"), ESearchCase::IgnoreCase) && !EndpointUrl.IsEmpty() && !Model.IsEmpty();
+	}
+};
+
+static FPBRMagicAIProviderSettings PBRMagicLoadAIProviderSettings()
+{
+	FPBRMagicAIProviderSettings Settings;
+	Settings.Provider = PBRMagicGetAIConfigString(TEXT("material_ai_provider"), TEXT("LocalRules"));
+	Settings.EndpointUrl = PBRMagicGetAIConfigString(TEXT("material_ai_endpoint"), TEXT(""));
+	Settings.Model = PBRMagicGetAIConfigString(TEXT("material_ai_model"), TEXT("gpt-4.1-mini"));
+	Settings.ApiKeyOrEnvironmentVariable = PBRMagicGetAIConfigString(TEXT("material_ai_api_key_or_env"), TEXT("PBRSTUDIO_AI_API_KEY"));
+	return Settings;
+}
+
+static FString PBRMagicNormalizeAIEndpointUrl(FString EndpointUrl)
+{
+	EndpointUrl.TrimStartAndEndInline();
+	while (EndpointUrl.EndsWith(TEXT("/")))
+	{
+		EndpointUrl.LeftChopInline(1);
+	}
+	if (EndpointUrl.EndsWith(TEXT("/chat/completions"), ESearchCase::IgnoreCase))
+	{
+		return EndpointUrl;
+	}
+	if (EndpointUrl.EndsWith(TEXT("/v1"), ESearchCase::IgnoreCase) || EndpointUrl.EndsWith(TEXT("/v4"), ESearchCase::IgnoreCase))
+	{
+		return EndpointUrl + TEXT("/chat/completions");
+	}
+	return EndpointUrl;
+}
+
+static bool PBRMagicLooksLikeInlineApiKey(const FString& Value)
+{
+	const FString Trimmed = Value.TrimStartAndEnd();
+	return Trimmed.StartsWith(TEXT("sk-"), ESearchCase::IgnoreCase) ||
+		Trimmed.StartsWith(TEXT("glm-"), ESearchCase::IgnoreCase) ||
+		Trimmed.Contains(TEXT("."));
+}
+
+static FString PBRMagicResolveAIApiKey(const FPBRMagicAIProviderSettings& Settings)
+{
+	const FString KeyField = Settings.ApiKeyOrEnvironmentVariable.TrimStartAndEnd();
+	if (KeyField.IsEmpty())
+	{
+		return FString();
+	}
+	const FString EnvironmentValue = FPlatformMisc::GetEnvironmentVariable(*KeyField).TrimStartAndEnd();
+	if (!EnvironmentValue.IsEmpty())
+	{
+		return EnvironmentValue;
+	}
+	return PBRMagicLooksLikeInlineApiKey(KeyField) ? KeyField : FString();
+}
+
+static FString PBRMagicJsonStringField(const TSharedPtr<FJsonObject>& Object, const TCHAR* FieldName, const FString& Fallback = FString())
+{
+	if (!Object.IsValid())
+	{
+		return Fallback;
+	}
+	FString Value;
+	return Object->TryGetStringField(FieldName, Value) ? Value : Fallback;
+}
+
+static float PBRMagicJsonNumberField(const TSharedPtr<FJsonObject>& Object, const TCHAR* FieldName, float Fallback)
+{
+	if (!Object.IsValid())
+	{
+		return Fallback;
+	}
+	double Value = 0.0;
+	return Object->TryGetNumberField(FieldName, Value) ? static_cast<float>(Value) : Fallback;
+}
+
+static bool PBRMagicJsonBoolField(const TSharedPtr<FJsonObject>& Object, const TCHAR* FieldName, bool bFallback)
+{
+	if (!Object.IsValid())
+	{
+		return bFallback;
+	}
+	bool bValue = false;
+	return Object->TryGetBoolField(FieldName, bValue) ? bValue : bFallback;
+}
+
+static FString PBRMagicNormalizeParameterKey(FString Text)
+{
+	Text.ToLowerInline();
+	const TCHAR Separators[] = { TCHAR('_'), TCHAR('-'), TCHAR('.'), TCHAR('/'), TCHAR('\\'), TCHAR(' '), TCHAR(':') };
+	for (const TCHAR Separator : Separators)
+	{
+		Text.ReplaceCharInline(Separator, TCHAR(' '));
+	}
+	Text.ReplaceInline(TEXT("："), TEXT(" "));
+	Text.ReplaceInline(TEXT(" "), TEXT(""));
+	return Text;
+}
+
+static void PBRMagicAddParameterAlias(TMap<FString, FName>& Aliases, const FName& ParameterName, std::initializer_list<const TCHAR*> Names)
+{
+	Aliases.Add(PBRMagicNormalizeParameterKey(ParameterName.ToString()), ParameterName);
+	for (const TCHAR* Name : Names)
+	{
+		Aliases.Add(PBRMagicNormalizeParameterKey(Name), ParameterName);
+	}
+}
+
+static FName PBRMagicResolveScalarParameterName(const FString& RawName)
+{
+	static TMap<FString, FName> Aliases;
+	if (Aliases.Num() == 0)
+	{
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::BaseColorIntensity, { TEXT("基础色强度"), TEXT("base_color_intensity"), TEXT("basecolorintensity"), TEXT("albedo_intensity") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::NormalStrength, { TEXT("法线强度"), TEXT("normal_strength"), TEXT("normalstrength") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::RoughnessValue, { TEXT("粗糙度数值"), TEXT("roughness"), TEXT("roughness_value") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::RoughnessMultiplier, { TEXT("粗糙度强度"), TEXT("roughness_multiplier"), TEXT("roughness_strength") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::SpecularLevel, { TEXT("高光强度"), TEXT("specular"), TEXT("specular_level") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::MetallicValue, { TEXT("金属度数值"), TEXT("metallic"), TEXT("metallic_value"), TEXT("metalness") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::MetallicMultiplier, { TEXT("金属度强度"), TEXT("metallic_multiplier"), TEXT("metallic_strength") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::Opacity, { TEXT("透明度"), TEXT("opacity"), TEXT("transparency") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::HeightStrength, { TEXT("置换强度"), TEXT("高度强度"), TEXT("height_strength"), TEXT("displacement_strength") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::EmissiveIntensity, { TEXT("自发光强度"), TEXT("emissive_intensity"), TEXT("emission_strength") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::FabricFuzzStrength, { TEXT("织物绒毛强度"), TEXT("fabric_fuzz_strength"), TEXT("fuzz_strength") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::RefractionAmount, { TEXT("折射强度"), TEXT("refraction"), TEXT("refraction_amount"), TEXT("ior") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassFrostedStrength, { TEXT("毛玻璃强度"), TEXT("frosted_strength"), TEXT("glass_frosted_strength") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::WaterRippleStrength, { TEXT("水波强度"), TEXT("water_ripple_strength"), TEXT("ripple_strength") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::WaterRippleScale, { TEXT("水波缩放"), TEXT("water_ripple_scale"), TEXT("ripple_scale") });
+	}
+	if (const FName* ParameterName = Aliases.Find(PBRMagicNormalizeParameterKey(RawName)))
+	{
+		return *ParameterName;
+	}
+	return NAME_None;
+}
+
+static FName PBRMagicResolveSwitchParameterName(const FString& RawName)
+{
+	static TMap<FString, FName> Aliases;
+	if (Aliases.Num() == 0)
+	{
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::UseBaseColorTexture, { TEXT("使用基础色贴图"), TEXT("use_base_color_texture"), TEXT("use_albedo_texture") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::UseNormalTexture, { TEXT("使用法线贴图"), TEXT("use_normal_texture") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::UseRoughnessTexture, { TEXT("使用粗糙度贴图"), TEXT("use_roughness_texture") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::UseSpecularTexture, { TEXT("使用高光贴图"), TEXT("use_specular_texture") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::UseMetallicTexture, { TEXT("使用金属度贴图"), TEXT("use_metallic_texture") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::UseAOTexture, { TEXT("使用环境遮蔽贴图"), TEXT("use_ao_texture"), TEXT("use_occlusion_texture") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::UseOpacityTexture, { TEXT("使用透明贴图"), TEXT("use_opacity_texture"), TEXT("use_alpha_texture") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::UseHeightTexture, { TEXT("使用高度贴图"), TEXT("use_height_texture"), TEXT("use_displacement_texture") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::UseEmissiveTexture, { TEXT("使用自发光贴图"), TEXT("use_emissive_texture") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::UseWaterRippleTexture, { TEXT("使用水波贴图"), TEXT("use_water_ripple_texture") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::UseGlassDirtTexture, { TEXT("使用玻璃污渍贴图"), TEXT("use_glass_dirt_texture") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::UseGlassDistortionTexture, { TEXT("使用玻璃扭曲贴图"), TEXT("use_glass_distortion_texture") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::UseGlassFrostedTexture, { TEXT("使用毛玻璃贴图"), TEXT("use_glass_frosted_texture") });
+	}
+	if (const FName* ParameterName = Aliases.Find(PBRMagicNormalizeParameterKey(RawName)))
+	{
+		return *ParameterName;
+	}
+	return NAME_None;
+}
+
+static FName PBRMagicResolveColorParameterName(const FString& RawName)
+{
+	static TMap<FString, FName> Aliases;
+	if (Aliases.Num() == 0)
+	{
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::BaseColorTint, { TEXT("基础色调"), TEXT("base_color"), TEXT("base_color_tint"), TEXT("albedo_tint") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::EmissiveColor, { TEXT("自发光颜色"), TEXT("emissive_color"), TEXT("emission_color") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::FabricFuzzColor, { TEXT("织物绒毛颜色"), TEXT("fabric_fuzz_color"), TEXT("fuzz_color") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::WaterColor, { TEXT("水颜色"), TEXT("water_color") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassAbsorptionColor, { TEXT("玻璃吸收颜色"), TEXT("glass_absorption_color"), TEXT("absorption_color") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassDirtColor, { TEXT("玻璃污渍颜色"), TEXT("glass_dirt_color"), TEXT("dirt_color") });
+	}
+	if (const FName* ParameterName = Aliases.Find(PBRMagicNormalizeParameterKey(RawName)))
+	{
+		return *ParameterName;
+	}
+	return NAME_None;
+}
+
+static bool PBRMagicParseMaterialType(const FString& TypeText, EPBRMaterialType& OutType)
+{
+	const FString Key = PBRMagicNormalizeParameterKey(TypeText);
+	if (Key == TEXT("standard") || Key == TEXT("default") || Key == TEXT("pbr") || Key == TEXT("标准"))
+	{
+		OutType = EPBRMaterialType::Standard;
+		return true;
+	}
+	if (Key == TEXT("wood") || Key == TEXT("timber") || Key == TEXT("木材") || Key == TEXT("木纹"))
+	{
+		OutType = EPBRMaterialType::Wood;
+		return true;
+	}
+	if (Key == TEXT("stone") || Key == TEXT("marble") || Key == TEXT("granite") || Key == TEXT("石材") || Key == TEXT("大理石"))
+	{
+		OutType = EPBRMaterialType::Stone;
+		return true;
+	}
+	if (Key == TEXT("tile") || Key == TEXT("brick") || Key == TEXT("ceramic") || Key == TEXT("porcelain") || Key == TEXT("瓷砖") || Key == TEXT("砖"))
+	{
+		OutType = EPBRMaterialType::Tile;
+		return true;
+	}
+	if (Key == TEXT("fabric") || Key == TEXT("cloth") || Key == TEXT("carpet") || Key == TEXT("布艺") || Key == TEXT("织物") || Key == TEXT("地毯"))
+	{
+		OutType = EPBRMaterialType::Fabric;
+		return true;
+	}
+	if (Key == TEXT("leather") || Key == TEXT("皮革") || Key == TEXT("真皮"))
+	{
+		OutType = EPBRMaterialType::Leather;
+		return true;
+	}
+	if (Key == TEXT("plastic") || Key == TEXT("rubber") || Key == TEXT("pvc") || Key == TEXT("塑料") || Key == TEXT("橡胶"))
+	{
+		OutType = EPBRMaterialType::Plastic;
+		return true;
+	}
+	if (Key == TEXT("metal") || Key == TEXT("metallic") || Key == TEXT("steel") || Key == TEXT("金属") || Key == TEXT("不锈钢"))
+	{
+		OutType = EPBRMaterialType::Metal;
+		return true;
+	}
+	if (Key == TEXT("transparent") || Key == TEXT("translucent") || Key == TEXT("半透明") || Key == TEXT("透明"))
+	{
+		OutType = EPBRMaterialType::Transparent;
+		return true;
+	}
+	if (Key == TEXT("glass") || Key == TEXT("window") || Key == TEXT("玻璃") || Key == TEXT("窗"))
+	{
+		OutType = EPBRMaterialType::Glass;
+		return true;
+	}
+	if (Key == TEXT("water") || Key == TEXT("水") || Key == TEXT("水体") || Key == TEXT("水面"))
+	{
+		OutType = EPBRMaterialType::Water;
+		return true;
+	}
+	if (Key == TEXT("emissive") || Key == TEXT("emission") || Key == TEXT("light") || Key == TEXT("自发光") || Key == TEXT("发光"))
+	{
+		OutType = EPBRMaterialType::Emissive;
+		return true;
+	}
+	return false;
+}
+
+static FPBRMagicAISuggestion PBRMagicBuildLocalAISuggestion(UMaterialInstanceConstant* Instance)
+{
+	FPBRMagicAISuggestion Suggestion;
+	const FString Text = PBRMagicCollectMaterialAIText(Instance);
+
+	if (PBRMagicTextHasAny(Text, { TEXT("glass"), TEXT("玻璃"), TEXT("mirror"), TEXT("透明玻璃") }))
+	{
+		Suggestion.MaterialType = EPBRMaterialType::Glass;
+		Suggestion.Scalars.Add(FPBRMaterialParameters::Opacity, 0.35f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::RoughnessValue, 0.02f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::RefractionAmount, 1.45f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::SpecularLevel, 0.5f);
+		Suggestion.Summary = TEXT("AI 本地规则判断为玻璃，已建议透明、折射和低粗糙度。");
+	}
+	else if (PBRMagicTextHasAny(Text, { TEXT("water"), TEXT("pool"), TEXT("river"), TEXT("水"), TEXT("水面") }))
+	{
+		Suggestion.MaterialType = EPBRMaterialType::Water;
+		Suggestion.Scalars.Add(FPBRMaterialParameters::Opacity, 0.65f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::RoughnessValue, 0.05f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::RefractionAmount, 1.33f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::WaterRippleStrength, 0.8f);
+		Suggestion.Summary = TEXT("AI 本地规则判断为水材质，已建议透明、折射和水波参数。");
+	}
+	else if (PBRMagicTextHasAny(Text, { TEXT("emissive"), TEXT("emit"), TEXT("light"), TEXT("led"), TEXT("neon"), TEXT("自发光"), TEXT("灯带") }))
+	{
+		Suggestion.MaterialType = EPBRMaterialType::Emissive;
+		Suggestion.Scalars.Add(FPBRMaterialParameters::EmissiveIntensity, 2.0f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::RoughnessValue, 0.35f);
+		Suggestion.Colors.Add(FPBRMaterialParameters::EmissiveColor, FLinearColor::White);
+		Suggestion.Summary = TEXT("AI 本地规则判断为自发光材质，已建议发光强度和颜色。");
+	}
+	else if (PBRMagicTextHasAny(Text, { TEXT("metal"), TEXT("steel"), TEXT("iron"), TEXT("aluminum"), TEXT("金属"), TEXT("不锈钢"), TEXT("铝") }))
+	{
+		Suggestion.MaterialType = EPBRMaterialType::Metal;
+		Suggestion.Scalars.Add(FPBRMaterialParameters::MetallicValue, 1.0f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::MetallicMultiplier, 1.0f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::RoughnessValue, 0.28f);
+		Suggestion.Summary = TEXT("AI 本地规则判断为金属材质，已建议金属度和粗糙度。");
+	}
+	else if (PBRMagicTextHasAny(Text, { TEXT("wood"), TEXT("timber"), TEXT("oak"), TEXT("木"), TEXT("木纹"), TEXT("木材") }))
+	{
+		Suggestion.MaterialType = EPBRMaterialType::Wood;
+		Suggestion.Scalars.Add(FPBRMaterialParameters::RoughnessValue, 0.58f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::NormalStrength, 0.9f);
+		Suggestion.Summary = TEXT("AI 本地规则判断为木材，已建议木纹常用粗糙度和法线强度。");
+	}
+	else if (PBRMagicTextHasAny(Text, { TEXT("stone"), TEXT("marble"), TEXT("granite"), TEXT("rock"), TEXT("石"), TEXT("大理石"), TEXT("岩石") }))
+	{
+		Suggestion.MaterialType = EPBRMaterialType::Stone;
+		Suggestion.Scalars.Add(FPBRMaterialParameters::RoughnessValue, 0.48f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::NormalStrength, 1.18f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::HeightStrength, 0.08f);
+		Suggestion.Summary = TEXT("AI 本地规则判断为石材，已建议粗糙度、法线和高度强度。");
+	}
+	else if (PBRMagicTextHasAny(Text, { TEXT("tile"), TEXT("ceramic"), TEXT("瓷砖"), TEXT("地砖"), TEXT("墙砖") }))
+	{
+		Suggestion.MaterialType = EPBRMaterialType::Tile;
+		Suggestion.Scalars.Add(FPBRMaterialParameters::RoughnessValue, 0.38f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::SpecularLevel, 0.52f);
+		Suggestion.Summary = TEXT("AI 本地规则判断为瓷砖，已建议较低粗糙度和较高高光。");
+	}
+	else if (PBRMagicTextHasAny(Text, { TEXT("fabric"), TEXT("cloth"), TEXT("curtain"), TEXT("布"), TEXT("布料"), TEXT("窗帘") }))
+	{
+		Suggestion.MaterialType = EPBRMaterialType::Fabric;
+		Suggestion.Scalars.Add(FPBRMaterialParameters::RoughnessValue, 0.86f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::SpecularLevel, 0.18f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::FabricFuzzStrength, 0.42f);
+		Suggestion.Summary = TEXT("AI 本地规则判断为布料，已建议高粗糙度和绒毛参数。");
+	}
+	else
+	{
+		Suggestion.MaterialType = GuessMagicMaterialTypeFromMaterial(Instance);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::RoughnessValue, 0.5f);
+		Suggestion.Scalars.Add(FPBRMaterialParameters::NormalStrength, 1.0f);
+		Suggestion.Summary = TEXT("AI 本地规则未找到强特征，已按通用标准材质建议基础参数。");
+	}
+
+	return Suggestion;
+}
+
+static bool PBRMagicSerializeJsonObject(const TSharedRef<FJsonObject>& Object, FString& OutJson)
+{
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutJson);
+	return FJsonSerializer::Serialize(Object, Writer);
+}
+
+static FString PBRMagicBuildRemoteAIUserText(UMaterialInstanceConstant* Instance, const FPBRMagicAISuggestion& LocalSuggestion)
+{
+	FString Text;
+	Text += TEXT("Analyze this Unreal Engine material and return ONLY a compact JSON object.\n");
+	Text += TEXT("Allowed material_type values: Standard, Wood, Stone, Tile, Fabric, Leather, Plastic, Metal, Transparent, Glass, Water, Emissive. Use Standard for grass, moss, plants, soil, sand, and ordinary non-metal PBR surfaces.\n");
+	Text += TEXT("JSON schema: {\"material_type\":\"Standard\",\"surface_label\":\"grass/vegetation\",\"confidence\":0.0-1.0,\"evidence\":\"short reason\",\"scalar_suggestions\":[{\"parameter\":\"粗糙度数值\",\"value\":0.82,\"min\":0,\"max\":1,\"reason\":\"...\"}],\"switch_suggestions\":[{\"parameter\":\"使用基础色贴图\",\"value\":true,\"reason\":\"...\"}],\"color_suggestions\":[{\"parameter\":\"基础色调\",\"rgba\":[1,1,1,1],\"reason\":\"...\"}]}.\n");
+	Text += TEXT("Prefer physically plausible parameters. Do not mark vegetation, grass, soil, brick, stone, wood, plastic, fabric, leather, glass, or water as Metal unless the evidence is clearly metallic.\n");
+	Text += FString::Printf(TEXT("Local rule guess: %s\n"), *GetMagicMaterialTypeLabel(LocalSuggestion.MaterialType).ToString());
+
+	if (Instance)
+	{
+		Text += FString::Printf(TEXT("Material instance: %s\n"), *Instance->GetPathName());
+		if (Instance->Parent)
+		{
+			Text += FString::Printf(TEXT("Parent material: %s\n"), *Instance->Parent->GetPathName());
+		}
+
+		Text += TEXT("Textures:\n");
+		TMap<FMaterialParameterInfo, FMaterialParameterMetadata> TextureParameters;
+		Instance->GetAllParametersOfType(EMaterialParameterType::Texture, TextureParameters);
+		for (const TPair<FMaterialParameterInfo, FMaterialParameterMetadata>& Pair : TextureParameters)
+		{
+			UTexture* Texture = nullptr;
+			if (Instance->GetTextureParameterValue(Pair.Key, Texture) && Texture)
+			{
+				Text += FString::Printf(TEXT("- %s: %s (%s)\n"), *Pair.Key.Name.ToString(), *Texture->GetName(), *Texture->GetPathName());
+			}
+		}
+	}
+
+	Text += TEXT("Useful scalar parameter names: 基础色强度, 法线强度, 粗糙度数值, 粗糙度强度, 高光强度, 金属度数值, 金属度强度, 透明度, 置换强度, 自发光强度, 织物绒毛强度, 折射强度, 毛玻璃强度, 水波强度, 水波缩放.\n");
+	Text += TEXT("Useful switch parameter names: 使用基础色贴图, 使用法线贴图, 使用粗糙度贴图, 使用高光贴图, 使用金属度贴图, 使用环境遮蔽贴图, 使用高度贴图, 使用透明贴图, 使用自发光贴图.\n");
+	Text += TEXT("Useful color parameter names: 基础色调, 自发光颜色, 织物绒毛颜色, 水颜色, 玻璃吸收颜色, 玻璃污渍颜色.\n");
+	return Text;
+}
+
+static bool PBRMagicBuildRemoteAIRequestBody(const FPBRMagicAIProviderSettings& Settings, const FString& UserText, FString& OutBody)
+{
+	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
+	Root->SetStringField(TEXT("model"), Settings.Model);
+	Root->SetNumberField(TEXT("temperature"), 0.1);
+	Root->SetNumberField(TEXT("max_tokens"), 900);
+
+	TSharedRef<FJsonObject> ResponseFormat = MakeShared<FJsonObject>();
+	ResponseFormat->SetStringField(TEXT("type"), TEXT("json_object"));
+	Root->SetObjectField(TEXT("response_format"), ResponseFormat);
+
+	const FString Model = Settings.Model.TrimStartAndEnd().ToLower();
+	const FString Endpoint = Settings.EndpointUrl.TrimStartAndEnd().ToLower();
+	if (Model.StartsWith(TEXT("glm")) || Endpoint.Contains(TEXT("bigmodel.cn")) || Endpoint.Contains(TEXT("z.ai")))
+	{
+		TSharedRef<FJsonObject> Thinking = MakeShared<FJsonObject>();
+		Thinking->SetStringField(TEXT("type"), TEXT("disabled"));
+		Root->SetObjectField(TEXT("thinking"), Thinking);
+	}
+
+	TArray<TSharedPtr<FJsonValue>> Messages;
+	TSharedRef<FJsonObject> SystemMessage = MakeShared<FJsonObject>();
+	SystemMessage->SetStringField(TEXT("role"), TEXT("system"));
+	SystemMessage->SetStringField(TEXT("content"), TEXT("You are a senior real-time rendering material classifier. Return valid JSON only. Never invent unsupported material_type values."));
+	Messages.Add(MakeShared<FJsonValueObject>(SystemMessage));
+
+	TSharedRef<FJsonObject> UserMessage = MakeShared<FJsonObject>();
+	UserMessage->SetStringField(TEXT("role"), TEXT("user"));
+	UserMessage->SetStringField(TEXT("content"), UserText);
+	Messages.Add(MakeShared<FJsonValueObject>(UserMessage));
+	Root->SetArrayField(TEXT("messages"), Messages);
+
+	return PBRMagicSerializeJsonObject(Root, OutBody);
+}
+
+static bool PBRMagicPostRemoteAIRequest(const FPBRMagicAIProviderSettings& Settings, const FString& RequestBody, FString& OutResponse, FString& OutError)
+{
+	OutResponse.Reset();
+	OutError.Reset();
+	if (Settings.EndpointUrl.IsEmpty())
+	{
+		OutError = TEXT("远端 AI 未配置接口地址");
+		return false;
+	}
+
+	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
+	Request->SetURL(PBRMagicNormalizeAIEndpointUrl(Settings.EndpointUrl));
+	Request->SetVerb(TEXT("POST"));
+	Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+	Request->SetHeader(TEXT("Accept"), TEXT("application/json"));
+	const FString ApiKey = PBRMagicResolveAIApiKey(Settings);
+	if (!ApiKey.IsEmpty())
+	{
+		Request->SetHeader(TEXT("Authorization"), FString::Printf(TEXT("Bearer %s"), *ApiKey));
+	}
+	Request->SetContentAsString(RequestBody);
+
+	bool bCompleted = false;
+	bool bSucceeded = false;
+	int32 ResponseCode = 0;
+	Request->OnProcessRequestComplete().BindLambda([&bCompleted, &bSucceeded, &ResponseCode, &OutResponse, &OutError](FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+	{
+		bCompleted = true;
+		bSucceeded = bWasSuccessful && Response.IsValid();
+		ResponseCode = Response.IsValid() ? Response->GetResponseCode() : 0;
+		OutResponse = Response.IsValid() ? Response->GetContentAsString() : FString();
+		if (!bSucceeded || ResponseCode < 200 || ResponseCode >= 300)
+		{
+			OutError = ResponseCode == 0
+				? TEXT("远端 AI 请求失败：网络不可用或无法连接接口")
+				: FString::Printf(TEXT("远端 AI 请求失败：HTTP %d"), ResponseCode);
+			if (!OutResponse.IsEmpty())
+			{
+				OutError += FString::Printf(TEXT("，响应：%s"), *OutResponse.Left(300));
+			}
+		}
+	});
+
+	if (!Request->ProcessRequest())
+	{
+		OutError = TEXT("远端 AI 请求启动失败");
+		return false;
+	}
+
+	const double StartTime = FPlatformTime::Seconds();
+	const double TimeoutSeconds = FMath::Clamp(static_cast<double>(Settings.RequestTimeoutSeconds), 3.0, 120.0);
+	while (!bCompleted)
+	{
+		FHttpModule::Get().GetHttpManager().Tick(0.05f);
+		if (FPlatformTime::Seconds() - StartTime > TimeoutSeconds)
+		{
+			Request->CancelRequest();
+			OutError = FString::Printf(TEXT("远端 AI 请求超时：%.0f 秒"), TimeoutSeconds);
+			return false;
+		}
+		FPlatformProcess::Sleep(0.01f);
+	}
+
+	if (!bSucceeded || ResponseCode < 200 || ResponseCode >= 300)
+	{
+		if (OutError.IsEmpty())
+		{
+			OutError = ResponseCode == 0
+				? TEXT("远端 AI 请求失败：网络不可用或无法连接接口")
+				: FString::Printf(TEXT("远端 AI 请求失败：HTTP %d"), ResponseCode);
+		}
+		return false;
+	}
+
+	return true;
+}
+
+static bool PBRMagicExtractChatCompletionContent(const FString& ResponseBody, FString& OutContent, FString& OutError)
+{
+	TSharedPtr<FJsonObject> Root;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseBody);
+	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+	{
+		OutError = TEXT("远端 AI 响应不是合法 JSON");
+		return false;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* Choices = nullptr;
+	if (Root->TryGetArrayField(TEXT("choices"), Choices) && Choices && Choices->Num() > 0)
+	{
+		const TSharedPtr<FJsonObject> ChoiceObject = (*Choices)[0]->AsObject();
+		if (ChoiceObject.IsValid())
+		{
+			const TSharedPtr<FJsonObject>* MessageObject = nullptr;
+			if (ChoiceObject->TryGetObjectField(TEXT("message"), MessageObject) && MessageObject && MessageObject->IsValid())
+			{
+				if ((*MessageObject)->TryGetStringField(TEXT("content"), OutContent) && !OutContent.IsEmpty())
+				{
+					return true;
+				}
+			}
+		}
+	}
+
+	if (Root->TryGetStringField(TEXT("output_text"), OutContent) && !OutContent.IsEmpty())
+	{
+		return true;
+	}
+
+	OutError = TEXT("远端 AI 响应缺少 message.content");
+	return false;
+}
+
+static bool PBRMagicParseJsonObjectFromText(const FString& Text, TSharedPtr<FJsonObject>& OutObject, FString& OutError)
+{
+	FString JsonText = Text.TrimStartAndEnd();
+	const int32 FirstBrace = JsonText.Find(TEXT("{"));
+	const int32 LastBrace = JsonText.Find(TEXT("}"), ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+	if (FirstBrace != INDEX_NONE && LastBrace != INDEX_NONE && LastBrace > FirstBrace)
+	{
+		JsonText = JsonText.Mid(FirstBrace, LastBrace - FirstBrace + 1);
+	}
+
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonText);
+	if (!FJsonSerializer::Deserialize(Reader, OutObject) || !OutObject.IsValid())
+	{
+		OutError = TEXT("远端 AI 内容不是合法 JSON 对象");
+		return false;
+	}
+	return true;
+}
+
+static bool PBRMagicParseRemoteColor(const TSharedPtr<FJsonObject>& Object, FLinearColor& OutColor)
+{
+	const TArray<TSharedPtr<FJsonValue>>* RGBA = nullptr;
+	if (Object.IsValid() && Object->TryGetArrayField(TEXT("rgba"), RGBA) && RGBA && RGBA->Num() >= 3)
+	{
+		const float R = FMath::Clamp(static_cast<float>((*RGBA)[0]->AsNumber()), 0.0f, 1.0f);
+		const float G = FMath::Clamp(static_cast<float>((*RGBA)[1]->AsNumber()), 0.0f, 1.0f);
+		const float B = FMath::Clamp(static_cast<float>((*RGBA)[2]->AsNumber()), 0.0f, 1.0f);
+		const float A = RGBA->Num() > 3 ? FMath::Clamp(static_cast<float>((*RGBA)[3]->AsNumber()), 0.0f, 1.0f) : 1.0f;
+		OutColor = FLinearColor(R, G, B, A);
+		return true;
+	}
+	if (Object.IsValid())
+	{
+		OutColor = FLinearColor(
+			FMath::Clamp(PBRMagicJsonNumberField(Object, TEXT("r"), 1.0f), 0.0f, 1.0f),
+			FMath::Clamp(PBRMagicJsonNumberField(Object, TEXT("g"), 1.0f), 0.0f, 1.0f),
+			FMath::Clamp(PBRMagicJsonNumberField(Object, TEXT("b"), 1.0f), 0.0f, 1.0f),
+			FMath::Clamp(PBRMagicJsonNumberField(Object, TEXT("a"), 1.0f), 0.0f, 1.0f));
+		return true;
+	}
+	return false;
+}
+
+static bool PBRMagicTryRemoteAISuggestion(UMaterialInstanceConstant* Instance, const FPBRMagicAISuggestion& LocalSuggestion, FPBRMagicAISuggestion& OutSuggestion, FString& OutStatus)
+{
+	const FPBRMagicAIProviderSettings Settings = PBRMagicLoadAIProviderSettings();
+	if (!Settings.ShouldUseRemoteModel())
+	{
+		OutStatus = TEXT("使用本地规则；可在 AI 设置中选择 OpenAICompatible。");
+		return false;
+	}
+
+	FString RequestBody;
+	if (!PBRMagicBuildRemoteAIRequestBody(Settings, PBRMagicBuildRemoteAIUserText(Instance, LocalSuggestion), RequestBody))
+	{
+		OutStatus = TEXT("远端 AI 请求体生成失败，已使用本地规则。");
+		return false;
+	}
+
+	FString ResponseBody;
+	FString Error;
+	if (!PBRMagicPostRemoteAIRequest(Settings, RequestBody, ResponseBody, Error))
+	{
+		OutStatus = FString::Printf(TEXT("%s，已使用本地规则。"), *Error);
+		return false;
+	}
+
+	FString Content;
+	if (!PBRMagicExtractChatCompletionContent(ResponseBody, Content, Error))
+	{
+		OutStatus = FString::Printf(TEXT("%s，已使用本地规则。"), *Error);
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> Root;
+	if (!PBRMagicParseJsonObjectFromText(Content, Root, Error))
+	{
+		OutStatus = FString::Printf(TEXT("%s，已使用本地规则。"), *Error);
+		return false;
+	}
+
+	const FString TypeText = PBRMagicJsonStringField(Root, TEXT("material_type"), PBRMagicJsonStringField(Root, TEXT("type")));
+	EPBRMaterialType RemoteType = EPBRMaterialType::Standard;
+	if (!PBRMagicParseMaterialType(TypeText, RemoteType))
+	{
+		OutStatus = FString::Printf(TEXT("远端 AI 返回未知材质类型：%s，已使用本地规则。"), *TypeText);
+		return false;
+	}
+
+	OutSuggestion = LocalSuggestion;
+	OutSuggestion.MaterialType = RemoteType;
+	OutSuggestion.Summary = FString::Printf(TEXT("远端 AI 建议为%s：%s"),
+		*GetMagicMaterialTypeLabel(RemoteType).ToString(),
+		*PBRMagicJsonStringField(Root, TEXT("evidence"), TEXT("已按接口返回参数应用")));
+
+	const TArray<TSharedPtr<FJsonValue>>* Scalars = nullptr;
+	if (Root->TryGetArrayField(TEXT("scalar_suggestions"), Scalars) && Scalars)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *Scalars)
+		{
+			const TSharedPtr<FJsonObject> Object = Value.IsValid() ? Value->AsObject() : nullptr;
+			const FName ParameterName = PBRMagicResolveScalarParameterName(PBRMagicJsonStringField(Object, TEXT("parameter"), PBRMagicJsonStringField(Object, TEXT("name"))));
+			if (!ParameterName.IsNone())
+			{
+				OutSuggestion.Scalars.Add(ParameterName, PBRMagicJsonNumberField(Object, TEXT("value"), 0.0f));
+			}
+		}
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* Switches = nullptr;
+	if (Root->TryGetArrayField(TEXT("switch_suggestions"), Switches) && Switches)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *Switches)
+		{
+			const TSharedPtr<FJsonObject> Object = Value.IsValid() ? Value->AsObject() : nullptr;
+			const FName ParameterName = PBRMagicResolveSwitchParameterName(PBRMagicJsonStringField(Object, TEXT("parameter"), PBRMagicJsonStringField(Object, TEXT("name"))));
+			if (!ParameterName.IsNone())
+			{
+				OutSuggestion.Switches.Add(ParameterName, PBRMagicJsonBoolField(Object, TEXT("value"), false));
+			}
+		}
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* Colors = nullptr;
+	if (Root->TryGetArrayField(TEXT("color_suggestions"), Colors) && Colors)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *Colors)
+		{
+			const TSharedPtr<FJsonObject> Object = Value.IsValid() ? Value->AsObject() : nullptr;
+			const FName ParameterName = PBRMagicResolveColorParameterName(PBRMagicJsonStringField(Object, TEXT("parameter"), PBRMagicJsonStringField(Object, TEXT("name"))));
+			FLinearColor Color;
+			if (!ParameterName.IsNone() && PBRMagicParseRemoteColor(Object, Color))
+			{
+				OutSuggestion.Colors.Add(ParameterName, Color);
+			}
+		}
+	}
+
+	OutStatus = FString::Printf(TEXT("远端 AI 识别完成：%s / %s"), *Settings.Provider, *Settings.Model);
+	return true;
+}
+
+static void PBRMagicGetAIScalarRange(const FName& ParameterName, float& MinValue, float& MaxValue)
+{
+	MinValue = 0.0f;
+	MaxValue = 1.0f;
+
+	if (ParameterName == FPBRMaterialParameters::NormalStrength)
+	{
+		MaxValue = 5.0f;
+	}
+	else if (ParameterName == FPBRMaterialParameters::EmissiveIntensity)
+	{
+		MaxValue = 100.0f;
+	}
+	else if (ParameterName == FPBRMaterialParameters::RefractionAmount)
+	{
+		MinValue = 1.0f;
+		MaxValue = 2.4f;
+	}
+	else if (ParameterName == FPBRMaterialParameters::FabricFuzzStrength ||
+		ParameterName == FPBRMaterialParameters::WaterRippleStrength)
+	{
+		MaxValue = 2.0f;
+	}
 }
 
 static FString ActorLabel(AActor* Actor);
@@ -4891,6 +5669,34 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialParameterPopupContent(
 					]
 				]
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				.Padding(0, 0, 8, 0)
+				[
+					SNew(SButton)
+					.ButtonStyle(FAppStyle::Get(), "FlatButton")
+					.ContentPadding(FMargin(10, 5))
+					.OnClicked(this, &SPBRMagicOutlinerWindow::OnApplyAIMaterialSuggestionClicked)
+					[
+						SNew(STextBlock)
+						.Text(PBRText(TEXT("MagicMaterialAISuggest"), TEXT("AI 建议"), TEXT("AI Suggest")))
+						.Font(FAppStyle::GetFontStyle("SmallFontBold"))
+						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Selection"))); })
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				.Padding(0, 0, 8, 0)
+				[
+					SNew(SButton)
+					.ButtonStyle(FAppStyle::Get(), "FlatButton")
+					.ContentPadding(FMargin(10, 5))
+					.OnClicked(this, &SPBRMagicOutlinerWindow::OnMaterialAISettingsClicked)
+					[
+						SNew(STextBlock)
+						.Text(PBRText(TEXT("MagicMaterialAISettings"), TEXT("AI 设置"), TEXT("AI Settings")))
+						.Font(FAppStyle::GetFontStyle("SmallFont"))
+						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Text"))); })
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 				[
 					SNew(SBox)
 					.WidthOverride(240.0f)
@@ -4958,6 +5764,111 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildEditableMaterialTypeMenu()
 		];
 	}
 	return MenuBox;
+}
+
+TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialAISettingsContent()
+{
+	const FString Provider = PBRMagicGetAIConfigString(TEXT("material_ai_provider"), TEXT("LocalRules"));
+	const FString Endpoint = PBRMagicGetAIConfigString(TEXT("material_ai_endpoint"), TEXT(""));
+	const FString Model = PBRMagicGetAIConfigString(TEXT("material_ai_model"), TEXT("gpt-4.1-mini"));
+	const FString ApiKey = PBRMagicGetAIConfigString(TEXT("material_ai_api_key_or_env"), TEXT("PBRSTUDIO_AI_API_KEY"));
+
+	auto MakeRow = [this](const FText& Label, const TSharedRef<SWidget>& Control) -> TSharedRef<SWidget>
+	{
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 10, 0)
+			[
+				SNew(SBox)
+				.WidthOverride(120.0f)
+				[
+					SNew(STextBlock)
+					.Text(Label)
+					.Font(FAppStyle::GetFontStyle("SmallFont"))
+					.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.0f)
+			[
+				Control
+			];
+	};
+
+	return SNew(SBorder)
+		.BorderImage(FAppStyle::Get().GetBrush("Brushes.Recessed"))
+		.Padding(14)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
+			[
+				SNew(STextBlock)
+				.Text(PBRText(TEXT("MaterialAISettingsTitle"), TEXT("AI 材质建议设置"), TEXT("AI Material Suggestion Settings")))
+				.Font(FAppStyle::GetFontStyle("NormalFontBold"))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+			[
+				MakeRow(PBRText(TEXT("MaterialAIProvider"), TEXT("接口类型"), TEXT("Provider")),
+					SAssignNew(AIProviderBox, SEditableTextBox).Text(FText::FromString(Provider)))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+			[
+				MakeRow(PBRText(TEXT("MaterialAIEndpoint"), TEXT("接口地址"), TEXT("Endpoint")),
+					SAssignNew(AIEndpointBox, SEditableTextBox).Text(FText::FromString(Endpoint)).HintText(FText::FromString(TEXT("https://api.openai.com/v1 或兼容地址"))))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+			[
+				MakeRow(PBRText(TEXT("MaterialAIModel"), TEXT("模型"), TEXT("Model")),
+					SAssignNew(AIModelBox, SEditableTextBox).Text(FText::FromString(Model)))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
+			[
+				MakeRow(PBRText(TEXT("MaterialAIKey"), TEXT("密钥/环境变量"), TEXT("Key / Env")),
+					SAssignNew(AIKeyBox, SEditableTextBox).Text(FText::FromString(ApiKey)))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
+			[
+				SNew(STextBlock)
+				.AutoWrapText(true)
+				.Text(PBRText(TEXT("MaterialAISettingsHint"), TEXT("接口类型填 LocalRules 使用本地规则；填 OpenAICompatible 时会请求兼容 /chat/completions 的接口。密钥栏可填环境变量名，也可直接填 sk- / glm- 开头的密钥。接口失败时会自动回退本地规则。"), TEXT("Use LocalRules for local suggestions. Use OpenAICompatible for a /chat/completions compatible endpoint. The key field accepts an environment variable name or an inline sk-/glm- key. Failed remote calls fall back to local rules.")))
+				.Font(FAppStyle::GetFontStyle("SmallFont"))
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			.HAlign(HAlign_Right)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+				[
+					SNew(SButton)
+					.Text(PBRText(TEXT("MaterialAIUseLocal"), TEXT("使用本地规则"), TEXT("Use Local Rules")))
+					.OnClicked_Lambda([this]()
+					{
+						if (AIProviderBox.IsValid())
+						{
+							AIProviderBox->SetText(FText::FromString(TEXT("LocalRules")));
+						}
+						return FReply::Handled();
+					})
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SButton)
+					.Text(PBRText(TEXT("MaterialAISaveSettings"), TEXT("保存"), TEXT("Save")))
+					.OnClicked_Lambda([this]()
+					{
+						PBRMagicSaveAIConfigString(TEXT("material_ai_provider"), AIProviderBox.IsValid() ? AIProviderBox->GetText().ToString() : TEXT("LocalRules"));
+						PBRMagicSaveAIConfigString(TEXT("material_ai_endpoint"), AIEndpointBox.IsValid() ? AIEndpointBox->GetText().ToString() : FString());
+						PBRMagicSaveAIConfigString(TEXT("material_ai_model"), AIModelBox.IsValid() ? AIModelBox->GetText().ToString() : TEXT("gpt-4.1-mini"));
+						PBRMagicSaveAIConfigString(TEXT("material_ai_api_key_or_env"), AIKeyBox.IsValid() ? AIKeyBox->GetText().ToString() : TEXT("PBRSTUDIO_AI_API_KEY"));
+						StatusMessage = TEXT("AI 材质建议设置已保存");
+						if (TSharedPtr<SWindow> ExistingWindow = MaterialAISettingsWindow.Pin())
+						{
+							ExistingWindow->RequestDestroyWindow();
+						}
+						return FReply::Handled();
+					})
+				]
+			]
+		];
 }
 
 TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialParameterControl(const FPBRMagicEditableMaterialParameter& Parameter)
@@ -6811,6 +7722,81 @@ void SPBRMagicOutlinerWindow::SelectEditableMaterialType(EPBRMaterialType Materi
 	{
 		StatusMessage = Message.IsEmpty() ? TEXT("材质类型切换失败") : Message;
 	}
+}
+
+FReply SPBRMagicOutlinerWindow::OnApplyAIMaterialSuggestionClicked()
+{
+	UMaterialInstanceConstant* Instance = GetEditableMaterialInstance();
+	if (!Instance)
+	{
+		StatusMessage = TEXT("没有可分析的材质实例");
+		return FReply::Handled();
+	}
+
+	FPBRMagicAISuggestion Suggestion = PBRMagicBuildLocalAISuggestion(Instance);
+	FString AIStatus;
+	FPBRMagicAISuggestion RemoteSuggestion;
+	const bool bUsedRemoteAI = PBRMagicTryRemoteAISuggestion(Instance, Suggestion, RemoteSuggestion, AIStatus);
+	if (bUsedRemoteAI)
+	{
+		Suggestion = MoveTemp(RemoteSuggestion);
+	}
+
+	SelectEditableMaterialType(Suggestion.MaterialType);
+
+	for (const TPair<FName, float>& Pair : Suggestion.Scalars)
+	{
+		float MinValue = 0.0f;
+		float MaxValue = 1.0f;
+		PBRMagicGetAIScalarRange(Pair.Key, MinValue, MaxValue);
+		CommitEditableMaterialScalar(Pair.Key, Pair.Value, MinValue, MaxValue);
+	}
+
+	for (const TPair<FName, FLinearColor>& Pair : Suggestion.Colors)
+	{
+		CommitEditableMaterialVector(Pair.Key, Pair.Value);
+	}
+
+	for (const TPair<FName, bool>& Pair : Suggestion.Switches)
+	{
+		CommitEditableMaterialSwitch(Pair.Key, Pair.Value);
+	}
+
+	StatusMessage = Suggestion.Summary;
+	if (!AIStatus.IsEmpty())
+	{
+		StatusMessage += TEXT(" ");
+		StatusMessage += AIStatus;
+	}
+
+	Invalidate(EInvalidateWidgetReason::Paint);
+	if (TSharedPtr<SWindow> ExistingWindow = MaterialParameterWindow.Pin())
+	{
+		ExistingWindow->SetContent(BuildMaterialParameterPopupContent());
+	}
+	return FReply::Handled();
+}
+
+FReply SPBRMagicOutlinerWindow::OnMaterialAISettingsClicked()
+{
+	if (TSharedPtr<SWindow> ExistingWindow = MaterialAISettingsWindow.Pin())
+	{
+		ExistingWindow->BringToFront();
+		return FReply::Handled();
+	}
+
+	TSharedRef<SWindow> Window = SNew(SWindow)
+		.Title(PBRText(TEXT("MaterialAISettingsWindowTitle"), TEXT("PBRStudio AI 材质建议设置"), TEXT("PBRStudio AI Material Settings")))
+		.ClientSize(FVector2D(560.0f, 300.0f))
+		.SupportsMaximize(false)
+		.SupportsMinimize(false)
+		[
+			BuildMaterialAISettingsContent()
+		];
+
+	MaterialAISettingsWindow = Window;
+	FSlateApplication::Get().AddWindow(Window);
+	return FReply::Handled();
 }
 
 void SPBRMagicOutlinerWindow::CycleEditableMaterialType(int32 Direction)
