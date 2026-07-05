@@ -27,6 +27,7 @@
 #include "Engine/Scene.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Commands/InputBindingManager.h"
@@ -34,6 +35,8 @@
 #include "HttpManager.h"
 #include "HttpModule.h"
 #include "IContentBrowserSingleton.h"
+#include "IImageWrapper.h"
+#include "IImageWrapperModule.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
 #include "Materials/Material.h"
@@ -44,6 +47,8 @@
 #include "Materials/MaterialInstance.h"
 #include "Misc/ObjectThumbnail.h"
 #include "Misc/MessageDialog.h"
+#include "Misc/Base64.h"
+#include "ImageUtils.h"
 #include "Modules/ModuleManager.h"
 #include "ObjectTools.h"
 #include "Models/PBRMaterialTypes.h"
@@ -56,6 +61,7 @@
 #include "Services/PBRSceneMaterialReplacer.h"
 #include "Styling/AppStyle.h"
 #include "ScopedTransaction.h"
+#include "Misc/ScopedSlowTask.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Subsystems/AssetEditorSubsystem.h"
@@ -64,6 +70,7 @@
 #include "Widgets/Colors/SColorPicker.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SComboButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SNumericEntryBox.h"
@@ -112,6 +119,14 @@ struct FPBRMagicAISuggestion
 	TMap<FName, float> Scalars;
 	TMap<FName, FLinearColor> Colors;
 	TMap<FName, bool> Switches;
+};
+
+struct FPBRMagicAIImagePayload
+{
+	FString Label;
+	FString TextureName;
+	FString TexturePath;
+	FString DataUrl;
 };
 
 struct FPBRMagicAIProviderPreset
@@ -661,6 +676,7 @@ static FString PBRMagicBuildRemoteAIUserText(UMaterialInstanceConstant* Instance
 {
 	FString Text;
 	Text += TEXT("Analyze this Unreal Engine material and return ONLY a compact JSON object.\n");
+	Text += TEXT("You will receive texture thumbnails when available. Use the images first, then texture names and material names. Identify whether the surface is wood, stone, tile, fabric, leather, plastic, metal, transparent, glass, water, emissive, or standard PBR.\n");
 	Text += TEXT("Allowed material_type values: Standard, Wood, Stone, Tile, Fabric, Leather, Plastic, Metal, Transparent, Glass, Water, Emissive. Use Standard for grass, moss, plants, soil, sand, and ordinary non-metal PBR surfaces.\n");
 	Text += TEXT("JSON schema: {\"material_type\":\"Standard\",\"surface_label\":\"grass/vegetation\",\"confidence\":0.0-1.0,\"evidence\":\"short reason\",\"scalar_suggestions\":[{\"parameter\":\"粗糙度数值\",\"value\":0.82,\"min\":0,\"max\":1,\"reason\":\"...\"}],\"switch_suggestions\":[{\"parameter\":\"使用基础色贴图\",\"value\":true,\"reason\":\"...\"}],\"color_suggestions\":[{\"parameter\":\"基础色调\",\"rgba\":[1,1,1,1],\"reason\":\"...\"}]}.\n");
 	Text += TEXT("Prefer physically plausible parameters. Do not mark vegetation, grass, soil, brick, stone, wood, plastic, fabric, leather, glass, or water as Metal unless the evidence is clearly metallic.\n");
@@ -693,7 +709,117 @@ static FString PBRMagicBuildRemoteAIUserText(UMaterialInstanceConstant* Instance
 	return Text;
 }
 
-static bool PBRMagicBuildRemoteAIRequestBody(const FPBRMagicAIProviderSettings& Settings, const FString& UserText, FString& OutBody)
+static bool PBRMagicEncodeTextureDataUrl(UTexture2D* Texture, int32 MaxDimension, FString& OutDataUrl)
+{
+	OutDataUrl.Reset();
+	if (!Texture)
+	{
+		return false;
+	}
+
+	FImage SourceImage;
+	if (!FImageUtils::GetTexture2DSourceImage(Texture, SourceImage) || !SourceImage.IsImageInfoValid() || SourceImage.GetNumPixels() <= 0)
+	{
+		return false;
+	}
+
+	SourceImage.ChangeFormat(ERawImageFormat::BGRA8, EGammaSpace::sRGB);
+	int32 Width = SourceImage.SizeX;
+	int32 Height = SourceImage.SizeY;
+	TArray<FColor> Pixels;
+	const TArrayView64<const FColor> SourcePixels = SourceImage.AsBGRA8();
+	Pixels.SetNumUninitialized(SourcePixels.Num());
+	FMemory::Memcpy(Pixels.GetData(), SourcePixels.GetData(), SourcePixels.Num() * sizeof(FColor));
+
+	const int32 MaxSide = FMath::Max(Width, Height);
+	if (MaxSide > MaxDimension && MaxDimension > 0)
+	{
+		const float Scale = static_cast<float>(MaxDimension) / static_cast<float>(MaxSide);
+		const int32 NewWidth = FMath::Max(1, FMath::RoundToInt(static_cast<float>(Width) * Scale));
+		const int32 NewHeight = FMath::Max(1, FMath::RoundToInt(static_cast<float>(Height) * Scale));
+		TArray<FColor> ResizedPixels;
+		FImageUtils::ImageResize(Width, Height, Pixels, NewWidth, NewHeight, ResizedPixels, true);
+		Pixels = MoveTemp(ResizedPixels);
+		Width = NewWidth;
+		Height = NewHeight;
+	}
+
+	TArray<uint8> RawBGRA;
+	RawBGRA.SetNumUninitialized(Pixels.Num() * sizeof(FColor));
+	FMemory::Memcpy(RawBGRA.GetData(), Pixels.GetData(), RawBGRA.Num());
+
+	IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+	TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::JPEG);
+	if (!ImageWrapper.IsValid() || !ImageWrapper->SetRaw(RawBGRA.GetData(), RawBGRA.Num(), Width, Height, ERGBFormat::BGRA, 8))
+	{
+		return false;
+	}
+
+	const TArray64<uint8> Compressed = ImageWrapper->GetCompressed(82);
+	if (Compressed.Num() == 0)
+	{
+		return false;
+	}
+
+	OutDataUrl = FString::Printf(TEXT("data:image/jpeg;base64,%s"), *FBase64::Encode(Compressed.GetData(), static_cast<uint32>(Compressed.Num())));
+	return true;
+}
+
+static TArray<FPBRMagicAIImagePayload> PBRMagicBuildRemoteAIImagePayloads(UMaterialInstanceConstant* Instance)
+{
+	TArray<FPBRMagicAIImagePayload> Payloads;
+	if (!Instance)
+	{
+		return Payloads;
+	}
+
+	TSet<FString> AddedTextures;
+	TMap<FMaterialParameterInfo, FMaterialParameterMetadata> TextureParameters;
+	Instance->GetAllParametersOfType(EMaterialParameterType::Texture, TextureParameters);
+	for (const TPair<FMaterialParameterInfo, FMaterialParameterMetadata>& Pair : TextureParameters)
+	{
+		if (Payloads.Num() >= 5)
+		{
+			break;
+		}
+
+		UTexture* Texture = nullptr;
+		if (!Instance->GetTextureParameterValue(Pair.Key, Texture) || !Texture)
+		{
+			continue;
+		}
+
+		UTexture2D* Texture2D = Cast<UTexture2D>(Texture);
+		if (!Texture2D)
+		{
+			continue;
+		}
+
+		const FString TexturePath = Texture2D->GetPathName();
+		if (AddedTextures.Contains(TexturePath))
+		{
+			continue;
+		}
+
+		FString DataUrl;
+		if (!PBRMagicEncodeTextureDataUrl(Texture2D, 256, DataUrl))
+		{
+			continue;
+		}
+
+		FPBRMagicAIImagePayload Payload;
+		Payload.Label = Pair.Key.Name.ToString();
+		Payload.TextureName = Texture2D->GetName();
+		Payload.TexturePath = TexturePath;
+		Payload.DataUrl = MoveTemp(DataUrl);
+		Payloads.Add(MoveTemp(Payload));
+		AddedTextures.Add(TexturePath);
+	}
+
+	return Payloads;
+}
+
+static bool PBRMagicBuildRemoteAIRequestBody(const FPBRMagicAIProviderSettings& Settings, const FString& UserText, const TArray<FPBRMagicAIImagePayload>& Images, FString& OutBody)
 {
 	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetStringField(TEXT("model"), Settings.Model);
@@ -721,7 +847,30 @@ static bool PBRMagicBuildRemoteAIRequestBody(const FPBRMagicAIProviderSettings& 
 
 	TSharedRef<FJsonObject> UserMessage = MakeShared<FJsonObject>();
 	UserMessage->SetStringField(TEXT("role"), TEXT("user"));
-	UserMessage->SetStringField(TEXT("content"), UserText);
+	if (Images.Num() == 0)
+	{
+		UserMessage->SetStringField(TEXT("content"), UserText);
+	}
+	else
+	{
+		TArray<TSharedPtr<FJsonValue>> ContentParts;
+		TSharedRef<FJsonObject> TextPart = MakeShared<FJsonObject>();
+		TextPart->SetStringField(TEXT("type"), TEXT("text"));
+		TextPart->SetStringField(TEXT("text"), UserText);
+		ContentParts.Add(MakeShared<FJsonValueObject>(TextPart));
+
+		for (const FPBRMagicAIImagePayload& Image : Images)
+		{
+			TSharedRef<FJsonObject> ImagePart = MakeShared<FJsonObject>();
+			ImagePart->SetStringField(TEXT("type"), TEXT("image_url"));
+			TSharedRef<FJsonObject> ImageUrl = MakeShared<FJsonObject>();
+			ImageUrl->SetStringField(TEXT("url"), Image.DataUrl);
+			ImageUrl->SetStringField(TEXT("detail"), TEXT("low"));
+			ImagePart->SetObjectField(TEXT("image_url"), ImageUrl);
+			ContentParts.Add(MakeShared<FJsonValueObject>(ImagePart));
+		}
+		UserMessage->SetArrayField(TEXT("content"), ContentParts);
+	}
 	Messages.Add(MakeShared<FJsonValueObject>(UserMessage));
 	Root->SetArrayField(TEXT("messages"), Messages);
 
@@ -974,7 +1123,7 @@ static bool PBRMagicValidateRemoteAIProvider(const FPBRMagicAIProviderSettings& 
 	}
 
 	FString RequestBody;
-	if (!PBRMagicBuildRemoteAIRequestBody(Settings, TEXT("Return ONLY this JSON object with no markdown: {\"ok\":true,\"message\":\"ready\"}."), RequestBody))
+	if (!PBRMagicBuildRemoteAIRequestBody(Settings, TEXT("Return ONLY this JSON object with no markdown: {\"ok\":true,\"message\":\"ready\"}."), TArray<FPBRMagicAIImagePayload>(), RequestBody))
 	{
 		OutStatus = TEXT("验证请求体生成失败");
 		return false;
@@ -1051,8 +1200,9 @@ static bool PBRMagicTryRemoteAISuggestion(UMaterialInstanceConstant* Instance, c
 		return false;
 	}
 
+	const TArray<FPBRMagicAIImagePayload> Images = PBRMagicBuildRemoteAIImagePayloads(Instance);
 	FString RequestBody;
-	if (!PBRMagicBuildRemoteAIRequestBody(Settings, PBRMagicBuildRemoteAIUserText(Instance, LocalSuggestion), RequestBody))
+	if (!PBRMagicBuildRemoteAIRequestBody(Settings, PBRMagicBuildRemoteAIUserText(Instance, LocalSuggestion), Images, RequestBody))
 	{
 		OutStatus = TEXT("远端 AI 请求体生成失败，已使用本地规则。");
 		return false;
@@ -1137,7 +1287,9 @@ static bool PBRMagicTryRemoteAISuggestion(UMaterialInstanceConstant* Instance, c
 		}
 	}
 
-	OutStatus = FString::Printf(TEXT("远端 AI 识别完成：%s / %s"), *Settings.Provider, *Settings.Model);
+	OutStatus = Images.Num() > 0
+		? FString::Printf(TEXT("远端 AI 识图完成：%s / %s，发送 %d 张贴图"), *Settings.Provider, *Settings.Model, Images.Num())
+		: FString::Printf(TEXT("远端 AI 文本识别完成：%s / %s，未找到可发送贴图"), *Settings.Provider, *Settings.Model);
 	return true;
 }
 
@@ -1164,6 +1316,41 @@ static void PBRMagicGetAIScalarRange(const FName& ParameterName, float& MinValue
 	{
 		MaxValue = 2.0f;
 	}
+}
+
+static FString PBRMagicBuildAISuggestionPreviewText(const FPBRMagicAISuggestion& Suggestion)
+{
+	FString Text;
+	Text += FString::Printf(TEXT("材质类型：%s\n"), *GetMagicMaterialTypeLabel(Suggestion.MaterialType).ToString());
+	if (!Suggestion.Summary.IsEmpty())
+	{
+		Text += FString::Printf(TEXT("说明：%s\n"), *Suggestion.Summary);
+	}
+	if (Suggestion.Scalars.Num() > 0)
+	{
+		Text += TEXT("\n数值参数：\n");
+		for (const TPair<FName, float>& Pair : Suggestion.Scalars)
+		{
+			Text += FString::Printf(TEXT("- %s = %.3f\n"), *Pair.Key.ToString(), Pair.Value);
+		}
+	}
+	if (Suggestion.Switches.Num() > 0)
+	{
+		Text += TEXT("\n开关参数：\n");
+		for (const TPair<FName, bool>& Pair : Suggestion.Switches)
+		{
+			Text += FString::Printf(TEXT("- %s = %s\n"), *Pair.Key.ToString(), Pair.Value ? TEXT("启用") : TEXT("关闭"));
+		}
+	}
+	if (Suggestion.Colors.Num() > 0)
+	{
+		Text += TEXT("\n颜色参数：\n");
+		for (const TPair<FName, FLinearColor>& Pair : Suggestion.Colors)
+		{
+			Text += FString::Printf(TEXT("- %s = R %.2f / G %.2f / B %.2f / A %.2f\n"), *Pair.Key.ToString(), Pair.Value.R, Pair.Value.G, Pair.Value.B, Pair.Value.A);
+		}
+	}
+	return Text;
 }
 
 static FString ActorLabel(AActor* Actor);
@@ -5975,6 +6162,8 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialAISettingsContent()
 	const FString Endpoint = PBRMagicGetAIConfigString(TEXT("material_ai_endpoint"), TEXT(""));
 	const FString Model = PBRMagicGetAIConfigString(TEXT("material_ai_model"), TEXT("gpt-4.1-mini"));
 	const FString ApiKey = PBRMagicGetAIConfigString(TEXT("material_ai_api_key_or_env"), TEXT("PBRSTUDIO_AI_API_KEY"));
+	AIModelOptions.Reset();
+	AIModelOptions.Add(MakeShared<FString>(Model));
 
 	auto ReadSettingsFromBoxes = [this]() -> FPBRMagicAIProviderSettings
 	{
@@ -6016,6 +6205,15 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialAISettingsContent()
 		FString Status;
 		if (PBRMagicGetRemoteAIModels(Settings, Models, Status))
 		{
+			AIModelOptions.Reset();
+			for (const FString& ModelId : Models)
+			{
+				AIModelOptions.Add(MakeShared<FString>(ModelId));
+			}
+			if (AIModelComboBox.IsValid())
+			{
+				AIModelComboBox->RefreshOptions();
+			}
 			if (AIModelBox.IsValid())
 			{
 				const FString CurrentModel = AIModelBox->GetText().ToString().TrimStartAndEnd();
@@ -6234,7 +6432,32 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialAISettingsContent()
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
 			[
 				MakeRow(PBRText(TEXT("MaterialAIModel"), TEXT("模型"), TEXT("Model")),
-					SAssignNew(AIModelBox, SEditableTextBox).Text(FText::FromString(Model)))
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0, 0, 8, 0)
+					[
+						SAssignNew(AIModelBox, SEditableTextBox).Text(FText::FromString(Model))
+					]
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+						SAssignNew(AIModelComboBox, SComboBox<TSharedPtr<FString>>)
+						.OptionsSource(&AIModelOptions)
+						.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item)
+						{
+							return SNew(STextBlock)
+								.Text(FText::FromString(Item.IsValid() ? *Item : FString()));
+						})
+						.OnSelectionChanged_Lambda([this](TSharedPtr<FString> Item, ESelectInfo::Type)
+						{
+							if (Item.IsValid() && AIModelBox.IsValid())
+							{
+								AIModelBox->SetText(FText::FromString(*Item));
+							}
+						})
+						[
+							SNew(STextBlock)
+							.Text(PBRText(TEXT("MaterialAIModelDropdown"), TEXT("选择"), TEXT("Pick")))
+						]
+					])
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
 			[
@@ -8158,35 +8381,23 @@ FReply SPBRMagicOutlinerWindow::OnApplyAIMaterialSuggestionClicked()
 		return FReply::Handled();
 	}
 
+	FScopedSlowTask SlowTask(5.0f, PBRText(TEXT("MaterialAIProgressTitle"), TEXT("AI 正在识别材质贴图..."), TEXT("AI is analyzing material textures...")));
+	SlowTask.MakeDialog(true);
+
+	SlowTask.EnterProgressFrame(1.0f, PBRText(TEXT("MaterialAIProgressLocal"), TEXT("整理材质名称、父材质和贴图参数"), TEXT("Collecting material names and texture parameters")));
 	FPBRMagicAISuggestion Suggestion = PBRMagicBuildLocalAISuggestion(Instance);
+
 	FString AIStatus;
 	FPBRMagicAISuggestion RemoteSuggestion;
+	SlowTask.EnterProgressFrame(1.0f, PBRText(TEXT("MaterialAIProgressImages"), TEXT("压缩贴图缩略图，准备发送给识图模型"), TEXT("Compressing texture thumbnails for vision model")));
+	SlowTask.EnterProgressFrame(1.0f, PBRText(TEXT("MaterialAIProgressRemote"), TEXT("请求 AI 接口并等待识别结果"), TEXT("Requesting AI provider and waiting for recognition result")));
 	const bool bUsedRemoteAI = PBRMagicTryRemoteAISuggestion(Instance, Suggestion, RemoteSuggestion, AIStatus);
 	if (bUsedRemoteAI)
 	{
 		Suggestion = MoveTemp(RemoteSuggestion);
 	}
 
-	SelectEditableMaterialType(Suggestion.MaterialType);
-
-	for (const TPair<FName, float>& Pair : Suggestion.Scalars)
-	{
-		float MinValue = 0.0f;
-		float MaxValue = 1.0f;
-		PBRMagicGetAIScalarRange(Pair.Key, MinValue, MaxValue);
-		CommitEditableMaterialScalar(Pair.Key, Pair.Value, MinValue, MaxValue);
-	}
-
-	for (const TPair<FName, FLinearColor>& Pair : Suggestion.Colors)
-	{
-		CommitEditableMaterialVector(Pair.Key, Pair.Value);
-	}
-
-	for (const TPair<FName, bool>& Pair : Suggestion.Switches)
-	{
-		CommitEditableMaterialSwitch(Pair.Key, Pair.Value);
-	}
-
+	SlowTask.EnterProgressFrame(1.0f, PBRText(TEXT("MaterialAIProgressParse"), TEXT("整理 AI 返回的材质类型和参数"), TEXT("Parsing AI material type and parameter suggestions")));
 	StatusMessage = Suggestion.Summary;
 	if (!AIStatus.IsEmpty())
 	{
@@ -8194,11 +8405,87 @@ FReply SPBRMagicOutlinerWindow::OnApplyAIMaterialSuggestionClicked()
 		StatusMessage += AIStatus;
 	}
 
-	Invalidate(EInvalidateWidgetReason::Paint);
-	if (TSharedPtr<SWindow> ExistingWindow = MaterialParameterWindow.Pin())
-	{
-		ExistingWindow->SetContent(BuildMaterialParameterPopupContent());
-	}
+	SlowTask.EnterProgressFrame(1.0f, PBRText(TEXT("MaterialAIProgressPreview"), TEXT("打开建议预览，等待用户确认"), TEXT("Opening suggestion preview for confirmation")));
+	const FPBRMagicAISuggestion PreviewSuggestion = Suggestion;
+	const FString PreviewText = PBRMagicBuildAISuggestionPreviewText(PreviewSuggestion);
+	TSharedRef<SWindow> PreviewWindow = SNew(SWindow)
+		.Title(PBRText(TEXT("MaterialAIPreviewTitle"), TEXT("AI 材质建议预览"), TEXT("AI Material Suggestion Preview")))
+		.ClientSize(FVector2D(620.0f, 460.0f))
+		.SupportsMaximize(false)
+		.SupportsMinimize(false)
+		[
+			SNew(SBorder)
+			.Padding(14)
+			.BorderImage(FAppStyle::Get().GetBrush("Brushes.Recessed"))
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+				[
+					SNew(STextBlock)
+					.Text(PBRText(TEXT("MaterialAIPreviewHeader"), TEXT("AI 已给出建议，确认后才会写入当前材质实例"), TEXT("AI produced suggestions. They are written only after confirmation.")))
+					.Font(FAppStyle::GetFontStyle("NormalFontBold"))
+				]
+				+ SVerticalBox::Slot().FillHeight(1.0f)
+				[
+					SNew(SScrollBox)
+					+ SScrollBox::Slot()
+					[
+						SNew(STextBlock)
+						.Text(FText::FromString(PreviewText))
+						.AutoWrapText(true)
+						.Font(FAppStyle::GetFontStyle("SmallFont"))
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
+				.HAlign(HAlign_Right)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+					[
+						SNew(SButton)
+						.Text(PBRText(TEXT("MaterialAIPreviewCancel"), TEXT("不应用"), TEXT("Cancel")))
+						.OnClicked_Lambda([PreviewWindow]()
+						{
+							PreviewWindow->RequestDestroyWindow();
+							return FReply::Handled();
+						})
+					]
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+						SNew(SButton)
+						.Text(PBRText(TEXT("MaterialAIPreviewApply"), TEXT("应用建议"), TEXT("Apply Suggestions")))
+						.OnClicked_Lambda([this, PreviewWindow, PreviewSuggestion]()
+						{
+							SelectEditableMaterialType(PreviewSuggestion.MaterialType);
+							for (const TPair<FName, float>& Pair : PreviewSuggestion.Scalars)
+							{
+								float MinValue = 0.0f;
+								float MaxValue = 1.0f;
+								PBRMagicGetAIScalarRange(Pair.Key, MinValue, MaxValue);
+								CommitEditableMaterialScalar(Pair.Key, Pair.Value, MinValue, MaxValue);
+							}
+							for (const TPair<FName, FLinearColor>& Pair : PreviewSuggestion.Colors)
+							{
+								CommitEditableMaterialVector(Pair.Key, Pair.Value);
+							}
+							for (const TPair<FName, bool>& Pair : PreviewSuggestion.Switches)
+							{
+								CommitEditableMaterialSwitch(Pair.Key, Pair.Value);
+							}
+							StatusMessage = PreviewSuggestion.Summary;
+							Invalidate(EInvalidateWidgetReason::Paint);
+							if (TSharedPtr<SWindow> ExistingWindow = MaterialParameterWindow.Pin())
+							{
+								ExistingWindow->SetContent(BuildMaterialParameterPopupContent());
+							}
+							PreviewWindow->RequestDestroyWindow();
+							return FReply::Handled();
+						})
+					]
+				]
+			]
+		];
+	FSlateApplication::Get().AddWindow(PreviewWindow);
 	return FReply::Handled();
 }
 

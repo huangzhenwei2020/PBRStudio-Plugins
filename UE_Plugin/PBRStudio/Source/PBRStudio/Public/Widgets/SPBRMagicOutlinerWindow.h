@@ -312,6 +312,8 @@ private:
 	TSharedPtr<class SEditableTextBox> AIEndpointBox;
 	TSharedPtr<class SEditableTextBox> AIModelBox;
 	TSharedPtr<class SEditableTextBox> AIKeyBox;
+	TArray<TSharedPtr<FString>> AIModelOptions;
+	TSharedPtr<class SComboBox<TSharedPtr<FString>>> AIModelComboBox;
 	TMap<FString, TSharedPtr<FAssetThumbnail>> MaterialThumbnailCache;
 	TMap<FString, TSharedPtr<FSlateDynamicImageBrush>> MaterialThumbnailBrushCache;
 	TMap<FString, TSharedPtr<FSlateDynamicImageBrush>> TextureThumbnailBrushCache;
