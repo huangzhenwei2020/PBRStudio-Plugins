@@ -114,6 +114,15 @@ struct FPBRMagicAISuggestion
 	TMap<FName, bool> Switches;
 };
 
+struct FPBRMagicAIProviderPreset
+{
+	const TCHAR* Label;
+	const TCHAR* EndpointUrl;
+	const TCHAR* DefaultModel;
+	const TCHAR* ApiPageUrl;
+	const TCHAR* KeyHint;
+};
+
 static const TArray<FPBRMagicMaterialTypeOption>& GetMagicMaterialTypeOptions()
 {
 	static const TArray<FPBRMagicMaterialTypeOption> Options = {
@@ -131,6 +140,42 @@ static const TArray<FPBRMagicMaterialTypeOption>& GetMagicMaterialTypeOptions()
 		{ EPBRMaterialType::Emissive, TEXT("MagicMaterialTypeEmissive"), TEXT("自发光"), TEXT("Emissive") }
 	};
 	return Options;
+}
+
+static const TArray<FPBRMagicAIProviderPreset>& GetMagicAIProviderPresets()
+{
+	static const TArray<FPBRMagicAIProviderPreset> Presets = {
+		{ TEXT("OpenAI"), TEXT("https://api.openai.com/v1"), TEXT("gpt-4.1-mini"), TEXT("https://platform.openai.com/api-keys"), TEXT("OPENAI_API_KEY 或 sk-...") },
+		{ TEXT("DeepSeek"), TEXT("https://api.deepseek.com/v1"), TEXT("deepseek-chat"), TEXT("https://platform.deepseek.com/api_keys"), TEXT("DEEPSEEK_API_KEY 或 sk-...") },
+		{ TEXT("SiliconFlow"), TEXT("https://api.siliconflow.cn/v1"), TEXT("deepseek-ai/DeepSeek-V3"), TEXT("https://cloud.siliconflow.cn/account/ak"), TEXT("SILICONFLOW_API_KEY 或 sk-...") },
+		{ TEXT("智谱/Z.AI"), TEXT("https://open.bigmodel.cn/api/paas/v4"), TEXT("glm-4.5"), TEXT("https://bigmodel.cn/usercenter/proj-mgmt/apikeys"), TEXT("ZHIPUAI_API_KEY 或 glm-...") },
+		{ TEXT("OpenRouter"), TEXT("https://openrouter.ai/api/v1"), TEXT("openai/gpt-4.1-mini"), TEXT("https://openrouter.ai/settings/keys"), TEXT("OPENROUTER_API_KEY 或 sk-or-...") },
+		{ TEXT("Ollama 本地"), TEXT("http://localhost:11434/v1"), TEXT("llama3.1"), TEXT("https://ollama.com/download"), TEXT("本地通常可留空") }
+	};
+	return Presets;
+}
+
+static const FPBRMagicAIProviderPreset* FindMagicAIProviderPresetByEndpoint(const FString& EndpointUrl)
+{
+	FString NormalizedEndpoint = EndpointUrl.TrimStartAndEnd().ToLower();
+	NormalizedEndpoint.ReplaceInline(TEXT("/chat/completions"), TEXT(""));
+	while (NormalizedEndpoint.EndsWith(TEXT("/")))
+	{
+		NormalizedEndpoint.LeftChopInline(1);
+	}
+	for (const FPBRMagicAIProviderPreset& Preset : GetMagicAIProviderPresets())
+	{
+		FString PresetEndpoint = FString(Preset.EndpointUrl).TrimStartAndEnd().ToLower();
+		while (PresetEndpoint.EndsWith(TEXT("/")))
+		{
+			PresetEndpoint.LeftChopInline(1);
+		}
+		if (NormalizedEndpoint.Contains(PresetEndpoint))
+		{
+			return &Preset;
+		}
+	}
+	return nullptr;
 }
 
 static FText GetMagicMaterialTypeLabel(EPBRMaterialType MaterialType)
@@ -760,6 +805,130 @@ static bool PBRMagicPostRemoteAIRequest(const FPBRMagicAIProviderSettings& Setti
 	return true;
 }
 
+static FString PBRMagicNormalizeAIModelsUrl(const FString& EndpointUrl)
+{
+	FString BaseUrl = PBRMagicNormalizeAIEndpointUrl(EndpointUrl);
+	if (BaseUrl.EndsWith(TEXT("/chat/completions"), ESearchCase::IgnoreCase))
+	{
+		BaseUrl.LeftChopInline(17);
+	}
+	while (BaseUrl.EndsWith(TEXT("/")))
+	{
+		BaseUrl.LeftChopInline(1);
+	}
+	return BaseUrl + TEXT("/models");
+}
+
+static bool PBRMagicGetRemoteAIModels(const FPBRMagicAIProviderSettings& Settings, TArray<FString>& OutModels, FString& OutStatus)
+{
+	OutModels.Reset();
+	OutStatus.Reset();
+	if (Settings.EndpointUrl.IsEmpty())
+	{
+		OutStatus = TEXT("请先填写 API 接口地址");
+		return false;
+	}
+
+	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
+	Request->SetURL(PBRMagicNormalizeAIModelsUrl(Settings.EndpointUrl));
+	Request->SetVerb(TEXT("GET"));
+	Request->SetHeader(TEXT("Accept"), TEXT("application/json"));
+	const FString ApiKey = PBRMagicResolveAIApiKey(Settings);
+	if (!ApiKey.IsEmpty())
+	{
+		Request->SetHeader(TEXT("Authorization"), FString::Printf(TEXT("Bearer %s"), *ApiKey));
+	}
+
+	bool bCompleted = false;
+	bool bSucceeded = false;
+	int32 ResponseCode = 0;
+	FString ResponseBody;
+	FString Error;
+	Request->OnProcessRequestComplete().BindLambda([&bCompleted, &bSucceeded, &ResponseCode, &ResponseBody, &Error](FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+	{
+		bCompleted = true;
+		bSucceeded = bWasSuccessful && Response.IsValid();
+		ResponseCode = Response.IsValid() ? Response->GetResponseCode() : 0;
+		ResponseBody = Response.IsValid() ? Response->GetContentAsString() : FString();
+		if (!bSucceeded || ResponseCode < 200 || ResponseCode >= 300)
+		{
+			Error = ResponseCode == 0
+				? TEXT("模型列表请求失败：无法连接接口")
+				: FString::Printf(TEXT("模型列表请求失败：HTTP %d"), ResponseCode);
+			if (!ResponseBody.IsEmpty())
+			{
+				Error += FString::Printf(TEXT("，响应：%s"), *ResponseBody.Left(300));
+			}
+		}
+	});
+
+	if (!Request->ProcessRequest())
+	{
+		OutStatus = TEXT("模型列表请求启动失败");
+		return false;
+	}
+
+	const double StartTime = FPlatformTime::Seconds();
+	while (!bCompleted)
+	{
+		FHttpModule::Get().GetHttpManager().Tick(0.05f);
+		if (FPlatformTime::Seconds() - StartTime > 20.0)
+		{
+			Request->CancelRequest();
+			OutStatus = TEXT("模型列表请求超时");
+			return false;
+		}
+		FPlatformProcess::Sleep(0.01f);
+	}
+
+	if (!bSucceeded || ResponseCode < 200 || ResponseCode >= 300)
+	{
+		OutStatus = Error.IsEmpty() ? TEXT("模型列表请求失败") : Error;
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> Root;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseBody);
+	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+	{
+		OutStatus = TEXT("模型列表响应不是合法 JSON");
+		return false;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* Data = nullptr;
+	if (Root->TryGetArrayField(TEXT("data"), Data) && Data)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *Data)
+		{
+			if (!Value.IsValid())
+			{
+				continue;
+			}
+			if (Value->Type == EJson::String)
+			{
+				OutModels.Add(Value->AsString());
+				continue;
+			}
+			const TSharedPtr<FJsonObject> Object = Value->AsObject();
+			const FString ModelId = PBRMagicJsonStringField(Object, TEXT("id"), PBRMagicJsonStringField(Object, TEXT("name")));
+			if (!ModelId.IsEmpty())
+			{
+				OutModels.Add(ModelId);
+			}
+		}
+	}
+
+	OutModels.Sort();
+	if (OutModels.Num() == 0)
+	{
+		OutStatus = TEXT("接口返回成功，但没有找到模型 id");
+		return false;
+	}
+
+	OutStatus = FString::Printf(TEXT("已获取 %d 个模型"), OutModels.Num());
+	return true;
+}
+
 static bool PBRMagicExtractChatCompletionContent(const FString& ResponseBody, FString& OutContent, FString& OutError)
 {
 	TSharedPtr<FJsonObject> Root;
@@ -794,6 +963,40 @@ static bool PBRMagicExtractChatCompletionContent(const FString& ResponseBody, FS
 
 	OutError = TEXT("远端 AI 响应缺少 message.content");
 	return false;
+}
+
+static bool PBRMagicValidateRemoteAIProvider(const FPBRMagicAIProviderSettings& Settings, FString& OutStatus)
+{
+	if (!Settings.ShouldUseRemoteModel())
+	{
+		OutStatus = TEXT("请选择 OpenAICompatible，并填写接口地址和模型名");
+		return false;
+	}
+
+	FString RequestBody;
+	if (!PBRMagicBuildRemoteAIRequestBody(Settings, TEXT("Return ONLY this JSON object with no markdown: {\"ok\":true,\"message\":\"ready\"}."), RequestBody))
+	{
+		OutStatus = TEXT("验证请求体生成失败");
+		return false;
+	}
+
+	FString ResponseBody;
+	FString Error;
+	if (!PBRMagicPostRemoteAIRequest(Settings, RequestBody, ResponseBody, Error))
+	{
+		OutStatus = Error;
+		return false;
+	}
+
+	FString Content;
+	if (!PBRMagicExtractChatCompletionContent(ResponseBody, Content, Error))
+	{
+		OutStatus = Error;
+		return false;
+	}
+
+	OutStatus = FString::Printf(TEXT("AI 接口验证成功：%s"), *Settings.Model);
+	return true;
 }
 
 static bool PBRMagicParseJsonObjectFromText(const FString& Text, TSharedPtr<FJsonObject>& OutObject, FString& OutError)
@@ -5773,6 +5976,58 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialAISettingsContent()
 	const FString Model = PBRMagicGetAIConfigString(TEXT("material_ai_model"), TEXT("gpt-4.1-mini"));
 	const FString ApiKey = PBRMagicGetAIConfigString(TEXT("material_ai_api_key_or_env"), TEXT("PBRSTUDIO_AI_API_KEY"));
 
+	auto ReadSettingsFromBoxes = [this]() -> FPBRMagicAIProviderSettings
+	{
+		FPBRMagicAIProviderSettings Settings;
+		Settings.Provider = AIProviderBox.IsValid() ? AIProviderBox->GetText().ToString().TrimStartAndEnd() : TEXT("LocalRules");
+		Settings.EndpointUrl = AIEndpointBox.IsValid() ? AIEndpointBox->GetText().ToString().TrimStartAndEnd() : FString();
+		Settings.Model = AIModelBox.IsValid() ? AIModelBox->GetText().ToString().TrimStartAndEnd() : TEXT("gpt-4.1-mini");
+		Settings.ApiKeyOrEnvironmentVariable = AIKeyBox.IsValid() ? AIKeyBox->GetText().ToString().TrimStartAndEnd() : TEXT("PBRSTUDIO_AI_API_KEY");
+		return Settings;
+	};
+
+	auto SaveSettingsFromBoxes = [this, ReadSettingsFromBoxes]()
+	{
+		const FPBRMagicAIProviderSettings Settings = ReadSettingsFromBoxes();
+		PBRMagicSaveAIConfigString(TEXT("material_ai_provider"), Settings.Provider.IsEmpty() ? TEXT("LocalRules") : Settings.Provider);
+		PBRMagicSaveAIConfigString(TEXT("material_ai_endpoint"), Settings.EndpointUrl);
+		PBRMagicSaveAIConfigString(TEXT("material_ai_model"), Settings.Model.IsEmpty() ? TEXT("gpt-4.1-mini") : Settings.Model);
+		PBRMagicSaveAIConfigString(TEXT("material_ai_api_key_or_env"), Settings.ApiKeyOrEnvironmentVariable.IsEmpty() ? TEXT("PBRSTUDIO_AI_API_KEY") : Settings.ApiKeyOrEnvironmentVariable);
+	};
+
+	auto FetchModelsToBox = [this, ReadSettingsFromBoxes]() -> bool
+	{
+		FPBRMagicAIProviderSettings Settings = ReadSettingsFromBoxes();
+		if (Settings.EndpointUrl.IsEmpty())
+		{
+			StatusMessage = TEXT("请先填写 API 接口地址");
+			return false;
+		}
+		if (!Settings.Provider.Equals(TEXT("OpenAICompatible"), ESearchCase::IgnoreCase))
+		{
+			Settings.Provider = TEXT("OpenAICompatible");
+			if (AIProviderBox.IsValid())
+			{
+				AIProviderBox->SetText(FText::FromString(Settings.Provider));
+			}
+		}
+
+		TArray<FString> Models;
+		FString Status;
+		if (PBRMagicGetRemoteAIModels(Settings, Models, Status))
+		{
+			if (AIModelBox.IsValid())
+			{
+				const FString CurrentModel = AIModelBox->GetText().ToString().TrimStartAndEnd();
+				AIModelBox->SetText(FText::FromString(Models.Contains(CurrentModel) ? CurrentModel : Models[0]));
+			}
+			StatusMessage = Status + FString::Printf(TEXT("，当前模型：%s"), AIModelBox.IsValid() ? *AIModelBox->GetText().ToString() : TEXT(""));
+			return true;
+		}
+		StatusMessage = Status;
+		return false;
+	};
+
 	auto MakeRow = [this](const FText& Label, const TSharedRef<SWidget>& Control) -> TSharedRef<SWidget>
 	{
 		return SNew(SHorizontalBox)
@@ -5806,13 +6061,175 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialAISettingsContent()
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
 			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+				[
+					SNew(SComboButton)
+					.ButtonContent()
+					[
+						SNew(STextBlock)
+						.Text(PBRText(TEXT("MaterialAICommonProviders"), TEXT("常用 AI"), TEXT("Common AI")))
+					]
+					.MenuContent()
+					[
+						SNew(SVerticalBox)
+						+ SVerticalBox::Slot().AutoHeight()
+						[
+							SNew(STextBlock)
+							.Text(PBRText(TEXT("MaterialAICommonProvidersHint"), TEXT("选择后自动填入兼容接口"), TEXT("Pick one to fill compatible endpoint")))
+							.Font(FAppStyle::GetFontStyle("SmallFont"))
+						]
+						+ SVerticalBox::Slot().AutoHeight()
+						[
+							SNew(SVerticalBox)
+							+ SVerticalBox::Slot().AutoHeight()
+							[
+								SNew(SButton)
+								.Text(FText::FromString(TEXT("OpenAI")))
+								.OnClicked_Lambda([this]()
+								{
+									const FPBRMagicAIProviderPreset& Preset = GetMagicAIProviderPresets()[0];
+									if (AIProviderBox.IsValid()) { AIProviderBox->SetText(FText::FromString(TEXT("OpenAICompatible"))); }
+									if (AIEndpointBox.IsValid()) { AIEndpointBox->SetText(FText::FromString(Preset.EndpointUrl)); }
+									if (AIModelBox.IsValid()) { AIModelBox->SetText(FText::FromString(Preset.DefaultModel)); }
+									if (AIKeyBox.IsValid()) { AIKeyBox->SetHintText(FText::FromString(Preset.KeyHint)); }
+									StatusMessage = TEXT("已选择 OpenAI，可点击获取 API 打开密钥页面");
+									return FReply::Handled();
+								})
+							]
+							+ SVerticalBox::Slot().AutoHeight()
+							[
+								SNew(SButton)
+								.Text(FText::FromString(TEXT("DeepSeek")))
+								.OnClicked_Lambda([this]()
+								{
+									const FPBRMagicAIProviderPreset& Preset = GetMagicAIProviderPresets()[1];
+									if (AIProviderBox.IsValid()) { AIProviderBox->SetText(FText::FromString(TEXT("OpenAICompatible"))); }
+									if (AIEndpointBox.IsValid()) { AIEndpointBox->SetText(FText::FromString(Preset.EndpointUrl)); }
+									if (AIModelBox.IsValid()) { AIModelBox->SetText(FText::FromString(Preset.DefaultModel)); }
+									if (AIKeyBox.IsValid()) { AIKeyBox->SetHintText(FText::FromString(Preset.KeyHint)); }
+									StatusMessage = TEXT("已选择 DeepSeek，可点击获取 API 打开密钥页面");
+									return FReply::Handled();
+								})
+							]
+							+ SVerticalBox::Slot().AutoHeight()
+							[
+								SNew(SButton)
+								.Text(FText::FromString(TEXT("SiliconFlow")))
+								.OnClicked_Lambda([this]()
+								{
+									const FPBRMagicAIProviderPreset& Preset = GetMagicAIProviderPresets()[2];
+									if (AIProviderBox.IsValid()) { AIProviderBox->SetText(FText::FromString(TEXT("OpenAICompatible"))); }
+									if (AIEndpointBox.IsValid()) { AIEndpointBox->SetText(FText::FromString(Preset.EndpointUrl)); }
+									if (AIModelBox.IsValid()) { AIModelBox->SetText(FText::FromString(Preset.DefaultModel)); }
+									if (AIKeyBox.IsValid()) { AIKeyBox->SetHintText(FText::FromString(Preset.KeyHint)); }
+									StatusMessage = TEXT("已选择 SiliconFlow，可点击获取 API 打开密钥页面");
+									return FReply::Handled();
+								})
+							]
+							+ SVerticalBox::Slot().AutoHeight()
+							[
+								SNew(SButton)
+								.Text(FText::FromString(TEXT("智谱/Z.AI")))
+								.OnClicked_Lambda([this]()
+								{
+									const FPBRMagicAIProviderPreset& Preset = GetMagicAIProviderPresets()[3];
+									if (AIProviderBox.IsValid()) { AIProviderBox->SetText(FText::FromString(TEXT("OpenAICompatible"))); }
+									if (AIEndpointBox.IsValid()) { AIEndpointBox->SetText(FText::FromString(Preset.EndpointUrl)); }
+									if (AIModelBox.IsValid()) { AIModelBox->SetText(FText::FromString(Preset.DefaultModel)); }
+									if (AIKeyBox.IsValid()) { AIKeyBox->SetHintText(FText::FromString(Preset.KeyHint)); }
+									StatusMessage = TEXT("已选择智谱/Z.AI，可点击获取 API 打开密钥页面");
+									return FReply::Handled();
+								})
+							]
+							+ SVerticalBox::Slot().AutoHeight()
+							[
+								SNew(SButton)
+								.Text(FText::FromString(TEXT("OpenRouter")))
+								.OnClicked_Lambda([this]()
+								{
+									const FPBRMagicAIProviderPreset& Preset = GetMagicAIProviderPresets()[4];
+									if (AIProviderBox.IsValid()) { AIProviderBox->SetText(FText::FromString(TEXT("OpenAICompatible"))); }
+									if (AIEndpointBox.IsValid()) { AIEndpointBox->SetText(FText::FromString(Preset.EndpointUrl)); }
+									if (AIModelBox.IsValid()) { AIModelBox->SetText(FText::FromString(Preset.DefaultModel)); }
+									if (AIKeyBox.IsValid()) { AIKeyBox->SetHintText(FText::FromString(Preset.KeyHint)); }
+									StatusMessage = TEXT("已选择 OpenRouter，可点击获取 API 打开密钥页面");
+									return FReply::Handled();
+								})
+							]
+							+ SVerticalBox::Slot().AutoHeight()
+							[
+								SNew(SButton)
+								.Text(FText::FromString(TEXT("Ollama 本地")))
+								.OnClicked_Lambda([this]()
+								{
+									const FPBRMagicAIProviderPreset& Preset = GetMagicAIProviderPresets()[5];
+									if (AIProviderBox.IsValid()) { AIProviderBox->SetText(FText::FromString(TEXT("OpenAICompatible"))); }
+									if (AIEndpointBox.IsValid()) { AIEndpointBox->SetText(FText::FromString(Preset.EndpointUrl)); }
+									if (AIModelBox.IsValid()) { AIModelBox->SetText(FText::FromString(Preset.DefaultModel)); }
+									if (AIKeyBox.IsValid()) { AIKeyBox->SetHintText(FText::FromString(Preset.KeyHint)); }
+									StatusMessage = TEXT("已选择本地 Ollama，可点击获取 API 打开下载页面");
+									return FReply::Handled();
+								})
+							]
+						]
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+				[
+					SNew(SButton)
+					.Text(PBRText(TEXT("MaterialAIOpenApiPage"), TEXT("获取 API"), TEXT("Get API")))
+					.OnClicked_Lambda([this]()
+					{
+						const FString EndpointText = AIEndpointBox.IsValid() ? AIEndpointBox->GetText().ToString() : FString();
+						const FPBRMagicAIProviderPreset* Preset = FindMagicAIProviderPresetByEndpoint(EndpointText);
+						const FString Url = Preset ? FString(Preset->ApiPageUrl) : FString(TEXT("https://platform.openai.com/api-keys"));
+						FPlatformProcess::LaunchURL(*Url, nullptr, nullptr);
+						StatusMessage = FString::Printf(TEXT("已打开 API 页面：%s"), *Url);
+						return FReply::Handled();
+					})
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+				[
+					SNew(SButton)
+					.Text(PBRText(TEXT("MaterialAIFetchModels"), TEXT("获取模型"), TEXT("Fetch Models")))
+					.OnClicked_Lambda([FetchModelsToBox]()
+					{
+						FetchModelsToBox();
+						return FReply::Handled();
+					})
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SButton)
+					.Text(PBRText(TEXT("MaterialAIValidate"), TEXT("验证"), TEXT("Validate")))
+					.OnClicked_Lambda([this, ReadSettingsFromBoxes]()
+					{
+						FString Status;
+						const bool bOk = PBRMagicValidateRemoteAIProvider(ReadSettingsFromBoxes(), Status);
+						StatusMessage = bOk ? Status : FString::Printf(TEXT("AI 接口验证失败：%s"), *Status);
+						return FReply::Handled();
+					})
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+			[
 				MakeRow(PBRText(TEXT("MaterialAIProvider"), TEXT("接口类型"), TEXT("Provider")),
 					SAssignNew(AIProviderBox, SEditableTextBox).Text(FText::FromString(Provider)))
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
 			[
 				MakeRow(PBRText(TEXT("MaterialAIEndpoint"), TEXT("接口地址"), TEXT("Endpoint")),
-					SAssignNew(AIEndpointBox, SEditableTextBox).Text(FText::FromString(Endpoint)).HintText(FText::FromString(TEXT("https://api.openai.com/v1 或兼容地址"))))
+					SAssignNew(AIEndpointBox, SEditableTextBox)
+					.Text(FText::FromString(Endpoint))
+					.HintText(FText::FromString(TEXT("https://api.openai.com/v1 或兼容地址")))
+					.OnTextCommitted_Lambda([FetchModelsToBox](const FText&, ETextCommit::Type CommitType)
+					{
+						if (CommitType != ETextCommit::OnCleared)
+						{
+							FetchModelsToBox();
+						}
+					}))
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
 			[
@@ -5831,6 +6248,17 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialAISettingsContent()
 				.Text(PBRText(TEXT("MaterialAISettingsHint"), TEXT("接口类型填 LocalRules 使用本地规则；填 OpenAICompatible 时会请求兼容 /chat/completions 的接口。密钥栏可填环境变量名，也可直接填 sk- / glm- 开头的密钥。接口失败时会自动回退本地规则。"), TEXT("Use LocalRules for local suggestions. Use OpenAICompatible for a /chat/completions compatible endpoint. The key field accepts an environment variable name or an inline sk-/glm- key. Failed remote calls fall back to local rules.")))
 				.Font(FAppStyle::GetFontStyle("SmallFont"))
 				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
+			[
+				SNew(STextBlock)
+				.AutoWrapText(true)
+				.Text_Lambda([this]()
+				{
+					return FText::FromString(StatusMessage.IsEmpty() ? TEXT("状态：等待设置") : FString::Printf(TEXT("状态：%s"), *StatusMessage));
+				})
+				.Font(FAppStyle::GetFontStyle("SmallFont"))
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Selection"))); })
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			.HAlign(HAlign_Right)
@@ -5853,12 +6281,9 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialAISettingsContent()
 				[
 					SNew(SButton)
 					.Text(PBRText(TEXT("MaterialAISaveSettings"), TEXT("保存"), TEXT("Save")))
-					.OnClicked_Lambda([this]()
+					.OnClicked_Lambda([this, SaveSettingsFromBoxes]()
 					{
-						PBRMagicSaveAIConfigString(TEXT("material_ai_provider"), AIProviderBox.IsValid() ? AIProviderBox->GetText().ToString() : TEXT("LocalRules"));
-						PBRMagicSaveAIConfigString(TEXT("material_ai_endpoint"), AIEndpointBox.IsValid() ? AIEndpointBox->GetText().ToString() : FString());
-						PBRMagicSaveAIConfigString(TEXT("material_ai_model"), AIModelBox.IsValid() ? AIModelBox->GetText().ToString() : TEXT("gpt-4.1-mini"));
-						PBRMagicSaveAIConfigString(TEXT("material_ai_api_key_or_env"), AIKeyBox.IsValid() ? AIKeyBox->GetText().ToString() : TEXT("PBRSTUDIO_AI_API_KEY"));
+						SaveSettingsFromBoxes();
 						StatusMessage = TEXT("AI 材质建议设置已保存");
 						if (TSharedPtr<SWindow> ExistingWindow = MaterialAISettingsWindow.Pin())
 						{
