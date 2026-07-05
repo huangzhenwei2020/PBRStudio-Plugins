@@ -118,6 +118,7 @@ private:
 	TSharedRef<SWidget> BuildCheckedListPanel();
 	TSharedRef<SWidget> BuildSelectedMaterialPanel();
 	TSharedRef<SWidget> BuildSelectedMaterialEditorPanel();
+	TSharedRef<SWidget> BuildMaterialParameterPopupContent();
 	TSharedRef<SWidget> BuildEditableMaterialTypeMenu();
 	TSharedRef<SWidget> BuildMaterialParameterControl(const struct FPBRMagicEditableMaterialParameter& Parameter);
 	TArray<FPBRMagicDynamicMaterialParameter> CollectEditableDynamicMaterialParameters() const;
@@ -217,9 +218,11 @@ private:
 	bool GetEditableMaterialSwitch(const FName& ParameterName, bool bDefaultValue) const;
 	UTexture* GetEditableMaterialTexture(const FName& ParameterName) const;
 	void CommitEditableMaterialScalar(const FName& ParameterName, float Value, float MinValue, float MaxValue);
+	void CommitEditableMaterialVector(const FName& ParameterName, const FLinearColor& Value);
 	void CommitEditableMaterialVectorChannel(const FName& ParameterName, int32 ChannelIndex, float Value, const FLinearColor& DefaultValue);
 	void CommitEditableMaterialSwitch(const FName& ParameterName, bool bValue);
 	void CommitEditableMaterialTexture(const FName& ParameterName, UTexture* Texture);
+	void OpenEditableMaterialColorPicker(const FName& ParameterName, const FLinearColor& DefaultValue);
 	void StepEditableMaterialScalar(const FName& ParameterName, float DeltaValue, float MinValue, float MaxValue, float DefaultValue);
 	void SelectEditableMaterialType(EPBRMaterialType MaterialType);
 	void CycleEditableMaterialType(int32 Direction);

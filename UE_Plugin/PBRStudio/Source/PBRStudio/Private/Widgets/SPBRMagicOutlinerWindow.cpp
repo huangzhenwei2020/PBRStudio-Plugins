@@ -815,6 +815,130 @@ static FString FormatMagicEditableMaterialScalar(float Value, float StepValue)
 	return FString::Printf(TEXT("%.2f"), Value);
 }
 
+static FString GetMagicMaterialParameterDisplayName(const FName& ParameterName)
+{
+	const FString RawName = ParameterName.ToString();
+	for (const FPBRMagicEditableMaterialParameter& Parameter : GetMagicEditableMaterialParameters())
+	{
+		if (Parameter.ParameterName == ParameterName)
+		{
+			return Parameter.GetLabel().ToString();
+		}
+	}
+
+	struct FKnownParameterName
+	{
+		const TCHAR* Raw;
+		const TCHAR* Display;
+	};
+
+	static const FKnownParameterName KnownNames[] =
+	{
+		{ TEXT("BaseColorTexture"), TEXT("基础色贴图") },
+		{ TEXT("BaseColorMap"), TEXT("基础色贴图") },
+		{ TEXT("BaseColorTint"), TEXT("基础色调") },
+		{ TEXT("BaseColorIntensity"), TEXT("基础色强度") },
+		{ TEXT("UseBaseColorTexture"), TEXT("使用基础色贴图") },
+		{ TEXT("NormalTexture"), TEXT("法线贴图") },
+		{ TEXT("NormalMap"), TEXT("法线贴图") },
+		{ TEXT("NormalStrength"), TEXT("法线强度") },
+		{ TEXT("UseNormalTexture"), TEXT("使用法线贴图") },
+		{ TEXT("RoughnessTexture"), TEXT("粗糙度贴图") },
+		{ TEXT("RoughnessMap"), TEXT("粗糙度贴图") },
+		{ TEXT("RoughnessIntensity"), TEXT("粗糙度强度") },
+		{ TEXT("RoughnessValue"), TEXT("粗糙度数值") },
+		{ TEXT("UseRoughnessTexture"), TEXT("使用粗糙度贴图") },
+		{ TEXT("SpecularTexture"), TEXT("高光贴图") },
+		{ TEXT("SpecularIntensity"), TEXT("高光强度") },
+		{ TEXT("UseSpecularTexture"), TEXT("使用高光贴图") },
+		{ TEXT("AOTexture"), TEXT("环境遮蔽贴图") },
+		{ TEXT("OcclusionTexture"), TEXT("环境遮蔽贴图") },
+		{ TEXT("UseAOTexture"), TEXT("使用环境遮蔽贴图") },
+		{ TEXT("MetallicTexture"), TEXT("金属度贴图") },
+		{ TEXT("MetallicValue"), TEXT("金属度数值") },
+		{ TEXT("UseMetallicTexture"), TEXT("使用金属度贴图") },
+		{ TEXT("OpacityTexture"), TEXT("透明贴图") },
+		{ TEXT("OpacityValue"), TEXT("透明度") },
+		{ TEXT("UseOpacityTexture"), TEXT("使用透明贴图") },
+		{ TEXT("EmissiveTexture"), TEXT("自发光贴图") },
+		{ TEXT("EmissiveIntensity"), TEXT("自发光强度") },
+		{ TEXT("UseEmissiveTexture"), TEXT("使用自发光贴图") },
+		{ TEXT("HeightTexture"), TEXT("高度贴图") },
+		{ TEXT("HeightStrength"), TEXT("高度强度") },
+		{ TEXT("UseHeightTexture"), TEXT("使用高度贴图") },
+		{ TEXT("IOR"), TEXT("折射率") },
+		{ TEXT("Refraction"), TEXT("折射强度") },
+		{ TEXT("GlassTint"), TEXT("玻璃颜色") },
+		{ TEXT("GlassDirtTexture"), TEXT("玻璃污渍贴图") },
+		{ TEXT("GlassDistortionTexture"), TEXT("玻璃扭曲贴图") },
+		{ TEXT("GlassFrostedTexture"), TEXT("玻璃磨砂贴图") },
+		{ TEXT("WaterRippleTexture"), TEXT("水纹贴图") }
+	};
+
+	for (const FKnownParameterName& KnownName : KnownNames)
+	{
+		if (RawName.Equals(KnownName.Raw, ESearchCase::IgnoreCase))
+		{
+			return KnownName.Display;
+		}
+	}
+
+	FString DisplayName;
+	DisplayName.Reserve(RawName.Len() + 8);
+	for (int32 Index = 0; Index < RawName.Len(); ++Index)
+	{
+		const TCHAR Character = RawName[Index];
+		if (Character == TCHAR('_') || Character == TCHAR('-'))
+		{
+			DisplayName.AppendChar(TEXT(' '));
+			continue;
+		}
+		if (Index > 0 && FChar::IsUpper(Character))
+		{
+			const TCHAR Previous = RawName[Index - 1];
+			if (FChar::IsLower(Previous) || FChar::IsDigit(Previous))
+			{
+				DisplayName.AppendChar(TEXT(' '));
+			}
+		}
+		DisplayName.AppendChar(Character);
+	}
+	DisplayName.TrimStartAndEndInline();
+	return DisplayName.IsEmpty() ? RawName : DisplayName;
+}
+
+static FName GetMagicTextureUsageSwitchName(const FName& TextureParameterName)
+{
+	const FString Name = TextureParameterName.ToString();
+	for (const FPBRMagicEditableMaterialParameter& Parameter : GetMagicEditableMaterialParameters())
+	{
+		if (Parameter.Kind == EPBRMagicEditableMaterialParameterKind::Switch)
+		{
+			const FString SwitchName = Parameter.ParameterName.ToString();
+			if (SwitchName.StartsWith(TEXT("Use"), ESearchCase::IgnoreCase) &&
+				SwitchName.Contains(Name.Replace(TEXT("Texture"), TEXT(""), ESearchCase::IgnoreCase), ESearchCase::IgnoreCase))
+			{
+				return Parameter.ParameterName;
+			}
+		}
+	}
+
+	if (Name.StartsWith(TEXT("Use"), ESearchCase::IgnoreCase))
+	{
+		return NAME_None;
+	}
+	if (Name.EndsWith(TEXT("Texture"), ESearchCase::IgnoreCase))
+	{
+		return FName(*FString::Printf(TEXT("Use%s"), *Name));
+	}
+	if (Name.EndsWith(TEXT("Map"), ESearchCase::IgnoreCase))
+	{
+		FString Base = Name.LeftChop(3);
+		return FName(*FString::Printf(TEXT("Use%sTexture"), *Base));
+	}
+	return FName(*FString::Printf(TEXT("Use%sTexture"), *Name));
+}
+
 class SPBRMagicOutlinerRow : public STableRow<TSharedPtr<FPBRMagicOutlinerItem>>
 {
 public:
@@ -4850,6 +4974,116 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildSelectedMaterialEditorPanel()
 		];
 }
 
+TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialParameterPopupContent()
+{
+	TSharedRef<SVerticalBox> ParameterBox = SNew(SVerticalBox);
+	const TArray<FPBRMagicDynamicMaterialParameter> DynamicParameters = CollectEditableDynamicMaterialParameters();
+	if (DynamicParameters.Num() > 0)
+	{
+		FString LastGroupName;
+		TArray<FPBRMagicDynamicMaterialParameter> GroupParameters;
+		auto FlushDynamicGroup = [this, &ParameterBox, &LastGroupName, &GroupParameters]()
+		{
+			if (GroupParameters.Num() == 0)
+			{
+				return;
+			}
+
+			ParameterBox->AddSlot()
+			.AutoHeight()
+			.Padding(0, 0, 0, 8)
+			[
+				BuildDynamicMaterialParameterGroup(LastGroupName, GroupParameters)
+			];
+			GroupParameters.Reset();
+		};
+
+		for (const FPBRMagicDynamicMaterialParameter& Parameter : DynamicParameters)
+		{
+			if (Parameter.Group != LastGroupName)
+			{
+				FlushDynamicGroup();
+				LastGroupName = Parameter.Group;
+			}
+			GroupParameters.Add(Parameter);
+		}
+		FlushDynamicGroup();
+	}
+
+	return SNew(SBorder)
+		.BorderImage(FAppStyle::Get().GetBrush("Brushes.Recessed"))
+		.BorderBackgroundColor_Lambda([this]() { return GetThemeColor(TEXT("PanelRaised")); })
+		.Padding(12)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(STextBlock)
+						.Text(PBRText(TEXT("MagicMaterialPopupHeader"), TEXT("材质参数调节"), TEXT("Material Parameters")))
+						.Font(FAppStyle::GetFontStyle("NormalFontBold"))
+						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Text"))); })
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+					[
+						SNew(STextBlock)
+						.Text(this, &SPBRMagicOutlinerWindow::GetEditableMaterialNameText)
+						.Font(FAppStyle::GetFontStyle("SmallFont"))
+						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+					[
+						SNew(STextBlock)
+						.Text(this, &SPBRMagicOutlinerWindow::GetEditableMaterialSlotText)
+						.Font(FAppStyle::GetFontStyle("TinyText"))
+						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Selection"))); })
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					SNew(SBox)
+					.WidthOverride(240.0f)
+					[
+						SNew(SComboButton)
+						.ButtonStyle(FAppStyle::Get(), "FlatButton")
+						.ContentPadding(FMargin(10, 5))
+						.MenuContent()
+						[
+							BuildEditableMaterialTypeMenu()
+						]
+						.ButtonContent()
+						[
+							SNew(STextBlock)
+							.Text(this, &SPBRMagicOutlinerWindow::GetEditableMaterialTypeText)
+							.Font(FAppStyle::GetFontStyle("SmallFontBold"))
+							.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Text"))); })
+						]
+					]
+				]
+			]
+			+ SVerticalBox::Slot().FillHeight(1.0f)
+			[
+				SNew(SScrollBox)
+				+ SScrollBox::Slot()
+				[
+					ParameterBox
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text(PBRText(TEXT("MagicMaterialPopupHint"), TEXT("数值可直接输入；颜色点色块打开拾色器；贴图用勾选控制启用，并可通过资产框选择或清空。"), TEXT("Enter numbers directly; click color swatches for picker; use checkboxes and asset fields for textures.")))
+				.Font(FAppStyle::GetFontStyle("TinyText"))
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+			]
+		];
+}
+
 TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildEditableMaterialTypeMenu()
 {
 	TSharedRef<SVerticalBox> MenuBox = SNew(SVerticalBox);
@@ -5021,7 +5255,7 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildDynamicMaterialParameterGroup(
 
 TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildDynamicMaterialParameterControl(const FPBRMagicDynamicMaterialParameter& Parameter)
 {
-	const FText Label = FText::FromString(Parameter.ParameterName.ToString());
+	const FText Label = FText::FromString(GetMagicMaterialParameterDisplayName(Parameter.ParameterName));
 	switch (Parameter.Kind)
 	{
 	case EPBRMagicDynamicMaterialParameterKind::Color:
@@ -5039,14 +5273,14 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildDynamicMaterialParameterContro
 TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialScalarControl(const FText& Label, const FName& ParameterName, float MinValue, float MaxValue, float DefaultValue, float StepValue)
 {
 	return SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().FillWidth(0.45f).VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+		+ SHorizontalBox::Slot().FillWidth(0.36f).VAlign(VAlign_Center).Padding(0, 0, 8, 0)
 		[
 			SNew(STextBlock)
 			.Text(Label)
 			.Font(FAppStyle::GetFontStyle("SmallFont"))
 			.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
 		]
-		+ SHorizontalBox::Slot().FillWidth(0.55f)
+		+ SHorizontalBox::Slot().FillWidth(0.64f)
 		[
 			SNew(SNumericEntryBox<float>)
 			.AllowSpin(true)
@@ -5059,6 +5293,10 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialScalarControl(const FT
 			{
 				return GetEditableMaterialScalar(ParameterName, DefaultValue);
 			})
+			.OnValueChanged_Lambda([this, ParameterName, MinValue, MaxValue](float NewValue)
+			{
+				CommitEditableMaterialScalar(ParameterName, NewValue, MinValue, MaxValue);
+			})
 			.OnValueCommitted_Lambda([this, ParameterName, MinValue, MaxValue](float NewValue, ETextCommit::Type)
 			{
 				CommitEditableMaterialScalar(ParameterName, NewValue, MinValue, MaxValue);
@@ -5068,6 +5306,16 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialScalarControl(const FT
 
 TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialVectorControl(const FText& Label, const FName& ParameterName, const FLinearColor& DefaultValue)
 {
+	auto GetCurrentColor = [this, ParameterName, DefaultValue]()
+	{
+		FLinearColor Value = DefaultValue;
+		if (UMaterialInstanceConstant* Instance = GetEditableMaterialInstance())
+		{
+			Instance->GetVectorParameterValue(FMaterialParameterInfo(ParameterName), Value);
+		}
+		return Value;
+	};
+
 	auto MakeChannelBox = [this, ParameterName, DefaultValue](int32 ChannelIndex)
 	{
 		return SNew(SNumericEntryBox<float>)
@@ -5081,6 +5329,10 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialVectorControl(const FT
 			{
 				return GetEditableMaterialVectorChannel(ParameterName, ChannelIndex, DefaultValue);
 			})
+			.OnValueChanged_Lambda([this, ParameterName, ChannelIndex, DefaultValue](float NewValue)
+			{
+				CommitEditableMaterialVectorChannel(ParameterName, ChannelIndex, NewValue, DefaultValue);
+			})
 			.OnValueCommitted_Lambda([this, ParameterName, ChannelIndex, DefaultValue](float NewValue, ETextCommit::Type)
 			{
 				CommitEditableMaterialVectorChannel(ParameterName, ChannelIndex, NewValue, DefaultValue);
@@ -5088,12 +5340,43 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialVectorControl(const FT
 	};
 
 	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 3)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
 		[
-			SNew(STextBlock)
-			.Text(Label)
-			.Font(FAppStyle::GetFontStyle("SmallFont"))
-			.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.Text(Label)
+				.Font(FAppStyle::GetFontStyle("SmallFont"))
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([GetCurrentColor]()
+				{
+					const FColor Color = GetCurrentColor().GetClamped().ToFColor(true);
+					return FText::FromString(FString::Printf(TEXT("RGB %d, %d, %d"), Color.R, Color.G, Color.B));
+				})
+				.Font(FAppStyle::GetFontStyle("TinyText"))
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SButton)
+				.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+				.ContentPadding(FMargin(2))
+				.OnClicked_Lambda([this, ParameterName, DefaultValue]()
+				{
+					OpenEditableMaterialColorPicker(ParameterName, DefaultValue);
+					return FReply::Handled();
+				})
+				[
+					SNew(SColorBlock)
+					.Color_Lambda([GetCurrentColor]() { return GetCurrentColor(); })
+					.Size(FVector2D(48.0f, 22.0f))
+				]
+			]
 		]
 		+ SVerticalBox::Slot().AutoHeight()
 		[
@@ -5119,13 +5402,40 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialVectorControl(const FT
 
 TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialTextureControl(const FText& Label, const FName& ParameterName)
 {
+	const FName SwitchParameterName = GetMagicTextureUsageSwitchName(ParameterName);
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 3)
 		[
-			SNew(STextBlock)
-			.Text(Label)
-			.Font(FAppStyle::GetFontStyle("SmallFont"))
-			.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.Text(Label)
+				.Font(FAppStyle::GetFontStyle("SmallFont"))
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SCheckBox)
+				.Visibility(SwitchParameterName.IsNone() ? EVisibility::Collapsed : EVisibility::Visible)
+				.IsChecked_Lambda([this, SwitchParameterName]()
+				{
+					return GetEditableMaterialSwitch(SwitchParameterName, true) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+				})
+				.OnCheckStateChanged_Lambda([this, SwitchParameterName](ECheckBoxState NewState)
+				{
+					if (!SwitchParameterName.IsNone())
+					{
+						CommitEditableMaterialSwitch(SwitchParameterName, NewState == ECheckBoxState::Checked);
+					}
+				})
+				[
+					SNew(STextBlock)
+					.Text(PBRText(TEXT("MagicTextureUseCheckbox"), TEXT("使用贴图"), TEXT("Use Texture")))
+					.Font(FAppStyle::GetFontStyle("TinyText"))
+					.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+				]
+			]
 		]
 		+ SVerticalBox::Slot().AutoHeight()
 		[
@@ -6252,7 +6562,7 @@ void SPBRMagicOutlinerWindow::OpenEditableMaterialParameterWindow()
 	if (TSharedPtr<SWindow> ExistingWindow = MaterialParameterWindow.Pin())
 	{
 		ExistingWindow->BringToFront();
-		ExistingWindow->SetContent(SNew(SPBRMagicMaterialParameterPopupSurface).OwnerWindow(this));
+		ExistingWindow->SetContent(BuildMaterialParameterPopupContent());
 		return;
 	}
 
@@ -6263,8 +6573,7 @@ void SPBRMagicOutlinerWindow::OpenEditableMaterialParameterWindow()
 		.SupportsMaximize(true)
 		.SupportsMinimize(false)
 		[
-			SNew(SPBRMagicMaterialParameterPopupSurface)
-			.OwnerWindow(this)
+			BuildMaterialParameterPopupContent()
 		];
 
 	MaterialParameterWindow = Window;
@@ -6431,6 +6740,34 @@ void SPBRMagicOutlinerWindow::CommitEditableMaterialScalar(const FName& Paramete
 	}
 }
 
+void SPBRMagicOutlinerWindow::CommitEditableMaterialVector(const FName& ParameterName, const FLinearColor& Value)
+{
+	UPrimitiveComponent* Component = nullptr;
+	int32 SlotIndex = INDEX_NONE;
+	if (!ResolveEditableMaterialSlot(Component, SlotIndex))
+	{
+		StatusMessage = TEXT("没有可编辑的材质槽");
+		return;
+	}
+
+	const FLinearColor ClampedValue(
+		FMath::Clamp(Value.R, 0.0f, 1.0f),
+		FMath::Clamp(Value.G, 0.0f, 1.0f),
+		FMath::Clamp(Value.B, 0.0f, 1.0f),
+		FMath::Clamp(Value.A, 0.0f, 1.0f));
+
+	FString Message;
+	if (FPBRSceneMaterialReplacer::SetVectorParameterForSlot(Component, SlotIndex, ParameterName, ClampedValue, Message))
+	{
+		StatusMessage = Message;
+		Invalidate(EInvalidateWidgetReason::Paint);
+	}
+	else
+	{
+		StatusMessage = Message.IsEmpty() ? TEXT("颜色更新失败") : Message;
+	}
+}
+
 void SPBRMagicOutlinerWindow::CommitEditableMaterialVectorChannel(const FName& ParameterName, int32 ChannelIndex, float Value, const FLinearColor& DefaultValue)
 {
 	UPrimitiveComponent* Component = nullptr;
@@ -6476,6 +6813,26 @@ void SPBRMagicOutlinerWindow::CommitEditableMaterialVectorChannel(const FName& P
 	{
 		StatusMessage = Message.IsEmpty() ? TEXT("颜色更新失败") : Message;
 	}
+}
+
+void SPBRMagicOutlinerWindow::OpenEditableMaterialColorPicker(const FName& ParameterName, const FLinearColor& DefaultValue)
+{
+	FLinearColor InitialColor = DefaultValue;
+	if (UMaterialInstanceConstant* Instance = GetEditableMaterialInstance())
+	{
+		Instance->GetVectorParameterValue(FMaterialParameterInfo(ParameterName), InitialColor);
+	}
+
+	FColorPickerArgs PickerArgs;
+	PickerArgs.bUseAlpha = true;
+	PickerArgs.bOnlyRefreshOnOk = false;
+	PickerArgs.InitialColor = InitialColor;
+	PickerArgs.ParentWidget = AsShared();
+	PickerArgs.OnColorCommitted = FOnLinearColorValueChanged::CreateLambda([this, ParameterName](FLinearColor NewColor)
+	{
+		CommitEditableMaterialVector(ParameterName, NewColor);
+	});
+	OpenColorPicker(PickerArgs);
 }
 
 void SPBRMagicOutlinerWindow::CommitEditableMaterialSwitch(const FName& ParameterName, bool bValue)
