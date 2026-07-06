@@ -589,21 +589,44 @@ static FName PBRMagicResolveScalarParameterName(const FString& RawName)
 	static TMap<FString, FName> Aliases;
 	if (Aliases.Num() == 0)
 	{
-		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::BaseColorIntensity, { TEXT("基础色强度"), TEXT("base_color_intensity"), TEXT("basecolorintensity"), TEXT("albedo_intensity") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::BaseColorIntensity, { TEXT("基础色强度"), TEXT("颜色强度"), TEXT("base_color_intensity"), TEXT("basecolorintensity"), TEXT("albedo_intensity"), TEXT("color_intensity") });
 		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::NormalStrength, { TEXT("法线强度"), TEXT("normal_strength"), TEXT("normalstrength") });
 		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::RoughnessValue, { TEXT("粗糙度数值"), TEXT("roughness"), TEXT("roughness_value") });
 		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::RoughnessMultiplier, { TEXT("粗糙度强度"), TEXT("roughness_multiplier"), TEXT("roughness_strength") });
 		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::SpecularLevel, { TEXT("高光强度"), TEXT("specular"), TEXT("specular_level") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::AOMultiplier, { TEXT("环境遮蔽强度"), TEXT("ao_multiplier"), TEXT("ambient_occlusion_strength"), TEXT("occlusion_strength") });
 		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::MetallicValue, { TEXT("金属度数值"), TEXT("metallic"), TEXT("metallic_value"), TEXT("metalness") });
 		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::MetallicMultiplier, { TEXT("金属度强度"), TEXT("metallic_multiplier"), TEXT("metallic_strength") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::Anisotropy, { TEXT("各向异性"), TEXT("anisotropy") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::FlakeScale, { TEXT("金属颗粒缩放"), TEXT("flake_scale") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::FlakeIntensity, { TEXT("金属颗粒强度"), TEXT("flake_intensity") });
 		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::Opacity, { TEXT("透明度"), TEXT("opacity"), TEXT("transparency") });
 		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::HeightStrength, { TEXT("置换强度"), TEXT("高度强度"), TEXT("height_strength"), TEXT("displacement_strength") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::PixelDepthOffsetStrength, { TEXT("深度偏移强度"), TEXT("pixel_depth_offset"), TEXT("pixel_depth_offset_strength") });
 		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::EmissiveIntensity, { TEXT("自发光强度"), TEXT("emissive_intensity"), TEXT("emission_strength") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::EmissiveTemperatureKelvin, { TEXT("自发光色温"), TEXT("emissive_temperature"), TEXT("emissive_kelvin"), TEXT("temperature_kelvin") });
 		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::FabricFuzzStrength, { TEXT("织物绒毛强度"), TEXT("fabric_fuzz_strength"), TEXT("fuzz_strength") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::ClearCoat, { TEXT("清漆强度"), TEXT("clear_coat"), TEXT("clearcoat") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::ClearCoatRoughness, { TEXT("清漆粗糙度"), TEXT("clear_coat_roughness"), TEXT("clearcoat_roughness") });
 		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::RefractionAmount, { TEXT("折射强度"), TEXT("refraction"), TEXT("refraction_amount"), TEXT("ior") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassOpacityFresnelStrength, { TEXT("透明菲涅尔强度"), TEXT("glass_opacity_fresnel"), TEXT("opacity_fresnel") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassFresnelBaseReflection, { TEXT("菲涅尔基础反射"), TEXT("glass_fresnel_base"), TEXT("fresnel_base") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassFresnelExp, { TEXT("菲涅尔指数"), TEXT("glass_fresnel_exp"), TEXT("fresnel_exponent") });
 		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassFrostedStrength, { TEXT("毛玻璃强度"), TEXT("frosted_strength"), TEXT("glass_frosted_strength") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassAbsorptionStrength, { TEXT("玻璃吸收强度"), TEXT("glass_absorption_strength"), TEXT("absorption_strength") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassEdgeTintStrength, { TEXT("玻璃边缘染色"), TEXT("glass_edge_tint"), TEXT("edge_tint") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassDirtIntensity, { TEXT("玻璃污渍强度"), TEXT("glass_dirt_intensity"), TEXT("dirt_intensity") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassDirtOpacity, { TEXT("玻璃污渍透明度"), TEXT("glass_dirt_opacity"), TEXT("dirt_opacity") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassDirtRoughness, { TEXT("玻璃污渍粗糙度"), TEXT("glass_dirt_roughness"), TEXT("dirt_roughness") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassDistortionIntensity, { TEXT("玻璃扭曲强度"), TEXT("glass_distortion"), TEXT("distortion_intensity") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassDistortionIORIntensity, { TEXT("玻璃 IOR 扭曲强度"), TEXT("glass_ior_distortion"), TEXT("ior_distortion") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassShadowOpacity, { TEXT("玻璃投影强度"), TEXT("glass_shadow_opacity"), TEXT("shadow_opacity") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassCausticsIntensity, { TEXT("玻璃焦散强度"), TEXT("glass_caustics_intensity"), TEXT("caustics_intensity") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::GlassCausticsScale, { TEXT("玻璃焦散大小"), TEXT("glass_caustics_scale"), TEXT("caustics_scale") });
 		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::WaterRippleStrength, { TEXT("水波强度"), TEXT("water_ripple_strength"), TEXT("ripple_strength") });
 		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::WaterRippleScale, { TEXT("水波缩放"), TEXT("water_ripple_scale"), TEXT("ripple_scale") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::WaterFlowSpeedU, { TEXT("水流 U 速度"), TEXT("water_flow_u"), TEXT("flow_u") });
+		PBRMagicAddParameterAlias(Aliases, FPBRMaterialParameters::WaterFlowSpeedV, { TEXT("水流 V 速度"), TEXT("water_flow_v"), TEXT("flow_v") });
 	}
 	if (const FName* ParameterName = Aliases.Find(PBRMagicNormalizeParameterKey(RawName)))
 	{
@@ -723,6 +746,8 @@ static bool PBRMagicParseMaterialType(const FString& TypeText, EPBRMaterialType&
 	return false;
 }
 
+static void PBRMagicApplyTypeSuggestionDefaults(FPBRMagicAISuggestion& Suggestion);
+
 static FPBRMagicAISuggestion PBRMagicBuildLocalAISuggestion(UMaterialInstanceConstant* Instance)
 {
 	FPBRMagicAISuggestion Suggestion;
@@ -804,6 +829,7 @@ static FPBRMagicAISuggestion PBRMagicBuildLocalAISuggestion(UMaterialInstanceCon
 		Suggestion.Summary = TEXT("AI 本地规则未找到强特征，已按通用标准材质建议基础参数。");
 	}
 
+	PBRMagicApplyTypeSuggestionDefaults(Suggestion);
 	return Suggestion;
 }
 
@@ -822,6 +848,7 @@ static FString PBRMagicBuildRemoteAIUserText(UMaterialInstanceConstant* Instance
 	Text += TEXT("Generic parameter names listed later, including metallic parameter names, are only writable controls and are NOT evidence for material classification.\n");
 	Text += TEXT("Allowed material_type values: Standard, Wood, Stone, Tile, Fabric, Leather, Plastic, Metal, Transparent, Glass, Water, Emissive. Use Standard for grass, moss, plants, soil, sand, and ordinary non-metal PBR surfaces.\n");
 	Text += TEXT("JSON schema: {\"material_type\":\"Standard\",\"surface_label\":\"grass/vegetation\",\"confidence\":0.0-1.0,\"evidence\":\"short reason\",\"scalar_suggestions\":[{\"parameter\":\"粗糙度数值\",\"value\":0.82,\"min\":0,\"max\":1,\"reason\":\"...\"}],\"switch_suggestions\":[{\"parameter\":\"使用基础色贴图\",\"value\":true,\"reason\":\"...\"}],\"color_suggestions\":[{\"parameter\":\"基础色调\",\"rgba\":[1,1,1,1],\"reason\":\"...\"}]}.\n");
+	Text += TEXT("Return a complete practical parameter set for the chosen type, not only roughness/normal/height. Useful scalar parameters include: 基础色强度, 粗糙度数值, 粗糙度强度, 高光强度, 法线强度, 环境遮蔽强度, 金属度数值, 金属度强度, 各向异性, 织物绒毛强度, 清漆强度, 清漆粗糙度, 透明度, 折射强度, 自发光强度, 玻璃吸收强度, 透明菲涅尔强度, 菲涅尔基础反射, 菲涅尔指数, 毛玻璃强度, 水波强度, 水波缩放, 水流 U 速度, 水流 V 速度. Suggest at least 6 scalar parameters when the material type supports them.\n");
 	Text += TEXT("Prefer physically plausible parameters. Do not mark vegetation, grass, soil, brick, stone, wood, plastic, fabric, leather, glass, or water as Metal unless the evidence is clearly metallic.\n");
 	Text += FString::Printf(TEXT("Local rule guess: %s\n"), *GetMagicMaterialTypeLabel(LocalSuggestion.MaterialType).ToString());
 
@@ -1397,6 +1424,133 @@ static bool PBRMagicParseRemoteColor(const TSharedPtr<FJsonObject>& Object, FLin
 	return false;
 }
 
+static void PBRMagicAddAIScalarDefault(FPBRMagicAISuggestion& Suggestion, const FName& ParameterName, float Value)
+{
+	if (!Suggestion.Scalars.Contains(ParameterName))
+	{
+		Suggestion.Scalars.Add(ParameterName, Value);
+	}
+}
+
+static void PBRMagicAddAISwitchDefault(FPBRMagicAISuggestion& Suggestion, const FName& ParameterName, bool bValue)
+{
+	if (!Suggestion.Switches.Contains(ParameterName))
+	{
+		Suggestion.Switches.Add(ParameterName, bValue);
+	}
+}
+
+static void PBRMagicAddAIColorDefault(FPBRMagicAISuggestion& Suggestion, const FName& ParameterName, const FLinearColor& Value)
+{
+	if (!Suggestion.Colors.Contains(ParameterName))
+	{
+		Suggestion.Colors.Add(ParameterName, Value);
+	}
+}
+
+static void PBRMagicApplyTypeSuggestionDefaults(FPBRMagicAISuggestion& Suggestion)
+{
+	PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::BaseColorIntensity, 1.0f);
+	PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+	PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::NormalStrength, 1.0f);
+	PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::AOMultiplier, 1.0f);
+
+	if (Suggestion.MaterialType != EPBRMaterialType::Metal)
+	{
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::MetallicValue, 0.0f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::MetallicMultiplier, 0.0f);
+		PBRMagicAddAISwitchDefault(Suggestion, FPBRMaterialParameters::UseMetallicTexture, false);
+	}
+	if (Suggestion.MaterialType != EPBRMaterialType::Emissive)
+	{
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::EmissiveIntensity, 0.0f);
+		PBRMagicAddAISwitchDefault(Suggestion, FPBRMaterialParameters::UseEmissiveTexture, false);
+	}
+
+	switch (Suggestion.MaterialType)
+	{
+	case EPBRMaterialType::Wood:
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RoughnessValue, 0.58f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::SpecularLevel, 0.35f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::NormalStrength, 0.9f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::HeightStrength, 0.04f);
+		break;
+	case EPBRMaterialType::Stone:
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RoughnessValue, 0.52f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::SpecularLevel, 0.38f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::NormalStrength, 1.18f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::HeightStrength, 0.08f);
+		break;
+	case EPBRMaterialType::Tile:
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RoughnessValue, 0.38f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::SpecularLevel, 0.52f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::NormalStrength, 0.9f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::HeightStrength, 0.02f);
+		break;
+	case EPBRMaterialType::Fabric:
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RoughnessValue, 0.86f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::SpecularLevel, 0.18f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::NormalStrength, 0.85f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::FabricFuzzStrength, 0.14f);
+		PBRMagicAddAIColorDefault(Suggestion, FPBRMaterialParameters::FabricFuzzColor, FLinearColor(0.6f, 0.58f, 0.52f, 1.0f));
+		break;
+	case EPBRMaterialType::Leather:
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RoughnessValue, 0.42f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::SpecularLevel, 0.48f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::ClearCoat, 0.35f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::ClearCoatRoughness, 0.22f);
+		break;
+	case EPBRMaterialType::Plastic:
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RoughnessValue, 0.46f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::SpecularLevel, 0.45f);
+		break;
+	case EPBRMaterialType::Metal:
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::MetallicValue, 1.0f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::MetallicMultiplier, 1.0f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RoughnessValue, 0.28f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::SpecularLevel, 0.5f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::Anisotropy, 0.12f);
+		break;
+	case EPBRMaterialType::Transparent:
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::Opacity, 0.45f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RoughnessValue, 0.12f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::SpecularLevel, 0.5f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RefractionAmount, 1.35f);
+		break;
+	case EPBRMaterialType::Glass:
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::Opacity, 0.35f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RoughnessValue, 0.02f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::SpecularLevel, 0.5f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RefractionAmount, 1.45f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::GlassOpacityFresnelStrength, 0.35f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::GlassFresnelBaseReflection, 0.02f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::GlassFresnelExp, 5.0f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::GlassAbsorptionStrength, 0.15f);
+		PBRMagicAddAIColorDefault(Suggestion, FPBRMaterialParameters::GlassAbsorptionColor, FLinearColor(0.78f, 0.92f, 1.0f, 1.0f));
+		break;
+	case EPBRMaterialType::Water:
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::Opacity, 0.65f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RoughnessValue, 0.05f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RefractionAmount, 1.33f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::WaterRippleStrength, 0.8f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::WaterRippleScale, 18.0f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::WaterFlowSpeedU, 0.18f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::WaterFlowSpeedV, 0.09f);
+		PBRMagicAddAIColorDefault(Suggestion, FPBRMaterialParameters::WaterColor, FLinearColor(0.12f, 0.42f, 0.72f, 1.0f));
+		break;
+	case EPBRMaterialType::Emissive:
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RoughnessValue, 0.35f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::SpecularLevel, 0.25f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::EmissiveIntensity, 2.0f);
+		PBRMagicAddAIColorDefault(Suggestion, FPBRMaterialParameters::EmissiveColor, FLinearColor::White);
+		break;
+	default:
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::RoughnessValue, 0.5f);
+		PBRMagicAddAIScalarDefault(Suggestion, FPBRMaterialParameters::SpecularLevel, 0.45f);
+		break;
+	}
+}
+
 static bool PBRMagicLooksLikeFabricText(const FString& Text)
 {
 	return PBRMagicTextHasAny(Text, {
@@ -1471,8 +1625,9 @@ static bool PBRMagicTryRemoteAISuggestion(UMaterialInstanceConstant* Instance, c
 		RemoteType = LocalSuggestion.MaterialType;
 	}
 
-	OutSuggestion = LocalSuggestion;
+	OutSuggestion = FPBRMagicAISuggestion();
 	OutSuggestion.MaterialType = RemoteType;
+	PBRMagicApplyTypeSuggestionDefaults(OutSuggestion);
 	OutSuggestion.Summary = FString::Printf(TEXT("远端 AI 建议为%s：%s"),
 		*GetMagicMaterialTypeLabel(RemoteType).ToString(),
 		*PBRMagicJsonStringField(Root, TEXT("evidence"), TEXT("已按接口返回参数应用")));
@@ -1564,13 +1719,24 @@ static void PBRMagicGetAIScalarRange(const FName& ParameterName, float& MinValue
 	MinValue = 0.0f;
 	MaxValue = 1.0f;
 
-	if (ParameterName == FPBRMaterialParameters::NormalStrength)
+	if (ParameterName == FPBRMaterialParameters::NormalStrength ||
+		ParameterName == FPBRMaterialParameters::BaseColorIntensity)
 	{
 		MaxValue = 5.0f;
+	}
+	else if (ParameterName == FPBRMaterialParameters::RoughnessMultiplier ||
+		ParameterName == FPBRMaterialParameters::AOMultiplier)
+	{
+		MaxValue = 4.0f;
 	}
 	else if (ParameterName == FPBRMaterialParameters::EmissiveIntensity)
 	{
 		MaxValue = 100.0f;
+	}
+	else if (ParameterName == FPBRMaterialParameters::EmissiveTemperatureKelvin)
+	{
+		MinValue = 1000.0f;
+		MaxValue = 20000.0f;
 	}
 	else if (ParameterName == FPBRMaterialParameters::RefractionAmount)
 	{
@@ -1578,9 +1744,59 @@ static void PBRMagicGetAIScalarRange(const FName& ParameterName, float& MinValue
 		MaxValue = 2.4f;
 	}
 	else if (ParameterName == FPBRMaterialParameters::FabricFuzzStrength ||
-		ParameterName == FPBRMaterialParameters::WaterRippleStrength)
+		ParameterName == FPBRMaterialParameters::WaterRippleStrength ||
+		ParameterName == FPBRMaterialParameters::MetallicMultiplier ||
+		ParameterName == FPBRMaterialParameters::GlassAbsorptionStrength ||
+		ParameterName == FPBRMaterialParameters::GlassEdgeTintStrength ||
+		ParameterName == FPBRMaterialParameters::GlassDirtIntensity ||
+		ParameterName == FPBRMaterialParameters::GlassDistortionIntensity ||
+		ParameterName == FPBRMaterialParameters::GlassDistortionIORIntensity)
 	{
 		MaxValue = 2.0f;
+	}
+	else if (ParameterName == FPBRMaterialParameters::WaterRippleScale ||
+		ParameterName == FPBRMaterialParameters::GlassCausticsScale)
+	{
+		MinValue = 0.01f;
+		MaxValue = 100.0f;
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassCausticsIntensity)
+	{
+		MaxValue = 10.0f;
+	}
+	else if (ParameterName == FPBRMaterialParameters::WaterFlowSpeedU ||
+		ParameterName == FPBRMaterialParameters::WaterFlowSpeedV ||
+		ParameterName == FPBRMaterialParameters::GlassCausticsSpeed)
+	{
+		MinValue = -5.0f;
+		MaxValue = 5.0f;
+	}
+	else if (ParameterName == FPBRMaterialParameters::Anisotropy)
+	{
+		MinValue = -1.0f;
+		MaxValue = 1.0f;
+	}
+	else if (ParameterName == FPBRMaterialParameters::FlakeScale ||
+		ParameterName == FPBRMaterialParameters::UVUTiling ||
+		ParameterName == FPBRMaterialParameters::UVVTiling)
+	{
+		MinValue = 0.01f;
+		MaxValue = 100.0f;
+	}
+	else if (ParameterName == FPBRMaterialParameters::FlakeIntensity)
+	{
+		MaxValue = 2.0f;
+	}
+	else if (ParameterName == FPBRMaterialParameters::UVUOffset ||
+		ParameterName == FPBRMaterialParameters::UVVOffset)
+	{
+		MinValue = -10.0f;
+		MaxValue = 10.0f;
+	}
+	else if (ParameterName == FPBRMaterialParameters::UVRotationDegrees)
+	{
+		MinValue = -360.0f;
+		MaxValue = 360.0f;
 	}
 }
 
@@ -1962,11 +2178,57 @@ static bool IsMagicLikelyNormalizedScalar(const FString& ParameterName)
 		ParameterName.Contains(TEXT("高光"), ESearchCase::IgnoreCase);
 }
 
+static bool IsMagicUVTilingScalar(const FString& ParameterName)
+{
+	return ParameterName.Contains(TEXT("Tiling"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("Tile"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("Scale"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("平铺"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("缩放"), ESearchCase::IgnoreCase);
+}
+
+static bool IsMagicUVOffsetScalar(const FString& ParameterName)
+{
+	return ParameterName.Contains(TEXT("Offset"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("偏移"), ESearchCase::IgnoreCase);
+}
+
+static bool IsMagicUVRotationScalar(const FString& ParameterName)
+{
+	return ParameterName.Contains(TEXT("Rotation"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("Rotate"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("Angle"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("旋转"), ESearchCase::IgnoreCase) ||
+		ParameterName.Contains(TEXT("角度"), ESearchCase::IgnoreCase);
+}
+
 static void NormalizeMagicDynamicScalarRange(FPBRMagicDynamicMaterialParameter& Parameter)
 {
+	const FString ParameterName = Parameter.ParameterName.ToString();
+	if (IsMagicUVRotationScalar(ParameterName))
+	{
+		Parameter.ScalarMin = -360.0f;
+		Parameter.ScalarMax = 360.0f;
+		Parameter.ScalarStep = 1.0f;
+		return;
+	}
+	if (IsMagicUVOffsetScalar(ParameterName))
+	{
+		Parameter.ScalarMin = -10.0f;
+		Parameter.ScalarMax = 10.0f;
+		Parameter.ScalarStep = 0.01f;
+		return;
+	}
+	if (IsMagicUVTilingScalar(ParameterName))
+	{
+		Parameter.ScalarMin = 0.01f;
+		Parameter.ScalarMax = 100.0f;
+		Parameter.ScalarStep = 0.1f;
+		return;
+	}
+
 	if (Parameter.ScalarMax <= Parameter.ScalarMin || FMath::IsNearlyEqual(Parameter.ScalarMin, Parameter.ScalarMax))
 	{
-		const FString ParameterName = Parameter.ParameterName.ToString();
 		if (IsMagicLikelyNormalizedScalar(ParameterName))
 		{
 			Parameter.ScalarMin = Parameter.ScalarValue < 0.0f ? -1.0f : 0.0f;
@@ -5076,32 +5338,9 @@ private:
 			Value.A = A.IsSet() ? A.GetValue() : Parameter.ColorValue.A;
 		}
 
-		const FColor SRGB = Value.GetClamped().ToFColor(true);
 		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(18.0f, 10.0f), Size.X - 178.0f, GetParameterDisplayName(Parameter.ParameterName), FAppStyle::GetFontStyle("SmallFontBold"), Theme.Text);
-		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(18.0f, 31.0f), 168.0f, FString::Printf(TEXT("RGB %d, %d, %d"), SRGB.R, SRGB.G, SRGB.B), FAppStyle::GetFontStyle("TinyText"), Theme.TextMuted);
-		DrawSurface(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 82.0f, 12.0f), FVector2D(58.0f, 30.0f), FLinearColor(Value.R, Value.G, Value.B, 1.0f), Theme.Border);
-
-		const TCHAR* Names[4] = { TEXT("R"), TEXT("G"), TEXT("B"), TEXT("A") };
-		const float Values[4] = { Value.R, Value.G, Value.B, Value.A };
-		const float TrackY = Position.Y + 58.0f;
-		const float TrackGap = 10.0f;
-		const float TrackW = FMath::Max(76.0f, (Size.X - 36.0f - TrackGap * 3.0f) / 4.0f);
-		for (int32 Channel = 0; Channel < 4; ++Channel)
-		{
-			const FVector2D TrackPos(Position.X + 18.0f + Channel * (TrackW + TrackGap), TrackY);
-			const float ChannelValue = FMath::Clamp(Values[Channel], 0.0f, 1.0f);
-			DrawText(OutDrawElements, Geometry, Layer, TrackPos, Names[Channel], FAppStyle::GetFontStyle("SmallFontBold"), Theme.TextMuted);
-			const FVector2D ChannelTrackPos = TrackPos + FVector2D(18.0f, 4.0f);
-			const FVector2D ChannelTrackSize(TrackW - 18.0f, 8.0f);
-			DrawTrack(OutDrawElements, Geometry, Layer, ChannelTrackPos, ChannelTrackSize, ChannelValue, GetChannelColor(Channel, Theme), Theme);
-			DrawTextInRect(OutDrawElements, Geometry, Layer, TrackPos + FVector2D(18.0f, 18.0f), TrackW - 18.0f, FString::Printf(TEXT("%.2f"), Values[Channel]), FAppStyle::GetFontStyle("TinyText"), Theme.TextMuted);
-
-			FPBRMagicMaterialPopupHit Hit;
-			Hit.ParameterName = Parameter.ParameterName;
-			Hit.VectorChannel = Channel;
-			Hit.VectorDefault = Parameter.ColorValue;
-			AddHit(ChannelTrackPos - FVector2D(0.0f, 8.0f), ChannelTrackSize + FVector2D(0.0f, 16.0f), EPBRMagicMaterialPopupAction::VectorTrack, &Hit);
-		}
+		DrawTextInRect(OutDrawElements, Geometry, Layer, Position + FVector2D(18.0f, 31.0f), Size.X - 126.0f, TEXT("颜色通过色块拾取器调整；强度使用对应数值参数"), FAppStyle::GetFontStyle("TinyText"), Theme.TextMuted);
+		DrawSurface(OutDrawElements, Geometry, Layer, Position + FVector2D(Size.X - 102.0f, 12.0f), FVector2D(78.0f, 40.0f), FLinearColor(Value.R, Value.G, Value.B, 1.0f), Theme.Border);
 	}
 
 	void DrawTextureParameterRow(FSlateWindowElementList& OutDrawElements, const FGeometry& Geometry, int32 Layer, const FVector2D& Position, const FVector2D& Size, const FPBRMagicDynamicMaterialParameter& Parameter, const FPBRMagicTheme& Theme) const
@@ -7043,86 +7282,28 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialVectorControl(const FT
 		return Value;
 	};
 
-	auto MakeChannelBox = [this, ParameterName, DefaultValue](int32 ChannelIndex)
-	{
-		return SNew(SNumericEntryBox<float>)
-			.AllowSpin(true)
-			.MinValue(0.0f)
-			.MaxValue(1.0f)
-			.MinSliderValue(0.0f)
-			.MaxSliderValue(1.0f)
-			.Delta(0.01f)
-			.Value_Lambda([this, ParameterName, ChannelIndex, DefaultValue]()
-			{
-				return GetEditableMaterialVectorChannel(ParameterName, ChannelIndex, DefaultValue);
-			})
-			.OnValueChanged_Lambda([this, ParameterName, ChannelIndex, DefaultValue](float NewValue)
-			{
-				CommitEditableMaterialVectorChannel(ParameterName, ChannelIndex, NewValue, DefaultValue);
-			})
-			.OnValueCommitted_Lambda([this, ParameterName, ChannelIndex, DefaultValue](float NewValue, ETextCommit::Type)
-			{
-				CommitEditableMaterialVectorChannel(ParameterName, ChannelIndex, NewValue, DefaultValue);
-			});
-	};
-
-	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
 		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-			[
-				SNew(STextBlock)
-				.Text(Label)
-				.Font(FAppStyle::GetFontStyle("SmallFont"))
-				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
-			[
-				SNew(STextBlock)
-				.Text_Lambda([GetCurrentColor]()
-				{
-					const FColor Color = GetCurrentColor().GetClamped().ToFColor(true);
-					return FText::FromString(FString::Printf(TEXT("RGB %d, %d, %d"), Color.R, Color.G, Color.B));
-				})
-				.Font(FAppStyle::GetFontStyle("TinyText"))
-				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				SNew(SButton)
-				.ButtonStyle(FAppStyle::Get(), "SimpleButton")
-				.ContentPadding(FMargin(2))
-				.OnClicked_Lambda([this, ParameterName, DefaultValue]()
-				{
-					OpenEditableMaterialColorPicker(ParameterName, DefaultValue);
-					return FReply::Handled();
-				})
-				[
-					SNew(SColorBlock)
-					.Color_Lambda([GetCurrentColor]() { return GetCurrentColor(); })
-					.Size(FVector2D(48.0f, 22.0f))
-				]
-			]
+			SNew(STextBlock)
+			.Text(Label)
+			.Font(FAppStyle::GetFontStyle("SmallFont"))
+			.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
 		]
-		+ SVerticalBox::Slot().AutoHeight()
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0, 0, 4, 0)
+			SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.ContentPadding(FMargin(2))
+			.OnClicked_Lambda([this, ParameterName, DefaultValue]()
+			{
+				OpenEditableMaterialColorPicker(ParameterName, DefaultValue);
+				return FReply::Handled();
+			})
 			[
-				MakeChannelBox(0)
-			]
-			+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0, 0, 4, 0)
-			[
-				MakeChannelBox(1)
-			]
-			+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0, 0, 4, 0)
-			[
-				MakeChannelBox(2)
-			]
-			+ SHorizontalBox::Slot().FillWidth(1.0f)
-			[
-				MakeChannelBox(3)
+				SNew(SColorBlock)
+				.Color_Lambda([GetCurrentColor]() { return GetCurrentColor(); })
+				.Size(FVector2D(64.0f, 24.0f))
 			]
 		];
 }
