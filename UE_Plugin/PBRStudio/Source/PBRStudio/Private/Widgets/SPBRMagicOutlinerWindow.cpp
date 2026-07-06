@@ -2215,6 +2215,45 @@ static bool IsMagicUVScalarParameterName(const FName& ParameterName)
 		IsMagicUVRotationScalar(Text);
 }
 
+static bool IsMagicUnrestrictedNumericInputParameterName(const FName& ParameterName)
+{
+	if (IsMagicUVScalarParameterName(ParameterName))
+	{
+		return true;
+	}
+
+	const FString Text = ParameterName.ToString();
+	return ParameterName == FPBRMaterialParameters::BaseColorIntensity ||
+		ParameterName == FPBRMaterialParameters::NormalStrength ||
+		ParameterName == FPBRMaterialParameters::RoughnessMultiplier ||
+		ParameterName == FPBRMaterialParameters::SpecularLevel ||
+		ParameterName == FPBRMaterialParameters::AOMultiplier ||
+		ParameterName == FPBRMaterialParameters::MetallicMultiplier ||
+		ParameterName == FPBRMaterialParameters::HeightStrength ||
+		ParameterName == FPBRMaterialParameters::PixelDepthOffsetStrength ||
+		ParameterName == FPBRMaterialParameters::EmissiveIntensity ||
+		ParameterName == FPBRMaterialParameters::FabricFuzzStrength ||
+		ParameterName == FPBRMaterialParameters::ClearCoat ||
+		ParameterName == FPBRMaterialParameters::RefractionAmount ||
+		ParameterName == FPBRMaterialParameters::GlassOpacityFresnelStrength ||
+		ParameterName == FPBRMaterialParameters::GlassFrostedStrength ||
+		ParameterName == FPBRMaterialParameters::GlassAbsorptionStrength ||
+		ParameterName == FPBRMaterialParameters::GlassEdgeTintStrength ||
+		ParameterName == FPBRMaterialParameters::GlassDirtIntensity ||
+		ParameterName == FPBRMaterialParameters::GlassDistortionIntensity ||
+		ParameterName == FPBRMaterialParameters::GlassDistortionIORIntensity ||
+		ParameterName == FPBRMaterialParameters::GlassShadowNormalIntensity ||
+		ParameterName == FPBRMaterialParameters::GlassCausticsIntensity ||
+		ParameterName == FPBRMaterialParameters::WaterRippleStrength ||
+		Text.Contains(TEXT("Intensity"), ESearchCase::IgnoreCase) ||
+		Text.Contains(TEXT("Multiplier"), ESearchCase::IgnoreCase) ||
+		Text.Contains(TEXT("Strength"), ESearchCase::IgnoreCase) ||
+		Text.Contains(TEXT("Scale"), ESearchCase::IgnoreCase) ||
+		Text.Contains(TEXT("强度"), ESearchCase::IgnoreCase) ||
+		Text.Contains(TEXT("倍率"), ESearchCase::IgnoreCase) ||
+		Text.Contains(TEXT("缩放"), ESearchCase::IgnoreCase);
+}
+
 static void NormalizeMagicDynamicScalarRange(FPBRMagicDynamicMaterialParameter& Parameter)
 {
 	const FString ParameterName = Parameter.ParameterName.ToString();
@@ -7304,11 +7343,11 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialScalarControl(const FT
 			.AllowSpin(true)
 			.MinValue_Lambda([ParameterName, MinValue]() -> TOptional<float>
 			{
-				return IsMagicUVScalarParameterName(ParameterName) ? TOptional<float>() : TOptional<float>(MinValue);
+				return IsMagicUnrestrictedNumericInputParameterName(ParameterName) ? TOptional<float>() : TOptional<float>(MinValue);
 			})
 			.MaxValue_Lambda([ParameterName, MaxValue]() -> TOptional<float>
 			{
-				return IsMagicUVScalarParameterName(ParameterName) ? TOptional<float>() : TOptional<float>(MaxValue);
+				return IsMagicUnrestrictedNumericInputParameterName(ParameterName) ? TOptional<float>() : TOptional<float>(MaxValue);
 			})
 			.MinSliderValue(MinValue)
 			.MaxSliderValue(MaxValue)
@@ -8696,7 +8735,7 @@ void SPBRMagicOutlinerWindow::CommitEditableMaterialScalar(const FName& Paramete
 	}
 
 	FString Message;
-	const float ClampedValue = IsMagicUVScalarParameterName(ParameterName) ? Value : FMath::Clamp(Value, MinValue, MaxValue);
+	const float ClampedValue = IsMagicUnrestrictedNumericInputParameterName(ParameterName) ? Value : FMath::Clamp(Value, MinValue, MaxValue);
 	if (FPBRSceneMaterialReplacer::SetScalarParameterForSlot(Component, SlotIndex, ParameterName, ClampedValue, Message))
 	{
 		StatusMessage = Message;
