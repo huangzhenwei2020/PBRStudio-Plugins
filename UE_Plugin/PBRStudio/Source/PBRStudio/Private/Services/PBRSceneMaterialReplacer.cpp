@@ -1587,7 +1587,6 @@ static void AppendSceneScalarParameterAliases(const FName& ParameterName, TArray
 	else if (ParameterName == FPBRMaterialParameters::GlassShadowHighlightClamp)
 	{
 		AddAlias(TEXT("Shadow Opacity Clamp Highlight"));
-		AddAlias(TEXT("Shadow Clamp"));
 	}
 	else if (ParameterName == FPBRMaterialParameters::GlassShadowNormalIntensity)
 	{
@@ -1770,16 +1769,34 @@ static void ApplyAdvancedGlassParameterDefaults(UMaterialInstanceConstant* Insta
 	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassDirtRoughness, 0.65f);
 	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassDistortionIntensity, 0.0f);
 	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassDistortionIORIntensity, 0.0f);
-	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassShadowOpacity, 0.55f);
-	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassShadowHighlightClamp, 0.85f);
-	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassShadowNormalIntensity, 0.25f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassShadowOpacity, 1.0f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassShadowHighlightClamp, -0.7f);
+	Instance->SetScalarParameterValueEditorOnly(FName(TEXT("Shadow Clamp")), 2.0f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassShadowNormalIntensity, 1.0f);
 	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassCausticsIntensity, 0.0f);
 	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassRTOpacity, 0.35f);
 	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassRTRefractionAmount, 1.45f);
 	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassRTFrostedStrength, 0.0f);
+	Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FName(TEXT("Shadow ?"))), true);
+	Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FName(TEXT("Shadow Fake Caustic ?"))), true);
 	SetSceneSwitchParameterEditorOnly(Instance, FPBRMaterialParameters::UseGlassDirtTexture, false);
 	SetSceneSwitchParameterEditorOnly(Instance, FPBRMaterialParameters::UseGlassDistortionTexture, false);
 	SetSceneSwitchParameterEditorOnly(Instance, FPBRMaterialParameters::UseGlassFrostedTexture, false);
+}
+
+static void EnableAdvancedGlassComponentShadowSettings(UPrimitiveComponent* Component)
+{
+	if (!Component)
+	{
+		return;
+	}
+
+	Component->Modify();
+	Component->SetCastShadow(true);
+	Component->bCastDynamicShadow = true;
+	Component->bCastStaticShadow = true;
+	Component->bCastVolumetricTranslucentShadow = true;
+	Component->MarkRenderStateDirty();
 }
 
 static void MigrateSceneSourceMaterialToManagedInstance(
@@ -1947,6 +1964,7 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 0.35f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.45f);
 		ApplyAdvancedGlassParameterDefaults(Instance);
+		EnableAdvancedGlassComponentShadowSettings(Candidate.Slots.Num() > 0 ? Candidate.Slots[0].Component.Get() : nullptr);
 	}
 	else if (Candidate.ReplacementKind == EPBRSceneReplacementKind::Emissive || Candidate.bLooksEmissive)
 	{
@@ -3772,6 +3790,10 @@ bool FPBRSceneMaterialReplacer::SetMaterialTypeForSlot(UPrimitiveComponent* Comp
 		Instance->Modify();
 		Instance->SetParentEditorOnly(ParentMaterial);
 		ApplySelectionMaterialTypeDefaults(Instance, MaterialType);
+		if (MaterialType == EPBRMaterialType::Glass)
+		{
+			EnableAdvancedGlassComponentShadowSettings(Component);
+		}
 		Instance->InitStaticPermutation();
 		UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
 		Instance->PostEditChange();
