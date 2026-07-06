@@ -2339,6 +2339,73 @@ static void NormalizeMagicDynamicScalarRange(FPBRMagicDynamicMaterialParameter& 
 	Parameter.ScalarStep = Range > 50.0f ? 1.0f : (Range > 5.0f ? 0.1f : 0.01f);
 }
 
+static FName GetMagicDynamicParameterCanonicalName(const FPBRMagicDynamicMaterialParameter& Parameter)
+{
+	const FString RawName = Parameter.ParameterName.ToString();
+	const auto NameEquals = [&RawName](const TCHAR* Name)
+	{
+		return RawName.Equals(Name, ESearchCase::IgnoreCase);
+	};
+
+	if (Parameter.Kind == EPBRMagicDynamicMaterialParameterKind::Scalar)
+	{
+		if (NameEquals(TEXT("Roughness"))) { return FPBRMaterialParameters::RoughnessValue; }
+		if (NameEquals(TEXT("Specular"))) { return FPBRMaterialParameters::SpecularLevel; }
+		if (NameEquals(TEXT("Opacity"))) { return FPBRMaterialParameters::Opacity; }
+		if (NameEquals(TEXT("IOR")) || NameEquals(TEXT("Refraction"))) { return FPBRMaterialParameters::RefractionAmount; }
+		if (NameEquals(TEXT("Normal Intensity"))) { return FPBRMaterialParameters::NormalStrength; }
+		if (NameEquals(TEXT("Opacity Fresnel"))) { return FPBRMaterialParameters::GlassOpacityFresnelStrength; }
+		if (NameEquals(TEXT("Frosted Intensity"))) { return FPBRMaterialParameters::GlassFrostedStrength; }
+		if (NameEquals(TEXT("Dirt Intensity"))) { return FPBRMaterialParameters::GlassDirtIntensity; }
+		if (NameEquals(TEXT("Dirt Opacity"))) { return FPBRMaterialParameters::GlassDirtOpacity; }
+		if (NameEquals(TEXT("Dirt Roughness"))) { return FPBRMaterialParameters::GlassDirtRoughness; }
+		if (NameEquals(TEXT("Distortion Intensity"))) { return FPBRMaterialParameters::GlassDistortionIntensity; }
+		if (NameEquals(TEXT("Distortion Intensity IOR"))) { return FPBRMaterialParameters::GlassDistortionIORIntensity; }
+		if (NameEquals(TEXT("Shadow Opacity"))) { return FPBRMaterialParameters::GlassShadowOpacity; }
+		if (NameEquals(TEXT("Shadow Opacity Clamp Highlight")) || NameEquals(TEXT("Shadow Clamp"))) { return FPBRMaterialParameters::GlassShadowHighlightClamp; }
+		if (NameEquals(TEXT("Shadow Normals Intensity"))) { return FPBRMaterialParameters::GlassShadowNormalIntensity; }
+		if (NameEquals(TEXT("Caustic Power"))) { return FPBRMaterialParameters::GlassCausticsIntensity; }
+		if (NameEquals(TEXT("RT Opacity"))) { return FPBRMaterialParameters::GlassRTOpacity; }
+		if (NameEquals(TEXT("RT IOR"))) { return FPBRMaterialParameters::GlassRTRefractionAmount; }
+		if (NameEquals(TEXT("RT Frosted Intensity"))) { return FPBRMaterialParameters::GlassRTFrostedStrength; }
+	}
+	else if (Parameter.Kind == EPBRMagicDynamicMaterialParameterKind::Color)
+	{
+		if (NameEquals(TEXT("Color")) || NameEquals(TEXT("BaseColor"))) { return FPBRMaterialParameters::GlassAbsorptionColor; }
+		if (NameEquals(TEXT("Dirt Color"))) { return FPBRMaterialParameters::GlassDirtColor; }
+	}
+	else if (Parameter.Kind == EPBRMagicDynamicMaterialParameterKind::Texture)
+	{
+		if (NameEquals(TEXT("Base Color Texture"))) { return FPBRMaterialParameters::BaseColorTexture; }
+		if (NameEquals(TEXT("Normal Texture"))) { return FPBRMaterialParameters::NormalTexture; }
+		if (NameEquals(TEXT("Opacity Mask Texture"))) { return FPBRMaterialParameters::OpacityTexture; }
+		if (NameEquals(TEXT("DirtTexture"))) { return FPBRMaterialParameters::GlassDirtTexture; }
+		if (NameEquals(TEXT("Distortion Texture"))) { return FPBRMaterialParameters::GlassDistortionTexture; }
+		if (NameEquals(TEXT("Frosted Normal Texture"))) { return FPBRMaterialParameters::GlassFrostedTexture; }
+	}
+	else if (Parameter.Kind == EPBRMagicDynamicMaterialParameterKind::Switch)
+	{
+		if (NameEquals(TEXT("Base Color Texture ?"))) { return FPBRMaterialParameters::UseBaseColorTexture; }
+		if (NameEquals(TEXT("Normals?"))) { return FPBRMaterialParameters::UseNormalTexture; }
+		if (NameEquals(TEXT("Opacity Mask ?"))) { return FPBRMaterialParameters::UseOpacityTexture; }
+		if (NameEquals(TEXT("Dirt?"))) { return FPBRMaterialParameters::UseGlassDirtTexture; }
+		if (NameEquals(TEXT("Distortion ?"))) { return FPBRMaterialParameters::UseGlassDistortionTexture; }
+		if (NameEquals(TEXT("Frosted Glass ?"))) { return FPBRMaterialParameters::UseGlassFrostedTexture; }
+	}
+
+	return Parameter.ParameterName;
+}
+
+static int32 GetMagicDynamicParameterDedupePriority(const FPBRMagicDynamicMaterialParameter& Parameter)
+{
+	const FString RawName = Parameter.ParameterName.ToString();
+	if (RawName.Contains(TEXT(" ")) || RawName.Contains(TEXT("?")) || RawName.Equals(TEXT("DirtTexture"), ESearchCase::IgnoreCase))
+	{
+		return 0;
+	}
+	return 10;
+}
+
 static void AddMagicDynamicParameter(TArray<FPBRMagicDynamicMaterialParameter>& Items, FPBRMagicDynamicMaterialParameter&& Parameter)
 {
 	if (Parameter.ParameterName.IsNone())
@@ -2346,15 +2413,21 @@ static void AddMagicDynamicParameter(TArray<FPBRMagicDynamicMaterialParameter>& 
 		return;
 	}
 
-	const bool bAlreadyAdded = Items.ContainsByPredicate([&Parameter](const FPBRMagicDynamicMaterialParameter& Existing)
+	const FName CanonicalName = GetMagicDynamicParameterCanonicalName(Parameter);
+	const int32 NewPriority = GetMagicDynamicParameterDedupePriority(Parameter);
+	for (FPBRMagicDynamicMaterialParameter& Existing : Items)
 	{
-		return Existing.ParameterName == Parameter.ParameterName && Existing.Kind == Parameter.Kind;
-	});
-
-	if (!bAlreadyAdded)
-	{
-		Items.Add(MoveTemp(Parameter));
+		if (Existing.Kind == Parameter.Kind && GetMagicDynamicParameterCanonicalName(Existing) == CanonicalName)
+		{
+			if (NewPriority < GetMagicDynamicParameterDedupePriority(Existing))
+			{
+				Existing = MoveTemp(Parameter);
+			}
+			return;
+		}
 	}
+
+	Items.Add(MoveTemp(Parameter));
 }
 
 static constexpr uint32 MagicEditableMaterialTypeBit(EPBRMaterialType MaterialType)
@@ -2744,6 +2817,12 @@ static FName GetMagicTextureUsageSwitchName(const FName& TextureParameterName)
 	if (TextureParameterName == FPBRMaterialParameters::GlassDirtTexture) { return FPBRMaterialParameters::UseGlassDirtTexture; }
 	if (TextureParameterName == FPBRMaterialParameters::GlassDistortionTexture) { return FPBRMaterialParameters::UseGlassDistortionTexture; }
 	if (TextureParameterName == FPBRMaterialParameters::GlassFrostedTexture) { return FPBRMaterialParameters::UseGlassFrostedTexture; }
+	if (TextureParameterName == FName(TEXT("Base Color Texture"))) { return FName(TEXT("Base Color Texture ?")); }
+	if (TextureParameterName == FName(TEXT("Normal Texture"))) { return FName(TEXT("Normals?")); }
+	if (TextureParameterName == FName(TEXT("Opacity Mask Texture"))) { return FName(TEXT("Opacity Mask ?")); }
+	if (TextureParameterName == FName(TEXT("DirtTexture"))) { return FName(TEXT("Dirt?")); }
+	if (TextureParameterName == FName(TEXT("Distortion Texture"))) { return FName(TEXT("Distortion ?")); }
+	if (TextureParameterName == FName(TEXT("Frosted Normal Texture"))) { return FName(TEXT("Frosted Glass ?")); }
 
 	const FString Name = TextureParameterName.ToString();
 	for (const FPBRMagicEditableMaterialParameter& Parameter : GetMagicEditableMaterialParameters())
@@ -8681,6 +8760,10 @@ void SPBRMagicOutlinerWindow::OpenEditableMaterialParameterWindow()
 	{
 		ExistingWindow->SetContent(BuildMaterialParameterPopupContent());
 		ExistingWindow->BringToFront(true);
+		if (TSharedPtr<SWindow> PreviewWindow = MaterialAIPreviewWindow.Pin())
+		{
+			PreviewWindow->BringToFront(true);
+		}
 		return;
 	}
 
@@ -8698,6 +8781,10 @@ void SPBRMagicOutlinerWindow::OpenEditableMaterialParameterWindow()
 	MaterialParameterWindow = Window;
 	FSlateApplication::Get().AddWindow(Window);
 	Window->BringToFront(true);
+	if (TSharedPtr<SWindow> PreviewWindow = MaterialAIPreviewWindow.Pin())
+	{
+		PreviewWindow->BringToFront(true);
+	}
 }
 
 bool SPBRMagicOutlinerWindow::ResolveEditableMaterialSlot(UPrimitiveComponent*& OutComponent, int32& OutSlotIndex) const
@@ -9071,6 +9158,7 @@ FReply SPBRMagicOutlinerWindow::OnApplyAIMaterialSuggestionClicked()
 	TSharedRef<SWindow> PreviewWindow = SNew(SWindow)
 		.Title(PBRText(TEXT("MaterialAIPreviewTitle"), TEXT("AI 材质建议预览"), TEXT("AI Material Suggestion Preview")))
 		.ClientSize(FVector2D(620.0f, 460.0f))
+		.IsTopmostWindow(true)
 		.SupportsMaximize(false)
 		.SupportsMinimize(false)
 		[
@@ -9152,7 +9240,9 @@ FReply SPBRMagicOutlinerWindow::OnApplyAIMaterialSuggestionClicked()
 			]
 		];
 	*PreviewWindowWeak = PreviewWindow;
+	MaterialAIPreviewWindow = PreviewWindow;
 	FSlateApplication::Get().AddWindow(PreviewWindow);
+	PreviewWindow->BringToFront(true);
 	return FReply::Handled();
 }
 

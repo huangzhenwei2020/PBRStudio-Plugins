@@ -307,6 +307,7 @@ private:
 	TMap<TWeakObjectPtr<UMaterialInterface>, TSharedPtr<FPBRMagicOutlinerItem>> MaterialItemsByMaterial;
 	TSharedPtr<FAssetThumbnailPool> MaterialThumbnailPool;
 	TWeakPtr<class SWindow> MaterialParameterWindow;
+	TWeakPtr<class SWindow> MaterialAIPreviewWindow;
 	TWeakPtr<class SWindow> MaterialAISettingsWindow;
 	TSharedPtr<class SEditableTextBox> AIProviderBox;
 	TSharedPtr<class SEditableTextBox> AIEndpointBox;
