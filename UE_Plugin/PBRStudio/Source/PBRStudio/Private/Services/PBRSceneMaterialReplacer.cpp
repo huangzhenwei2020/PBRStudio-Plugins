@@ -1523,6 +1523,265 @@ static void ApplySceneManagedMaterialDefaults(UMaterialInstanceConstant* Instanc
 	}
 }
 
+static void AppendSceneScalarParameterAliases(const FName& ParameterName, TArray<FName>& OutNames)
+{
+	OutNames.AddUnique(ParameterName);
+	const auto AddAlias = [&OutNames](const TCHAR* Alias)
+	{
+		OutNames.AddUnique(FName(Alias));
+	};
+
+	if (ParameterName == FPBRMaterialParameters::RoughnessValue || ParameterName == FPBRMaterialParameters::RoughnessMultiplier)
+	{
+		AddAlias(TEXT("Roughness"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::SpecularLevel)
+	{
+		AddAlias(TEXT("Specular"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::Opacity)
+	{
+		AddAlias(TEXT("Opacity"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::RefractionAmount)
+	{
+		AddAlias(TEXT("IOR"));
+		AddAlias(TEXT("Refraction"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::NormalStrength)
+	{
+		AddAlias(TEXT("Normal Intensity"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassOpacityFresnelStrength)
+	{
+		AddAlias(TEXT("Opacity Fresnel"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassFrostedStrength)
+	{
+		AddAlias(TEXT("Frosted Intensity"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassDirtIntensity)
+	{
+		AddAlias(TEXT("Dirt Intensity"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassDirtOpacity)
+	{
+		AddAlias(TEXT("Dirt Opacity"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassDirtRoughness)
+	{
+		AddAlias(TEXT("Dirt Roughness"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassDistortionIntensity)
+	{
+		AddAlias(TEXT("Distortion Intensity"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassDistortionIORIntensity)
+	{
+		AddAlias(TEXT("Distortion Intensity IOR"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassShadowOpacity)
+	{
+		AddAlias(TEXT("Shadow Opacity"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassShadowHighlightClamp)
+	{
+		AddAlias(TEXT("Shadow Opacity Clamp Highlight"));
+		AddAlias(TEXT("Shadow Clamp"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassShadowNormalIntensity)
+	{
+		AddAlias(TEXT("Shadow Normals Intensity"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassCausticsIntensity)
+	{
+		AddAlias(TEXT("Caustic Power"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassRTOpacity)
+	{
+		AddAlias(TEXT("RT Opacity"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassRTRefractionAmount)
+	{
+		AddAlias(TEXT("RT IOR"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassRTFrostedStrength)
+	{
+		AddAlias(TEXT("RT Frosted Intensity"));
+	}
+}
+
+static void AppendSceneVectorParameterAliases(const FName& ParameterName, TArray<FName>& OutNames)
+{
+	OutNames.AddUnique(ParameterName);
+	const auto AddAlias = [&OutNames](const TCHAR* Alias)
+	{
+		OutNames.AddUnique(FName(Alias));
+	};
+
+	if (ParameterName == FPBRMaterialParameters::BaseColorTint || ParameterName == FPBRMaterialParameters::GlassAbsorptionColor)
+	{
+		AddAlias(TEXT("Color"));
+		AddAlias(TEXT("BaseColor"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassDirtColor)
+	{
+		AddAlias(TEXT("Dirt Color"));
+	}
+}
+
+static void AppendSceneSwitchParameterAliases(const FName& ParameterName, TArray<FName>& OutNames)
+{
+	if (ParameterName.IsNone())
+	{
+		return;
+	}
+
+	OutNames.AddUnique(ParameterName);
+	const auto AddAlias = [&OutNames](const TCHAR* Alias)
+	{
+		OutNames.AddUnique(FName(Alias));
+	};
+
+	if (ParameterName == FPBRMaterialParameters::UseBaseColorTexture)
+	{
+		AddAlias(TEXT("Base Color Texture ?"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::UseNormalTexture)
+	{
+		AddAlias(TEXT("Normals?"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::UseOpacityTexture)
+	{
+		AddAlias(TEXT("Opacity Mask ?"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::UseGlassDirtTexture)
+	{
+		AddAlias(TEXT("Dirt?"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::UseGlassDistortionTexture)
+	{
+		AddAlias(TEXT("Distortion ?"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::UseGlassFrostedTexture)
+	{
+		AddAlias(TEXT("Frosted Glass ?"));
+	}
+}
+
+static void AppendSceneTextureParameterAliases(const FName& ParameterName, TArray<FName>& OutNames)
+{
+	OutNames.AddUnique(ParameterName);
+	const auto AddAlias = [&OutNames](const TCHAR* Alias)
+	{
+		OutNames.AddUnique(FName(Alias));
+	};
+
+	if (ParameterName == FPBRMaterialParameters::BaseColorTexture)
+	{
+		AddAlias(TEXT("Base Color Texture"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::NormalTexture)
+	{
+		AddAlias(TEXT("Normal Texture"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::OpacityTexture)
+	{
+		AddAlias(TEXT("Opacity Mask Texture"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassDirtTexture)
+	{
+		AddAlias(TEXT("DirtTexture"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassDistortionTexture)
+	{
+		AddAlias(TEXT("Distortion Texture"));
+	}
+	else if (ParameterName == FPBRMaterialParameters::GlassFrostedTexture)
+	{
+		AddAlias(TEXT("Frosted Normal Texture"));
+	}
+}
+
+static void SetSceneScalarParameterEditorOnly(UMaterialInstanceConstant* Instance, const FName& ParameterName, float Value)
+{
+	TArray<FName> ParameterNames;
+	AppendSceneScalarParameterAliases(ParameterName, ParameterNames);
+	for (const FName& Name : ParameterNames)
+	{
+		Instance->SetScalarParameterValueEditorOnly(Name, Value);
+	}
+}
+
+static void SetSceneVectorParameterEditorOnly(UMaterialInstanceConstant* Instance, const FName& ParameterName, const FLinearColor& Value)
+{
+	TArray<FName> ParameterNames;
+	AppendSceneVectorParameterAliases(ParameterName, ParameterNames);
+	for (const FName& Name : ParameterNames)
+	{
+		Instance->SetVectorParameterValueEditorOnly(Name, Value);
+	}
+}
+
+static void SetSceneSwitchParameterEditorOnly(UMaterialInstanceConstant* Instance, const FName& ParameterName, bool bValue)
+{
+	TArray<FName> ParameterNames;
+	AppendSceneSwitchParameterAliases(ParameterName, ParameterNames);
+	for (const FName& Name : ParameterNames)
+	{
+		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(Name), bValue);
+	}
+}
+
+static bool SetSceneTextureParameterEditorOnly(UMaterialInstanceConstant* Instance, const FName& ParameterName, UTexture* Texture)
+{
+	TArray<FName> ParameterNames;
+	AppendSceneTextureParameterAliases(ParameterName, ParameterNames);
+	for (const FName& Name : ParameterNames)
+	{
+		Instance->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(Name), Texture);
+	}
+
+	TArray<FName> SwitchNames;
+	AppendSceneSwitchParameterAliases(GetSceneTextureSwitchParameterName(ParameterName), SwitchNames);
+	for (const FName& SwitchName : SwitchNames)
+	{
+		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(SwitchName), Texture != nullptr);
+	}
+	return SwitchNames.Num() > 0;
+}
+
+static void ApplyAdvancedGlassParameterDefaults(UMaterialInstanceConstant* Instance)
+{
+	if (!Instance)
+	{
+		return;
+	}
+
+	SetSceneVectorParameterEditorOnly(Instance, FPBRMaterialParameters::GlassAbsorptionColor, FLinearColor(0.78f, 0.92f, 1.0f, 1.0f));
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::Opacity, 0.35f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::RefractionAmount, 1.45f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::NormalStrength, 1.0f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassOpacityFresnelStrength, 0.35f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassFrostedStrength, 0.0f);
+	SetSceneVectorParameterEditorOnly(Instance, FPBRMaterialParameters::GlassDirtColor, FLinearColor(0.35f, 0.32f, 0.26f, 1.0f));
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassDirtIntensity, 0.0f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassDirtOpacity, 0.35f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassDirtRoughness, 0.65f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassDistortionIntensity, 0.0f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassDistortionIORIntensity, 0.0f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassShadowOpacity, 0.55f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassShadowHighlightClamp, 0.85f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassShadowNormalIntensity, 0.25f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassCausticsIntensity, 0.0f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassRTOpacity, 0.35f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassRTRefractionAmount, 1.45f);
+	SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::GlassRTFrostedStrength, 0.0f);
+	SetSceneSwitchParameterEditorOnly(Instance, FPBRMaterialParameters::UseGlassDirtTexture, false);
+	SetSceneSwitchParameterEditorOnly(Instance, FPBRMaterialParameters::UseGlassDistortionTexture, false);
+	SetSceneSwitchParameterEditorOnly(Instance, FPBRMaterialParameters::UseGlassFrostedTexture, false);
+}
+
 static void MigrateSceneSourceMaterialToManagedInstance(
 	UMaterialInterface* SourceMaterial,
 	UMaterialInstanceConstant* TargetInstance,
@@ -1569,12 +1828,7 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 
 		if (SourceTexture)
 		{
-			TargetInstance->SetTextureParameterValueEditorOnly(TargetParameterName, SourceTexture);
-			const FName SwitchParameterName = GetSceneTextureSwitchParameterName(TargetParameterName);
-			if (!SwitchParameterName.IsNone())
-			{
-				TargetInstance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(SwitchParameterName), true);
-			}
+			SetSceneTextureParameterEditorOnly(TargetInstance, TargetParameterName, SourceTexture);
 			ApplySceneTextureMigrationDefaults(TargetInstance, TargetParameterName);
 			continue;
 		}
@@ -1598,7 +1852,7 @@ static bool SyncSceneTextureUsageSwitches(UMaterialInstanceConstant* Instance)
 		const bool bShouldUseTexture = IsValidSceneSourceMigrationTexture(Texture);
 		if (ReadSceneStaticSwitchParameter(Instance, Binding.SwitchParameterName, false) != bShouldUseTexture)
 		{
-			Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(Binding.SwitchParameterName), bShouldUseTexture);
+			SetSceneSwitchParameterEditorOnly(Instance, Binding.SwitchParameterName, bShouldUseTexture);
 			bChanged = true;
 		}
 	}
@@ -1692,6 +1946,7 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 0.0f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::Opacity, 0.35f);
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.45f);
+		ApplyAdvancedGlassParameterDefaults(Instance);
 	}
 	else if (Candidate.ReplacementKind == EPBRSceneReplacementKind::Emissive || Candidate.bLooksEmissive)
 	{
@@ -1710,8 +1965,8 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 
 	if (!ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseBaseColorTexture, false))
 	{
-		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::BaseColorTint, Candidate.InheritedBaseColor);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::BaseColorIntensity, 1.0f);
+		SetSceneVectorParameterEditorOnly(Instance, FPBRMaterialParameters::BaseColorTint, Candidate.InheritedBaseColor);
+		SetSceneScalarParameterEditorOnly(Instance, FPBRMaterialParameters::BaseColorIntensity, 1.0f);
 	}
 
 	Instance->PostEditChange();
@@ -3350,6 +3605,7 @@ static void ApplySelectionMaterialTypeDefaults(UMaterialInstanceConstant* Instan
 		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseGlassDirtTexture), false);
 		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseGlassDistortionTexture), false);
 		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseGlassFrostedTexture), false);
+		ApplyAdvancedGlassParameterDefaults(Instance);
 		break;
 	case EPBRMaterialType::Water:
 		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessValue, 0.05f);
@@ -3539,7 +3795,7 @@ bool FPBRSceneMaterialReplacer::SetScalarParameterForSlot(UPrimitiveComponent* C
 
 	const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRSetSelectedMaterialScalar", "PBRStudio Set Selected Material Scalar"));
 	Instance->Modify();
-	Instance->SetScalarParameterValueEditorOnly(ParameterName, Value);
+	SetSceneScalarParameterEditorOnly(Instance, ParameterName, Value);
 	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
 	Instance->PostEditChange();
 	Instance->MarkPackageDirty();
@@ -3560,7 +3816,7 @@ bool FPBRSceneMaterialReplacer::SetVectorParameterForSlot(UPrimitiveComponent* C
 
 	const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRSetSelectedMaterialVector", "PBRStudio Set Selected Material Vector"));
 	Instance->Modify();
-	Instance->SetVectorParameterValueEditorOnly(ParameterName, Value);
+	SetSceneVectorParameterEditorOnly(Instance, ParameterName, Value);
 	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
 	Instance->PostEditChange();
 	Instance->MarkPackageDirty();
@@ -3581,7 +3837,7 @@ bool FPBRSceneMaterialReplacer::SetStaticSwitchParameterForSlot(UPrimitiveCompon
 
 	const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRSetSelectedMaterialSwitch", "PBRStudio Set Selected Material Switch"));
 	Instance->Modify();
-	Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(ParameterName), bValue);
+	SetSceneSwitchParameterEditorOnly(Instance, ParameterName, bValue);
 	Instance->InitStaticPermutation();
 	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
 	Instance->PostEditChange();
@@ -3603,17 +3859,15 @@ bool FPBRSceneMaterialReplacer::SetTextureParameterForSlot(UPrimitiveComponent* 
 
 	const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRSetSelectedMaterialTexture", "PBRStudio Set Selected Material Texture"));
 	Instance->Modify();
-	Instance->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(ParameterName), Texture);
-	const FName SwitchParameterName = GetSceneTextureSwitchParameterName(ParameterName);
-	if (!SwitchParameterName.IsNone())
+	const bool bChangedPermutation = SetSceneTextureParameterEditorOnly(Instance, ParameterName, Texture);
+	if (bChangedPermutation)
 	{
-		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(SwitchParameterName), Texture != nullptr);
 		Instance->InitStaticPermutation();
 	}
 	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
 	Instance->PostEditChange();
 	Instance->MarkPackageDirty();
-	RefreshPrimitiveAfterMaterialChange(Component, !SwitchParameterName.IsNone());
+	RefreshPrimitiveAfterMaterialChange(Component, bChangedPermutation);
 	OutMessage = FString::Printf(TEXT("已更新贴图：%s"), *ParameterName.ToString());
 	return true;
 }

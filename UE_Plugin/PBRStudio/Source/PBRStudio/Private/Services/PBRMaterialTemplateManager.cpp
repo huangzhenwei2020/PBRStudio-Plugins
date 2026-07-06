@@ -2633,6 +2633,16 @@ FString FPBRMaterialTemplateManager::GetExampleMaterialInstancePackagePath(EPBRM
 
 UMaterial* FPBRMaterialTemplateManager::EnsureTemplateMaterial(EPBRMaterialType MaterialType, FString& OutMessage)
 {
+	if (MaterialType == EPBRMaterialType::Glass)
+	{
+		const FString AdvancedGlassPath = TEXT("/PBRStudio/AdvancedRealisticGlass/MasterMaterials/M_AdvancedGlass.M_AdvancedGlass");
+		if (UMaterial* AdvancedGlassMaterial = Cast<UMaterial>(LoadAssetIfExistsQuietly(AdvancedGlassPath)))
+		{
+			OutMessage = TEXT("已使用插件内高级玻璃母材质");
+			return AdvancedGlassMaterial;
+		}
+	}
+
 	const FString FullPath = GetTemplatePackagePath(MaterialType);
 	if (UObject* Existing = LoadAssetIfExistsQuietly(FullPath))
 	{

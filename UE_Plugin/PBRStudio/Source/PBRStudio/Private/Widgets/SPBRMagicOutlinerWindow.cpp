@@ -2137,6 +2137,41 @@ static FString GetMagicDynamicParameterGroup(const FMaterialParameterMetadata& M
 
 static FString NormalizeMagicDynamicParameterGroup(const FString& ParameterName, const FString& GroupName)
 {
+	struct FKnownGroupName
+	{
+		const TCHAR* Raw;
+		const TCHAR* Display;
+	};
+
+	static const FKnownGroupName KnownGroups[] =
+	{
+		{ TEXT("Global Color"), TEXT("全局 - 颜色") },
+		{ TEXT("Global Dirt"), TEXT("全局 - 污渍") },
+		{ TEXT("Global Distortion"), TEXT("全局 - 扭曲") },
+		{ TEXT("Global Double Glass"), TEXT("全局 - 双层玻璃") },
+		{ TEXT("Global Frosted"), TEXT("全局 - 磨砂") },
+		{ TEXT("Global Normal"), TEXT("全局 - 法线") },
+		{ TEXT("Global Opacity"), TEXT("全局 - 透明") },
+		{ TEXT("Global Refraction"), TEXT("全局 - 折射") },
+		{ TEXT("Global Shadow"), TEXT("全局 - 阴影") },
+		{ TEXT("00 - Color"), TEXT("00 - 颜色") },
+		{ TEXT("01 - Opacity"), TEXT("01 - 透明") },
+		{ TEXT("02 - Refraction"), TEXT("02 - 折射") },
+		{ TEXT("03 - Normal"), TEXT("03 - 法线") },
+		{ TEXT("06 - Dirt"), TEXT("06 - 污渍") },
+		{ TEXT("07 - Distortion"), TEXT("07 - 扭曲") },
+		{ TEXT("08 - Frosted"), TEXT("08 - 磨砂") },
+		{ TEXT("09 - Shadow"), TEXT("09 - 阴影") }
+	};
+
+	for (const FKnownGroupName& KnownGroup : KnownGroups)
+	{
+		if (GroupName.Equals(KnownGroup.Raw, ESearchCase::IgnoreCase))
+		{
+			return KnownGroup.Display;
+		}
+	}
+
 	if (ParameterName == TEXT("法线贴图") ||
 		ParameterName == TEXT("使用法线贴图") ||
 		ParameterName == TEXT("法线强度") ||
@@ -2620,6 +2655,45 @@ static FString GetMagicMaterialParameterDisplayName(const FName& ParameterName)
 		{ TEXT("GlassDirtTexture"), TEXT("玻璃污渍贴图") },
 		{ TEXT("GlassDistortionTexture"), TEXT("玻璃扭曲贴图") },
 		{ TEXT("GlassFrostedTexture"), TEXT("玻璃磨砂贴图") },
+		{ TEXT("Base Color Texture"), TEXT("基础色贴图") },
+		{ TEXT("Base Color Texture ?"), TEXT("使用基础色贴图") },
+		{ TEXT("BaseColor"), TEXT("基础色") },
+		{ TEXT("Color"), TEXT("玻璃颜色") },
+		{ TEXT("Opacity"), TEXT("透明度") },
+		{ TEXT("Opacity Fresnel"), TEXT("透明菲涅尔强度") },
+		{ TEXT("Opacity Mask Texture"), TEXT("透明遮罩贴图") },
+		{ TEXT("Opacity Mask ?"), TEXT("使用透明遮罩") },
+		{ TEXT("IOR Interior"), TEXT("内部折射率") },
+		{ TEXT("Normal Texture"), TEXT("法线贴图") },
+		{ TEXT("Normal Intensity"), TEXT("法线强度") },
+		{ TEXT("Normals?"), TEXT("使用法线") },
+		{ TEXT("Normals Affect IOR Intensity"), TEXT("法线影响折射强度") },
+		{ TEXT("Dirt Color"), TEXT("污渍颜色") },
+		{ TEXT("Dirt Intensity"), TEXT("污渍强度") },
+		{ TEXT("Dirt Opacity"), TEXT("污渍透明度") },
+		{ TEXT("Dirt Roughness"), TEXT("污渍粗糙度") },
+		{ TEXT("DirtTexture"), TEXT("污渍贴图") },
+		{ TEXT("Dirt?"), TEXT("使用污渍") },
+		{ TEXT("Distortion Intensity"), TEXT("扭曲强度") },
+		{ TEXT("Distortion Intensity IOR"), TEXT("折射扭曲强度") },
+		{ TEXT("Distortion Texture"), TEXT("扭曲贴图") },
+		{ TEXT("Distortion ?"), TEXT("使用扭曲") },
+		{ TEXT("Frosted Intensity"), TEXT("磨砂强度") },
+		{ TEXT("Frosted Normal Texture"), TEXT("磨砂法线贴图") },
+		{ TEXT("Frosted Glass ?"), TEXT("使用磨砂玻璃") },
+		{ TEXT("Shadow Opacity"), TEXT("阴影透明度") },
+		{ TEXT("Shadow Opacity Clamp Highlight"), TEXT("阴影高光钳制") },
+		{ TEXT("Shadow Clamp"), TEXT("阴影钳制") },
+		{ TEXT("Shadow Normals Intensity"), TEXT("阴影法线强度") },
+		{ TEXT("Shadow ?"), TEXT("使用阴影") },
+		{ TEXT("Caustic Power"), TEXT("焦散强度") },
+		{ TEXT("Caustic Contrast Bright"), TEXT("焦散亮部对比") },
+		{ TEXT("Caustic Contrast Dark"), TEXT("焦散暗部对比") },
+		{ TEXT("RT Opacity"), TEXT("光追透明度") },
+		{ TEXT("RT IOR"), TEXT("光追折射率") },
+		{ TEXT("RT Frosted Intensity"), TEXT("光追磨砂强度") },
+		{ TEXT("Use High Quality Normals"), TEXT("使用高质量法线") },
+		{ TEXT("Texture Scale"), TEXT("贴图缩放") },
 		{ TEXT("WaterRippleTexture"), TEXT("水纹贴图") }
 	};
 
@@ -5109,6 +5183,45 @@ private:
 			{ TEXT("GlassDirtTexture"), TEXT("玻璃污渍贴图") },
 			{ TEXT("GlassDistortionTexture"), TEXT("玻璃扭曲贴图") },
 			{ TEXT("GlassFrostedTexture"), TEXT("玻璃磨砂贴图") },
+			{ TEXT("Base Color Texture"), TEXT("基础色贴图") },
+			{ TEXT("Base Color Texture ?"), TEXT("使用基础色贴图") },
+			{ TEXT("BaseColor"), TEXT("基础色") },
+			{ TEXT("Color"), TEXT("玻璃颜色") },
+			{ TEXT("Opacity"), TEXT("透明度") },
+			{ TEXT("Opacity Fresnel"), TEXT("透明菲涅尔强度") },
+			{ TEXT("Opacity Mask Texture"), TEXT("透明遮罩贴图") },
+			{ TEXT("Opacity Mask ?"), TEXT("使用透明遮罩") },
+			{ TEXT("IOR Interior"), TEXT("内部折射率") },
+			{ TEXT("Normal Texture"), TEXT("法线贴图") },
+			{ TEXT("Normal Intensity"), TEXT("法线强度") },
+			{ TEXT("Normals?"), TEXT("使用法线") },
+			{ TEXT("Normals Affect IOR Intensity"), TEXT("法线影响折射强度") },
+			{ TEXT("Dirt Color"), TEXT("污渍颜色") },
+			{ TEXT("Dirt Intensity"), TEXT("污渍强度") },
+			{ TEXT("Dirt Opacity"), TEXT("污渍透明度") },
+			{ TEXT("Dirt Roughness"), TEXT("污渍粗糙度") },
+			{ TEXT("DirtTexture"), TEXT("污渍贴图") },
+			{ TEXT("Dirt?"), TEXT("使用污渍") },
+			{ TEXT("Distortion Intensity"), TEXT("扭曲强度") },
+			{ TEXT("Distortion Intensity IOR"), TEXT("折射扭曲强度") },
+			{ TEXT("Distortion Texture"), TEXT("扭曲贴图") },
+			{ TEXT("Distortion ?"), TEXT("使用扭曲") },
+			{ TEXT("Frosted Intensity"), TEXT("磨砂强度") },
+			{ TEXT("Frosted Normal Texture"), TEXT("磨砂法线贴图") },
+			{ TEXT("Frosted Glass ?"), TEXT("使用磨砂玻璃") },
+			{ TEXT("Shadow Opacity"), TEXT("阴影透明度") },
+			{ TEXT("Shadow Opacity Clamp Highlight"), TEXT("阴影高光钳制") },
+			{ TEXT("Shadow Clamp"), TEXT("阴影钳制") },
+			{ TEXT("Shadow Normals Intensity"), TEXT("阴影法线强度") },
+			{ TEXT("Shadow ?"), TEXT("使用阴影") },
+			{ TEXT("Caustic Power"), TEXT("焦散强度") },
+			{ TEXT("Caustic Contrast Bright"), TEXT("焦散亮部对比") },
+			{ TEXT("Caustic Contrast Dark"), TEXT("焦散暗部对比") },
+			{ TEXT("RT Opacity"), TEXT("光追透明度") },
+			{ TEXT("RT IOR"), TEXT("光追折射率") },
+			{ TEXT("RT Frosted Intensity"), TEXT("光追磨砂强度") },
+			{ TEXT("Use High Quality Normals"), TEXT("使用高质量法线") },
+			{ TEXT("Texture Scale"), TEXT("贴图缩放") },
 			{ TEXT("WaterRippleTexture"), TEXT("水纹贴图") }
 		};
 
