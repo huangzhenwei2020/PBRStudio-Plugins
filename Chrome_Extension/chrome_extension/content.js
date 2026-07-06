@@ -112,7 +112,7 @@ function makeButton(urls, target) {
   const btn = document.createElement("span");
   btn.dataset.pbrBtn = "1";
   btn.textContent = target === "ue" ? "UE" : "Max";
-  btn.title = (target === "ue" ? "推送到 UE：" : "推送到 Max：") + String(urls.length);
+  btn.title = (target === "ue" ? "推送并立即下载到 UE：" : "推送并立即下载到 Max：") + String(urls.length);
   btn.style.cssText = [
     "display:inline-block",
     "cursor:pointer",
@@ -133,7 +133,7 @@ function makeButton(urls, target) {
     e.preventDefault();
     e.stopPropagation();
     btn.textContent = "...";
-    chrome.runtime.sendMessage({ action: "push", urls, target }, (resp) => {
+    chrome.runtime.sendMessage({ action: "pushAndDownloadNow", urls, target }, (resp) => {
       btn.textContent = resp && resp.ok ? "OK" : "ERR";
       btn.style.background = resp && resp.ok ? "#1c8a3e" : "#c0392b";
       setTimeout(() => {
@@ -170,7 +170,7 @@ function bindPolyhavenDirectTakeover() {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
-      chrome.runtime.sendMessage({ action: "pushAndDownloadNow", urls: [stableUrl], target: "ue" });
+      chrome.runtime.sendMessage({ action: "pushAndDownloadNowPreferred", urls: [stableUrl] });
       return false;
     }, true);
   });

@@ -118,7 +118,7 @@ function pushPageTo(pushTarget, button) {
   button.disabled = true;
   const oldText = button.textContent;
   button.textContent = "推送中...";
-  chrome.runtime.sendMessage({ action: "push", urls: pageUrls, target: pushTarget }, (resp) => {
+  chrome.runtime.sendMessage({ action: "pushAndDownloadNow", urls: pageUrls, target: pushTarget }, (resp) => {
     button.textContent = resp && resp.ok ? "完成" : "已排队";
     setTimeout(() => {
       button.textContent = oldText;

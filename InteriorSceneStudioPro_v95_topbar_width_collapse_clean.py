@@ -12182,6 +12182,15 @@ class InteriorSceneStudioPro(QtWidgets.QDialog):
                         auto_entries.append(self.pbr_download_queue[-1])
                     except Exception:
                         pass
+            elif url and auto_now:
+                try:
+                    for existing in self.pbr_download_queue:
+                        if safe_str(existing.get("url", "")).strip().lower() == url.lower():
+                            auto_entries.append(existing)
+                            self.log("Chrome扩展请求立即下载已存在队列项：{}".format(url))
+                            break
+                except Exception:
+                    pass
         if added:
             self.log("Chrome扩展推送了 {} 条链接，已加入下载队列。".format(added))
             try:

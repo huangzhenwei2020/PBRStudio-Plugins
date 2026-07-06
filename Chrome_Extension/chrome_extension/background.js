@@ -217,7 +217,7 @@ chrome.downloads.onCreated.addListener(async (item) => {
     const target = settings.pushTarget || "max";
     const isOnline = target === "ue" ? settings.ueServerOnline : settings.serverOnline;
     if (!isOnline) return;
-    const result = await pushUrls([url], { target });
+    const result = await pushUrls([url], { autoStart: true, target });
     if (result && result.ok) {
       showNotification(t("capturedBrowserDownload"));
     }
@@ -226,9 +226,9 @@ chrome.downloads.onCreated.addListener(async (item) => {
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "pushToPBR" && info.linkUrl) {
-    await pushUrls([info.linkUrl], { target: "max" });
+    await pushUrls([info.linkUrl], { autoStart: true, target: "max" });
   } else if (info.menuItemId === "pushToUEPBR" && info.linkUrl) {
-    await pushUrls([info.linkUrl], { target: "ue" });
+    await pushUrls([info.linkUrl], { autoStart: true, target: "ue" });
   } else if (info.menuItemId === "pushPageLinks" || info.menuItemId === "pushPageLinksUE") {
     if (!tab || typeof tab.id !== "number") {
       showNotification(t("noActiveTab"));
@@ -237,7 +237,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     try {
       const resp = await collectLinksFromTab(tab.id);
       if (resp && resp.urls && resp.urls.length > 0) {
-        await pushUrls(resp.urls, { target: info.menuItemId === "pushPageLinksUE" ? "ue" : "max" });
+        await pushUrls(resp.urls, { autoStart: true, target: info.menuItemId === "pushPageLinksUE" ? "ue" : "max" });
       } else {
         showNotification(t("noDownloadableLinksOnPage"));
       }
@@ -254,6 +254,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.action === "pushAndDownloadNow") {
     pushUrls(msg.urls || [], { autoStart: true, target: msg.target || "max" }).then(sendResponse);
+    return true;
+  }
+  if (msg.action === "pushAndDownloadNowPreferred") {
+    getSettings().then((data) => {
+      const target = data.pushTarget === "ue" ? "ue" : "max";
+      return pushUrls(msg.urls || [], { autoStart: true, target });
+    }).then(sendResponse);
     return true;
   }
   if (msg.action === "getStatus") {
