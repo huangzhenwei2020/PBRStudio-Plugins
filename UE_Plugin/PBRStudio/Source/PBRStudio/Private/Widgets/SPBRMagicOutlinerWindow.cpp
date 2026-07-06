@@ -2618,6 +2618,20 @@ static FString GetMagicMaterialParameterDisplayName(const FName& ParameterName)
 
 static FName GetMagicTextureUsageSwitchName(const FName& TextureParameterName)
 {
+	if (TextureParameterName == FPBRMaterialParameters::BaseColorTexture) { return FPBRMaterialParameters::UseBaseColorTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::NormalTexture) { return FPBRMaterialParameters::UseNormalTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::RoughnessTexture) { return FPBRMaterialParameters::UseRoughnessTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::SpecularTexture) { return FPBRMaterialParameters::UseSpecularTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::MetallicTexture) { return FPBRMaterialParameters::UseMetallicTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::AOTexture) { return FPBRMaterialParameters::UseAOTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::OpacityTexture) { return FPBRMaterialParameters::UseOpacityTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::HeightTexture) { return FPBRMaterialParameters::UseHeightTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::EmissiveTexture) { return FPBRMaterialParameters::UseEmissiveTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::WaterRippleTexture) { return FPBRMaterialParameters::UseWaterRippleTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::GlassDirtTexture) { return FPBRMaterialParameters::UseGlassDirtTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::GlassDistortionTexture) { return FPBRMaterialParameters::UseGlassDistortionTexture; }
+	if (TextureParameterName == FPBRMaterialParameters::GlassFrostedTexture) { return FPBRMaterialParameters::UseGlassFrostedTexture; }
+
 	const FString Name = TextureParameterName.ToString();
 	for (const FPBRMagicEditableMaterialParameter& Parameter : GetMagicEditableMaterialParameters())
 	{
@@ -5208,6 +5222,10 @@ private:
 		FString LastGroup;
 		for (const FPBRMagicDynamicMaterialParameter& Parameter : Parameters)
 		{
+			if (OwnerWindow && !OwnerWindow->IsDynamicMaterialParameterVisible(Parameter))
+			{
+				continue;
+			}
 			if (Parameter.Group != LastGroup)
 			{
 				Height += 38.0f;
@@ -5249,6 +5267,10 @@ private:
 
 		for (const FPBRMagicDynamicMaterialParameter& Parameter : Parameters)
 		{
+			if (OwnerWindow && !OwnerWindow->IsDynamicMaterialParameterVisible(Parameter))
+			{
+				continue;
+			}
 			if (Parameter.Group != LastGroup)
 			{
 				if (Y + 30.0f >= ClipTop && Y <= ClipBottom)
@@ -6520,6 +6542,14 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialParameterPopupContent(
 			{
 				return;
 			}
+			if (!GroupParameters.ContainsByPredicate([this](const FPBRMagicDynamicMaterialParameter& Parameter)
+			{
+				return IsDynamicMaterialParameterVisible(Parameter);
+			}))
+			{
+				GroupParameters.Reset();
+				return;
+			}
 
 			ParameterBox->AddSlot()
 			.AutoHeight()
@@ -7183,6 +7213,15 @@ TArray<FPBRMagicDynamicMaterialParameter> SPBRMagicOutlinerWindow::CollectEditab
 
 bool SPBRMagicOutlinerWindow::IsDynamicMaterialParameterVisible(const FPBRMagicDynamicMaterialParameter& Parameter) const
 {
+	if (Parameter.Kind == EPBRMagicDynamicMaterialParameterKind::Texture)
+	{
+		const FName SwitchParameterName = GetMagicTextureUsageSwitchName(Parameter.ParameterName);
+		if (!SwitchParameterName.IsNone())
+		{
+			return GetEditableMaterialSwitch(SwitchParameterName, false);
+		}
+	}
+
 	FName UVChannelName;
 	bool bIsUVSwitch = false;
 	bool bIsUVScalar = false;
@@ -8488,8 +8527,8 @@ void SPBRMagicOutlinerWindow::OpenEditableMaterialParameterWindow()
 
 	if (TSharedPtr<SWindow> ExistingWindow = MaterialParameterWindow.Pin())
 	{
-		ExistingWindow->BringToFront();
 		ExistingWindow->SetContent(BuildMaterialParameterPopupContent());
+		ExistingWindow->BringToFront(true);
 		return;
 	}
 
@@ -8497,6 +8536,7 @@ void SPBRMagicOutlinerWindow::OpenEditableMaterialParameterWindow()
 		.Title(PBRText(TEXT("MagicMaterialParameterPopupTitle"), TEXT("PBRStudio 材质参数调节"), TEXT("PBRStudio Material Parameters")))
 		.ClientSize(FVector2D(840.0f, 780.0f))
 		.SizingRule(ESizingRule::UserSized)
+		.IsTopmostWindow(true)
 		.SupportsMaximize(true)
 		.SupportsMinimize(false)
 		[
@@ -8505,6 +8545,7 @@ void SPBRMagicOutlinerWindow::OpenEditableMaterialParameterWindow()
 
 	MaterialParameterWindow = Window;
 	FSlateApplication::Get().AddWindow(Window);
+	Window->BringToFront(true);
 }
 
 bool SPBRMagicOutlinerWindow::ResolveEditableMaterialSlot(UPrimitiveComponent*& OutComponent, int32& OutSlotIndex) const
