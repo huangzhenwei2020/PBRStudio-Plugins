@@ -2202,6 +2202,19 @@ static bool IsMagicUVRotationScalar(const FString& ParameterName)
 		ParameterName.Contains(TEXT("角度"), ESearchCase::IgnoreCase);
 }
 
+static bool IsMagicUVScalarParameterName(const FName& ParameterName)
+{
+	const FString Text = ParameterName.ToString();
+	return ParameterName == FPBRMaterialParameters::UVUTiling ||
+		ParameterName == FPBRMaterialParameters::UVVTiling ||
+		ParameterName == FPBRMaterialParameters::UVUOffset ||
+		ParameterName == FPBRMaterialParameters::UVVOffset ||
+		ParameterName == FPBRMaterialParameters::UVRotationDegrees ||
+		IsMagicUVTilingScalar(Text) ||
+		IsMagicUVOffsetScalar(Text) ||
+		IsMagicUVRotationScalar(Text);
+}
+
 static void NormalizeMagicDynamicScalarRange(FPBRMagicDynamicMaterialParameter& Parameter)
 {
 	const FString ParameterName = Parameter.ParameterName.ToString();
@@ -7250,8 +7263,14 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialScalarControl(const FT
 		[
 			SNew(SNumericEntryBox<float>)
 			.AllowSpin(true)
-			.MinValue(MinValue)
-			.MaxValue(MaxValue)
+			.MinValue_Lambda([ParameterName, MinValue]() -> TOptional<float>
+			{
+				return IsMagicUVScalarParameterName(ParameterName) ? TOptional<float>() : TOptional<float>(MinValue);
+			})
+			.MaxValue_Lambda([ParameterName, MaxValue]() -> TOptional<float>
+			{
+				return IsMagicUVScalarParameterName(ParameterName) ? TOptional<float>() : TOptional<float>(MaxValue);
+			})
 			.MinSliderValue(MinValue)
 			.MaxSliderValue(MaxValue)
 			.Delta(StepValue)
@@ -8636,7 +8655,7 @@ void SPBRMagicOutlinerWindow::CommitEditableMaterialScalar(const FName& Paramete
 	}
 
 	FString Message;
-	const float ClampedValue = FMath::Clamp(Value, MinValue, MaxValue);
+	const float ClampedValue = IsMagicUVScalarParameterName(ParameterName) ? Value : FMath::Clamp(Value, MinValue, MaxValue);
 	if (FPBRSceneMaterialReplacer::SetScalarParameterForSlot(Component, SlotIndex, ParameterName, ClampedValue, Message))
 	{
 		StatusMessage = Message;
