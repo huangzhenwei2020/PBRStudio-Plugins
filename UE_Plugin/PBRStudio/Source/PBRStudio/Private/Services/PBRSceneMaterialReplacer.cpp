@@ -101,7 +101,23 @@ bool FPBRSceneMaterialReplacer::IsPBRStudioGeneratedMaterial(UMaterialInterface*
 	}
 
 	const FString Path = Material->GetPathName();
-	if (Path.Contains(TEXT("/PBRStudio/")) || Path.Contains(TEXT("/PBRStudio.")))
+	const FString Name = Material->GetName();
+	const auto IsKnownPBRStudioMaterialName = [](const FString& CandidateName)
+	{
+		return CandidateName.StartsWith(TEXT("M_PBR_")) ||
+			CandidateName.StartsWith(TEXT("MI_PBRSR_")) ||
+			CandidateName.StartsWith(TEXT("MI_PBRR_")) ||
+			CandidateName.StartsWith(TEXT("MI_PBR_")) ||
+			CandidateName.Equals(TEXT("M_AdvancedGlass")) ||
+			CandidateName.Equals(TEXT("M_PBRStudio_SceneReplace")) ||
+			CandidateName.Equals(TEXT("M_PBRStudio_SceneReplace_Glass")) ||
+			CandidateName.Equals(TEXT("M_PBRStudio_SceneReplace_Emissive"));
+	};
+
+	if (Path.Contains(TEXT("/PBRStudio/")) ||
+		Path.Contains(TEXT("/PBRStudio.")) ||
+		Path.Contains(TEXT("/Game/PBRStudio/")) ||
+		IsKnownPBRStudioMaterialName(Name))
 	{
 		return true;
 	}
@@ -111,17 +127,11 @@ bool FPBRSceneMaterialReplacer::IsPBRStudioGeneratedMaterial(UMaterialInterface*
 		UMaterialInterface* Parent = Instance->Parent;
 		if (Parent)
 		{
-			const FString ParentPath = Parent->GetPathName();
-			const FString ParentName = Parent->GetName();
-			if (ParentPath.Contains(TEXT("/PBRStudio/")) || ParentName.StartsWith(TEXT("M_PBR_")))
-			{
-				return true;
-			}
+			return FPBRSceneMaterialReplacer::IsPBRStudioGeneratedMaterial(Parent);
 		}
 	}
 
-	const FString Name = Material->GetName();
-	return Name.StartsWith(TEXT("MI_PBRSR_")) || Name.StartsWith(TEXT("MI_PBRR_")) || Name.StartsWith(TEXT("MI_PBR_"));
+	return false;
 }
 
 static FString TextureSourceFilename(UTexture2D* Texture)
@@ -3691,19 +3701,8 @@ FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMateria
 	{
 		if (IsPBRStudioGeneratedMaterial(ExistingInstance))
 		{
-			const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRSyncEditableMaterialTextureSwitches", "PBRStudio Sync Editable Material Texture Switches"));
-			ExistingInstance->Modify();
-			if (SyncSceneTextureUsageSwitches(ExistingInstance))
-			{
-				ExistingInstance->InitStaticPermutation();
-				UMaterialEditingLibrary::UpdateMaterialInstance(ExistingInstance);
-				ExistingInstance->PostEditChange();
-				ExistingInstance->MarkPackageDirty();
-				RefreshPrimitiveAfterMaterialChange(Component, true);
-			}
-
 			Result.Instance = ExistingInstance;
-			Result.Message = FString::Printf(TEXT("当前槽位已经是可编辑材质实例：%s"), *ExistingInstance->GetName());
+			Result.Message = FString::Printf(TEXT("当前槽位已使用现有 PBRStudio 材质实例参数：%s"), *ExistingInstance->GetName());
 			return Result;
 		}
 	}
