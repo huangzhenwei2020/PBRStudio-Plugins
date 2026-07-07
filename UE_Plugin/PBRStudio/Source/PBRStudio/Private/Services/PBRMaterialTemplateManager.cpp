@@ -67,6 +67,7 @@ static float GetTemplateDefaultOpacity(EPBRMaterialType MaterialType);
 static float GetTemplateDefaultMetallic(EPBRMaterialType MaterialType);
 static UObject* LoadAssetIfExistsQuietly(const FString& PackagePath);
 static UTexture2D* GetDemoTextureForParameter(const FName& ParameterName);
+static bool ConfigureAdvancedGlassShadowFallback(UMaterial* Material);
 
 static constexpr float PBRARMDefaultWaterFlowSpeedU = 0.18f;
 static constexpr float PBRARMDefaultWaterFlowSpeedV = 0.09f;
@@ -2256,6 +2257,61 @@ static void ConfigureMaterialDomainForType(UMaterial* Material, EPBRMaterialType
 	Material->TwoSided = MaterialType == EPBRMaterialType::Fabric || MaterialType == EPBRMaterialType::Water;
 }
 
+static bool ConfigureAdvancedGlassShadowFallback(UMaterial* Material)
+{
+	if (!Material)
+	{
+		return false;
+	}
+
+	bool bChanged = false;
+
+	Material->Modify();
+	if (!Material->bCastDynamicShadowAsMasked)
+	{
+		Material->bCastDynamicShadowAsMasked = true;
+		bChanged = true;
+	}
+	if (!Material->bContactShadows)
+	{
+		Material->bContactShadows = true;
+		bChanged = true;
+	}
+	if (!Material->bCastRayTracedShadows)
+	{
+		Material->bCastRayTracedShadows = true;
+		bChanged = true;
+	}
+	if (!Material->bAllowTranslucentLocalLightShadow)
+	{
+		Material->bAllowTranslucentLocalLightShadow = true;
+		bChanged = true;
+	}
+	if (Material->TranslucentLocalLightShadowQuality < 1.0f)
+	{
+		Material->TranslucentLocalLightShadowQuality = 1.0f;
+		bChanged = true;
+	}
+	if (Material->TranslucentDirectionalLightShadowQuality < 1.0f)
+	{
+		Material->TranslucentDirectionalLightShadowQuality = 1.0f;
+		bChanged = true;
+	}
+	if (Material->TranslucentShadowDensityScale < 0.65f)
+	{
+		Material->TranslucentShadowDensityScale = 0.65f;
+		bChanged = true;
+	}
+	Material->SetOverrideCastShadowAsMasked(true);
+	Material->SetCastShadowAsMasked(true);
+	if (bChanged)
+	{
+		Material->PostEditChange();
+		Material->MarkPackageDirty();
+	}
+	return bChanged;
+}
+
 static float GetTemplateDefaultRoughness(EPBRMaterialType MaterialType)
 {
 	switch (MaterialType)
@@ -2638,6 +2694,10 @@ UMaterial* FPBRMaterialTemplateManager::EnsureTemplateMaterial(EPBRMaterialType 
 		const FString AdvancedGlassPath = TEXT("/PBRStudio/AdvancedRealisticGlass/MasterMaterials/M_AdvancedGlass.M_AdvancedGlass");
 		if (UMaterial* AdvancedGlassMaterial = Cast<UMaterial>(LoadAssetIfExistsQuietly(AdvancedGlassPath)))
 		{
+			if (ConfigureAdvancedGlassShadowFallback(AdvancedGlassMaterial))
+			{
+				SaveMaterial(AdvancedGlassMaterial);
+			}
 			OutMessage = TEXT("已使用插件内高级玻璃母材质");
 			return AdvancedGlassMaterial;
 		}

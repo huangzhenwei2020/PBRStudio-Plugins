@@ -1782,6 +1782,12 @@ static void ApplyAdvancedGlassParameterDefaults(UMaterialInstanceConstant* Insta
 	SetSceneSwitchParameterEditorOnly(Instance, FPBRMaterialParameters::UseGlassDirtTexture, false);
 	SetSceneSwitchParameterEditorOnly(Instance, FPBRMaterialParameters::UseGlassDistortionTexture, false);
 	SetSceneSwitchParameterEditorOnly(Instance, FPBRMaterialParameters::UseGlassFrostedTexture, false);
+
+	FMaterialInstanceBasePropertyOverrides BaseOverrides = Instance->BasePropertyOverrides;
+	BaseOverrides.bOverride_CastDynamicShadowAsMasked = true;
+	BaseOverrides.bCastDynamicShadowAsMasked = true;
+	Instance->UpdateStaticPermutation(Instance->GetStaticParameters(), BaseOverrides, true);
+	Instance->MarkPackageDirty();
 }
 
 static void EnableAdvancedGlassComponentShadowSettings(UPrimitiveComponent* Component)
