@@ -82,6 +82,7 @@
 #include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Views/SHeaderRow.h"
@@ -7180,18 +7181,22 @@ TSharedRef<ITableRow> SPBRMagicOutlinerWindow::GenerateBuiltinMaterialTile(TShar
 					.BorderBackgroundColor_Lambda([this]() { return GetThemeColor(TEXT("Panel")); })
 					.Padding(4)
 					[
-						SNew(SImage)
-						.Image_Lambda([this, Material]()
-						{
-							if (Material)
+						SNew(SScaleBox)
+						.Stretch(EStretch::ScaleToFit)
+						[
+							SNew(SImage)
+							.Image_Lambda([this, Material]()
 							{
-								if (TSharedPtr<FSlateDynamicImageBrush> Brush = GetOrCreateMaterialThumbnailBrush(Material, FVector2D(56, 48)))
+								if (Material)
 								{
-									return static_cast<const FSlateBrush*>(Brush.Get());
+									if (TSharedPtr<FSlateDynamicImageBrush> Brush = GetOrCreateMaterialThumbnailBrush(Material, FVector2D(112, 112)))
+									{
+										return static_cast<const FSlateBrush*>(Brush.Get());
+									}
 								}
-							}
-							return FAppStyle::Get().GetBrush("Icons.Material");
-						})
+								return FAppStyle::Get().GetBrush("ClassThumbnail.Material");
+							})
+						]
 					]
 				]
 			]
@@ -8800,6 +8805,83 @@ TSharedPtr<FSlateDynamicImageBrush> SPBRMagicOutlinerWindow::GetOrCreateMaterial
 	for (int32 PixelOffset = 3; PixelOffset < BrushImageData.Num(); PixelOffset += 4)
 	{
 		BrushImageData[PixelOffset] = 255;
+	}
+
+	if (GuessMagicMaterialTypeFromMaterial(Material) == EPBRMaterialType::Glass)
+	{
+		double LumaSum = 0.0;
+		double CheckerDeltaSum = 0.0;
+		int32 CheckerSamples = 0;
+		for (int32 Y = 0; Y < ImageHeight; ++Y)
+		{
+			for (int32 X = 0; X < ImageWidth; ++X)
+			{
+				const int32 PixelOffset = (Y * ImageWidth + X) * 4;
+				const double B = BrushImageData[PixelOffset + 0];
+				const double G = BrushImageData[PixelOffset + 1];
+				const double R = BrushImageData[PixelOffset + 2];
+				const double Luma = 0.2126 * R + 0.7152 * G + 0.0722 * B;
+				LumaSum += Luma;
+				if (X > 0)
+				{
+					const int32 LeftOffset = (Y * ImageWidth + X - 1) * 4;
+					const double LeftLuma = 0.2126 * BrushImageData[LeftOffset + 2] + 0.7152 * BrushImageData[LeftOffset + 1] + 0.0722 * BrushImageData[LeftOffset + 0];
+					CheckerDeltaSum += FMath::Abs(Luma - LeftLuma);
+					++CheckerSamples;
+				}
+			}
+		}
+
+		const double AverageLuma = LumaSum / FMath::Max(1, ImageWidth * ImageHeight);
+		const double AverageCheckerDelta = CheckerDeltaSum / FMath::Max(1, CheckerSamples);
+		const bool bLooksLikeInvisibleGlass = AverageLuma < 22.0 || (AverageLuma < 44.0 && AverageCheckerDelta > 5.0);
+		if (bLooksLikeInvisibleGlass)
+		{
+			BrushImageData.SetNumZeroed(ImageWidth * ImageHeight * 4);
+			const FVector2D Center((ImageWidth - 1) * 0.5f, (ImageHeight - 1) * 0.48f);
+			const float Radius = FMath::Min(ImageWidth, ImageHeight) * 0.38f;
+			auto WritePixel = [&BrushImageData, ImageWidth](int32 X, int32 Y, const FColor& Color)
+			{
+				const int32 PixelOffset = (Y * ImageWidth + X) * 4;
+				BrushImageData[PixelOffset + 0] = Color.B;
+				BrushImageData[PixelOffset + 1] = Color.G;
+				BrushImageData[PixelOffset + 2] = Color.R;
+				BrushImageData[PixelOffset + 3] = Color.A;
+			};
+
+			for (int32 Y = 0; Y < ImageHeight; ++Y)
+			{
+				for (int32 X = 0; X < ImageWidth; ++X)
+				{
+					const bool bChecker = (((X / 12) + (Y / 12)) % 2) == 0;
+					FColor Color = bChecker ? FColor(30, 36, 42, 255) : FColor(18, 23, 29, 255);
+					const FVector2D P(static_cast<float>(X), static_cast<float>(Y));
+					const float Dist = FVector2D::Distance(P, Center);
+					if (Dist <= Radius)
+					{
+						const float T = FMath::Clamp(Dist / Radius, 0.0f, 1.0f);
+						const float Shade = 1.0f - T;
+						const uint8 R = static_cast<uint8>(FMath::Clamp(72.0f + 95.0f * Shade, 0.0f, 255.0f));
+						const uint8 G = static_cast<uint8>(FMath::Clamp(112.0f + 95.0f * Shade, 0.0f, 255.0f));
+						const uint8 B = static_cast<uint8>(FMath::Clamp(132.0f + 105.0f * Shade, 0.0f, 255.0f));
+						Color = FColor(R, G, B, 210);
+						if (FMath::Abs(Dist - Radius) < 2.0f)
+						{
+							Color = FColor(205, 235, 255, 255);
+						}
+					}
+					if (X > ImageWidth * 0.34f && X < ImageWidth * 0.47f && Y > ImageHeight * 0.19f && Y < ImageHeight * 0.30f)
+					{
+						Color = FColor(235, 250, 255, 255);
+					}
+					if (X > ImageWidth * 0.56f && X < ImageWidth * 0.63f && Y > ImageHeight * 0.37f && Y < ImageHeight * 0.44f)
+					{
+						Color = FColor(215, 242, 255, 230);
+					}
+					WritePixel(X, Y, Color);
+				}
+			}
+		}
 	}
 
 	const FString ResourceName = FString::Printf(TEXT("PBRMagicMaterialThumb_%08x_%dx%d"), GetTypeHash(Material->GetPathName()), ImageWidth, ImageHeight);
