@@ -2210,6 +2210,17 @@ static FString GetMagicDynamicParameterGroup(const FMaterialParameterMetadata& M
 static FString NormalizeMagicDynamicParameterGroup(const FString& ParameterName, const FString& GroupName)
 {
 	const FString TrimmedGroupName = GroupName.TrimStartAndEnd();
+	const auto ContainsChinese = [](const FString& Text)
+	{
+		for (const TCHAR Ch : Text)
+		{
+			if (Ch >= 0x4E00 && Ch <= 0x9FFF)
+			{
+				return true;
+			}
+		}
+		return false;
+	};
 	const auto IsUngroupedName = [](const FString& Candidate)
 	{
 		return Candidate.IsEmpty() ||
@@ -2217,6 +2228,11 @@ static FString NormalizeMagicDynamicParameterGroup(const FString& ParameterName,
 			Candidate.Equals(TEXT("Ungrouped"), ESearchCase::IgnoreCase) ||
 			Candidate.Equals(TEXT("未分组"), ESearchCase::IgnoreCase);
 	};
+
+	if (!IsUngroupedName(TrimmedGroupName) && ContainsChinese(TrimmedGroupName))
+	{
+		return TrimmedGroupName;
+	}
 
 	struct FKnownGroupName
 	{
@@ -2320,6 +2336,21 @@ static FString NormalizeMagicDynamicParameterGroup(const FString& ParameterName,
 	}
 
 	return PBRText(TEXT("MagicParamGroupUngrouped"), TEXT("未分组"), TEXT("Ungrouped")).ToString();
+}
+
+static int32 GetMagicDynamicParameterGroupSortKey(const FString& GroupName)
+{
+	FString Digits;
+	for (const TCHAR Ch : GroupName)
+	{
+		if (Ch >= TEXT('0') && Ch <= TEXT('9'))
+		{
+			Digits.AppendChar(Ch);
+			continue;
+		}
+		break;
+	}
+	return Digits.IsEmpty() ? MAX_int32 : FCString::Atoi(*Digits);
 }
 
 static int32 GetMagicDynamicParameterSortPriority(const FMaterialParameterMetadata& Metadata)
@@ -7406,6 +7437,25 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialParameterPopupContent(
 		}
 		FlushDynamicGroup();
 	}
+	else
+	{
+		ParameterBox->AddSlot()
+		.AutoHeight()
+		.Padding(0, 8, 0, 0)
+		[
+			SNew(SBorder)
+			.BorderImage(FAppStyle::Get().GetBrush("Brushes.Recessed"))
+			.BorderBackgroundColor_Lambda([this]() { return GetThemeColor(TEXT("Panel")); })
+			.Padding(12)
+			[
+				SNew(STextBlock)
+				.Text(PBRText(TEXT("MagicNoDynamicMaterialParameters"), TEXT("当前没有可读取的材质实例参数。请从魔法大纲的材质槽点击“调参”打开。"), TEXT("No editable material instance parameters were found. Open this from a material slot in Magic Outliner.")))
+				.Font(FAppStyle::GetFontStyle("SmallFont"))
+				.AutoWrapText(true)
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+			]
+		];
+	}
 
 	return SNew(SBorder)
 		.BorderImage(FAppStyle::Get().GetBrush("Brushes.Recessed"))
@@ -8030,6 +8080,12 @@ TArray<FPBRMagicDynamicMaterialParameter> SPBRMagicOutlinerWindow::CollectEditab
 	{
 		if (A.Group != B.Group)
 		{
+			const int32 AGroupSortKey = GetMagicDynamicParameterGroupSortKey(A.Group);
+			const int32 BGroupSortKey = GetMagicDynamicParameterGroupSortKey(B.Group);
+			if (AGroupSortKey != BGroupSortKey)
+			{
+				return AGroupSortKey < BGroupSortKey;
+			}
 			return A.Group < B.Group;
 		}
 		if (A.SortPriority != B.SortPriority)
@@ -8078,9 +8134,13 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildDynamicMaterialParameterGroup(
 		.Padding(0, 0, 0, 5)
 		[
 			SNew(SBox)
-			.Visibility_Lambda([this, Parameter]()
+			.IsEnabled_Lambda([this, Parameter]()
 			{
-				return IsDynamicMaterialParameterVisible(Parameter) ? EVisibility::Visible : EVisibility::Collapsed;
+				if (Parameter.Kind == EPBRMagicDynamicMaterialParameterKind::Texture)
+				{
+					return true;
+				}
+				return IsDynamicMaterialParameterVisible(Parameter);
 			})
 			[
 				BuildDynamicMaterialParameterControl(Parameter)
@@ -8240,26 +8300,33 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialTextureControl(const F
 		]
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			SNew(SObjectPropertyEntryBox)
-			.AllowedClass(UTexture::StaticClass())
-			.AllowClear(true)
-			.AllowCreate(false)
-			.DisplayUseSelected(true)
-			.DisplayBrowse(true)
-			.DisplayThumbnail(true)
-			.ThumbnailPool(MaterialThumbnailPool)
-			.ObjectPath_Lambda([this, ParameterName]()
+			SNew(SBox)
+			.IsEnabled_Lambda([this, SwitchParameterName]()
 			{
-				if (UTexture* Texture = GetEditableMaterialTexture(ParameterName))
+				return SwitchParameterName.IsNone() || GetEditableMaterialSwitch(SwitchParameterName, true);
+			})
+			[
+				SNew(SObjectPropertyEntryBox)
+				.AllowedClass(UTexture::StaticClass())
+				.AllowClear(true)
+				.AllowCreate(false)
+				.DisplayUseSelected(true)
+				.DisplayBrowse(true)
+				.DisplayThumbnail(true)
+				.ThumbnailPool(MaterialThumbnailPool)
+				.ObjectPath_Lambda([this, ParameterName]()
 				{
-					return Texture->GetPathName();
-				}
-				return FString();
-			})
-			.OnObjectChanged_Lambda([this, ParameterName](const FAssetData& AssetData)
-			{
-				CommitEditableMaterialTexture(ParameterName, Cast<UTexture>(AssetData.GetAsset()));
-			})
+					if (UTexture* Texture = GetEditableMaterialTexture(ParameterName))
+					{
+						return Texture->GetPathName();
+					}
+					return FString();
+				})
+				.OnObjectChanged_Lambda([this, ParameterName](const FAssetData& AssetData)
+				{
+					CommitEditableMaterialTexture(ParameterName, Cast<UTexture>(AssetData.GetAsset()));
+				})
+			]
 		];
 }
 
@@ -9782,10 +9849,6 @@ void SPBRMagicOutlinerWindow::CommitEditableMaterialSwitch(const FName& Paramete
 	{
 		StatusMessage = Message;
 		Invalidate(EInvalidateWidgetReason::Paint);
-		if (TSharedPtr<SWindow> ExistingWindow = MaterialParameterWindow.Pin())
-		{
-			ExistingWindow->SetContent(BuildMaterialParameterPopupContent());
-		}
 	}
 	else
 	{
@@ -10254,30 +10317,19 @@ void SPBRMagicOutlinerWindow::RefreshSelectedMaterialItems(const TSet<TWeakObjec
 
 	if (EditableMaterialComponent.IsValid())
 	{
-		bool bStillSelected = false;
-		for (const TSharedPtr<FPBRMagicOutlinerItem>& Item : SelectedMaterialItems)
-		{
-			if (!Item.IsValid())
-			{
-				continue;
-			}
-			for (const FPBRMaterialSlotReference& SlotRef : Item->MaterialSlots)
-			{
-				if (SlotRef.MeshComponent.Get() == EditableMaterialComponent.Get() && SlotRef.SlotIndex == EditableMaterialSlotIndex)
-				{
-					bStillSelected = true;
-					break;
-				}
-			}
-			if (bStillSelected)
-			{
-				break;
-			}
-		}
-		if (!bStillSelected)
+		UPrimitiveComponent* Component = EditableMaterialComponent.Get();
+		const bool bEditableSlotStillValid = Component &&
+			EditableMaterialSlotIndex >= 0 &&
+			EditableMaterialSlotIndex < Component->GetNumMaterials() &&
+			Cast<UMaterialInstanceConstant>(Component->GetMaterial(EditableMaterialSlotIndex));
+		if (!bEditableSlotStillValid)
 		{
 			EditableMaterialComponent.Reset();
 			EditableMaterialSlotIndex = INDEX_NONE;
+			if (TSharedPtr<SWindow> ExistingWindow = MaterialParameterWindow.Pin())
+			{
+				ExistingWindow->SetContent(BuildMaterialParameterPopupContent());
+			}
 		}
 	}
 
