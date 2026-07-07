@@ -1400,6 +1400,19 @@ static UTexture* FindBestSceneSourceTextureParameter(UMaterialInterface* SourceM
 	return nullptr;
 }
 
+static bool IsSceneMigrationTextureSuspiciouslySmall(const UTexture* Texture)
+{
+	const UTexture2D* Texture2D = Cast<UTexture2D>(Texture);
+	return Texture2D && Texture2D->GetSizeX() <= 4 && Texture2D->GetSizeY() <= 4;
+}
+
+static bool ShouldRejectSceneBakedTextureForFallback(const UTexture* BakedTexture, const UTexture* FallbackTexture)
+{
+	return IsSceneMigrationTextureSuspiciouslySmall(BakedTexture) &&
+		IsValidSceneSourceMigrationTexture(FallbackTexture) &&
+		!IsSceneMigrationTextureSuspiciouslySmall(FallbackTexture);
+}
+
 static FString BuildSceneBakedTexturePackagePath(const UPrimitiveComponent* Component, int32 SlotIndex, const FName& TargetParameterName, const FString& OutputRoot)
 {
 	const AActor* Owner = Component ? Component->GetOwner() : nullptr;
@@ -1891,6 +1904,12 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 			ChannelState.Texture = SourceTexture;
 		}
 
+		UTexture* FallbackTexture = ChannelState.Texture;
+		if (!FallbackTexture)
+		{
+			FallbackTexture = FindBestSceneSourceTextureParameter(SourceMaterial, TargetParameterName);
+		}
+
 		UTexture* SourceTexture = nullptr;
 		if (ChannelState.bShouldBake)
 		{
@@ -1899,10 +1918,15 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 			{
 				UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Failed to bake source material channel %s from %s"), *TargetParameterName.ToString(), *SourceMaterial->GetName());
 			}
+			else if (ShouldRejectSceneBakedTextureForFallback(SourceTexture, FallbackTexture))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Rejected tiny baked texture %s for channel %s; falling back to source texture %s"), *SourceTexture->GetName(), *TargetParameterName.ToString(), *FallbackTexture->GetName());
+				SourceTexture = nullptr;
+			}
 		}
 		if (!SourceTexture)
 		{
-			SourceTexture = ChannelState.Texture;
+			SourceTexture = FallbackTexture;
 		}
 
 		if (SourceTexture)
