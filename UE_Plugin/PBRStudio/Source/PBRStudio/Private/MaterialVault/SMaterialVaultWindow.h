@@ -98,6 +98,7 @@ private:
 	FReply HandleScanClicked();
 	FReply HandleChooseVaultRootClicked() const;
 	FReply HandleOpenVaultRootClicked() const;
+	FReply HandleOpenBuiltinLibraryClicked() const;
 	FReply HandleCreateLibraryClicked();
 	FReply HandleRefreshPackIndexClicked();
 	FReply HandleCreateSelectedMvpackClicked() const;

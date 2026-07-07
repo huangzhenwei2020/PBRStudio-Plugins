@@ -549,6 +549,15 @@ void SMaterialVaultWindow::Construct(const FArguments& InArgs)
 			.Padding(8.0f, 0.0f, 0.0f, 0.0f)
 			[
 				SNew(SButton)
+				.Text(FText::FromString(TEXT("内置材质库")))
+				.ToolTipText(FText::FromString(TEXT("打开插件自带的只读材质库。内置材质不写入外部材质库目录，也不能在这里添加或删除。")))
+				.OnClicked(this, &SMaterialVaultWindow::HandleOpenBuiltinLibraryClicked)
+			]
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.Padding(8.0f, 0.0f, 0.0f, 0.0f)
+			[
+				SNew(SButton)
 				.Text(FText::FromString(TEXT("刷新材质包")))
 				.OnClicked(this, &SMaterialVaultWindow::HandleRefreshPackIndexClicked)
 			]
@@ -917,6 +926,45 @@ FReply SMaterialVaultWindow::HandleOpenVaultRootClicked() const
 	}
 
 	FPlatformProcess::ExploreFolder(*VaultRoot);
+	return FReply::Handled();
+}
+
+FReply SMaterialVaultWindow::HandleOpenBuiltinLibraryClicked() const
+{
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+	TArray<FAssetData> BuiltinAssets;
+	AssetRegistry.GetAssetsByPath(FName(TEXT("/PBRStudio/AdvancedRealisticGlass/Materials")), BuiltinAssets, true);
+	AssetRegistry.GetAssetsByPath(FName(TEXT("/PBRStudio/BuiltinMaterials")), BuiltinAssets, true);
+
+	TArray<FAssetData> MaterialAssets;
+	TSet<FName> AddedPackages;
+	for (const FAssetData& Asset : BuiltinAssets)
+	{
+		if (AddedPackages.Contains(Asset.PackageName))
+		{
+			continue;
+		}
+
+		const FString ClassPath = Asset.AssetClassPath.ToString();
+		if (!ClassPath.Contains(TEXT("MaterialInstance")) && !ClassPath.Contains(TEXT("Material")))
+		{
+			continue;
+		}
+
+		MaterialAssets.Add(Asset);
+		AddedPackages.Add(Asset.PackageName);
+	}
+
+	if (MaterialAssets.IsEmpty())
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("没有找到插件内置材质。请确认 PBRStudio 插件内容已启用显示，并且 /PBRStudio/AdvancedRealisticGlass/Materials 存在。")));
+		return FReply::Handled();
+	}
+
+	FContentBrowserModule& ContentBrowserModule = FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
+	ContentBrowserModule.Get().SyncBrowserToAssets(MaterialAssets);
 	return FReply::Handled();
 }
 

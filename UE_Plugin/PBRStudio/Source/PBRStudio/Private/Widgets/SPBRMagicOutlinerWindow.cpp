@@ -2,6 +2,7 @@
 
 #include "AssetThumbnail.h"
 #include "AssetRegistry/AssetData.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Brushes/SlateDynamicImageBrush.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
@@ -90,6 +91,14 @@
 #include "Widgets/SWindow.h"
 
 #define LOCTEXT_NAMESPACE "SPBRMagicOutlinerWindow"
+
+struct FPBRMagicBuiltinMaterialItem
+{
+	FString DisplayName;
+	FString Category;
+	FAssetData AssetData;
+	TWeakObjectPtr<UMaterialInterface> Material;
+};
 
 namespace
 {
@@ -6836,6 +6845,19 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildSelectedMaterialPanel()
 					})
 					.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Selection"))); })
 				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8, 0, 0, 0)
+				[
+					SNew(SButton)
+					.ButtonStyle(FAppStyle::Get(), "FlatButton")
+					.ContentPadding(FMargin(8, 4))
+					.OnClicked(this, &SPBRMagicOutlinerWindow::OnOpenBuiltinMaterialLibraryClicked)
+					[
+						SNew(STextBlock)
+						.Text(PBRText(TEXT("OpenBuiltinMaterialLibrary"), TEXT("内置材质库"), TEXT("Built-in Library")))
+						.Font(FAppStyle::GetFontStyle("SmallFontBold"))
+						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Selection"))); })
+					]
+				]
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
 			[
@@ -6865,6 +6887,258 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildSelectedMaterialPanel()
 				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
 			]
 		];
+}
+
+FReply SPBRMagicOutlinerWindow::OnOpenBuiltinMaterialLibraryClicked()
+{
+	OpenBuiltinMaterialLibraryWindow();
+	return FReply::Handled();
+}
+
+void SPBRMagicOutlinerWindow::OpenBuiltinMaterialLibraryWindow()
+{
+	RefreshBuiltinMaterialItems();
+	if (TSharedPtr<SWindow> ExistingWindow = BuiltinMaterialLibraryWindow.Pin())
+	{
+		ExistingWindow->SetContent(BuildBuiltinMaterialLibraryContent());
+		ExistingWindow->BringToFront();
+		return;
+	}
+
+	TSharedRef<SWindow> Window = SNew(SWindow)
+		.Title(PBRText(TEXT("BuiltinMaterialLibraryTitle"), TEXT("PBRStudio 内置材质库"), TEXT("PBRStudio Built-in Material Library")))
+		.ClientSize(FVector2D(760.0f, 560.0f))
+		.SupportsMaximize(true)
+		.SupportsMinimize(false)
+		[
+			BuildBuiltinMaterialLibraryContent()
+		];
+	BuiltinMaterialLibraryWindow = Window;
+	FSlateApplication::Get().AddWindow(Window);
+}
+
+void SPBRMagicOutlinerWindow::RefreshBuiltinMaterialItems()
+{
+	BuiltinMaterialItems.Reset();
+	SelectedBuiltinMaterialItem.Reset();
+
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+	TArray<FAssetData> Assets;
+	AssetRegistry.GetAssetsByPath(FName(TEXT("/PBRStudio/AdvancedRealisticGlass/Materials")), Assets, true);
+	AssetRegistry.GetAssetsByPath(FName(TEXT("/PBRStudio/BuiltinMaterials")), Assets, true);
+
+	TSet<FName> AddedPackages;
+	for (const FAssetData& Asset : Assets)
+	{
+		if (AddedPackages.Contains(Asset.PackageName))
+		{
+			continue;
+		}
+		const FString ClassPath = Asset.AssetClassPath.ToString();
+		if (!ClassPath.Contains(TEXT("MaterialInstance")) && !ClassPath.Contains(TEXT("Material")))
+		{
+			continue;
+		}
+
+		TSharedPtr<FPBRMagicBuiltinMaterialItem> Item = MakeShared<FPBRMagicBuiltinMaterialItem>();
+		Item->AssetData = Asset;
+		Item->DisplayName = Asset.AssetName.ToString();
+		Item->Category = Asset.PackagePath.ToString().Contains(TEXT("AdvancedRealisticGlass"))
+			? TEXT("玻璃 / Advanced Realistic Glass")
+			: TEXT("内置材质");
+		Item->Material = Cast<UMaterialInterface>(Asset.GetAsset());
+		BuiltinMaterialItems.Add(Item);
+		AddedPackages.Add(Asset.PackageName);
+	}
+
+	BuiltinMaterialItems.Sort([](const TSharedPtr<FPBRMagicBuiltinMaterialItem>& A, const TSharedPtr<FPBRMagicBuiltinMaterialItem>& B)
+	{
+		if (!A.IsValid() || !B.IsValid())
+		{
+			return A.IsValid();
+		}
+		if (A->Category != B->Category)
+		{
+			return A->Category < B->Category;
+		}
+		return A->DisplayName < B->DisplayName;
+	});
+
+	if (BuiltinMaterialListView.IsValid())
+	{
+		BuiltinMaterialListView->RequestListRefresh();
+	}
+}
+
+TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildBuiltinMaterialLibraryContent()
+{
+	return SNew(SBorder)
+		.BorderImage(FAppStyle::Get().GetBrush("Brushes.Recessed"))
+		.BorderBackgroundColor_Lambda([this]() { return GetThemeColor(TEXT("PanelRaised")); })
+		.Padding(12)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(STextBlock)
+						.Text(PBRText(TEXT("BuiltinMaterialLibraryHeader"), TEXT("内置材质库"), TEXT("Built-in Material Library")))
+						.Font(FAppStyle::GetFontStyle("NormalFontBold"))
+						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Text"))); })
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+					[
+						SNew(STextBlock)
+						.Text(PBRText(TEXT("BuiltinMaterialLibraryHint"), TEXT("只读库：材质由插件自带，使用 PBRStudio 自己的母材质。双击或点应用可替换当前选中的材质槽。"), TEXT("Read-only library: plugin-owned PBRStudio materials. Double-click or apply to the current selected material slot.")))
+						.Font(FAppStyle::GetFontStyle("SmallFont"))
+						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8, 0, 0, 0)
+				[
+					SNew(SButton)
+					.ButtonStyle(FAppStyle::Get(), "FlatButton")
+					.ContentPadding(FMargin(10, 5))
+					.OnClicked_Lambda([this]()
+					{
+						RefreshBuiltinMaterialItems();
+						return FReply::Handled();
+					})
+					[
+						SNew(STextBlock)
+						.Text(PBRText(TEXT("RefreshBuiltinMaterials"), TEXT("刷新"), TEXT("Refresh")))
+						.Font(FAppStyle::GetFontStyle("SmallFont"))
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8, 0, 0, 0)
+				[
+					SNew(SButton)
+					.ButtonStyle(FAppStyle::Get(), "FlatButton")
+					.ContentPadding(FMargin(10, 5))
+					.OnClicked(this, &SPBRMagicOutlinerWindow::OnApplySelectedBuiltinMaterialClicked)
+					[
+						SNew(STextBlock)
+						.Text(PBRText(TEXT("ApplyBuiltinMaterial"), TEXT("应用到当前槽"), TEXT("Apply to Slot")))
+						.Font(FAppStyle::GetFontStyle("SmallFontBold"))
+						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Selection"))); })
+					]
+				]
+			]
+			+ SVerticalBox::Slot().FillHeight(1.0f)
+			[
+				SAssignNew(BuiltinMaterialListView, SListView<TSharedPtr<FPBRMagicBuiltinMaterialItem>>)
+				.ListItemsSource(&BuiltinMaterialItems)
+				.SelectionMode(ESelectionMode::Single)
+				.OnGenerateRow(this, &SPBRMagicOutlinerWindow::GenerateBuiltinMaterialRow)
+				.OnSelectionChanged_Lambda([this](TSharedPtr<FPBRMagicBuiltinMaterialItem> Item, ESelectInfo::Type)
+				{
+					SelectedBuiltinMaterialItem = Item;
+				})
+				.OnMouseButtonDoubleClick_Lambda([this](TSharedPtr<FPBRMagicBuiltinMaterialItem> Item)
+				{
+					ApplyBuiltinMaterialItem(Item);
+				})
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]()
+				{
+					return FText::Format(PBRText(TEXT("BuiltinMaterialCount"), TEXT("已载入 {0} 个内置材质实例。"), TEXT("{0} built-in material instances loaded.")), FText::AsNumber(BuiltinMaterialItems.Num()));
+				})
+				.Font(FAppStyle::GetFontStyle("TinyText"))
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+			]
+		];
+}
+
+TSharedRef<ITableRow> SPBRMagicOutlinerWindow::GenerateBuiltinMaterialRow(TSharedPtr<FPBRMagicBuiltinMaterialItem> Item, const TSharedRef<STableViewBase>& OwnerTable)
+{
+	UMaterialInterface* Material = Item.IsValid() ? Item->Material.Get() : nullptr;
+	if (!Material && Item.IsValid())
+	{
+		Material = Cast<UMaterialInterface>(Item->AssetData.GetAsset());
+		Item->Material = Material;
+	}
+
+	return SNew(STableRow<TSharedPtr<FPBRMagicBuiltinMaterialItem>>, OwnerTable)
+		.Padding(4)
+		[
+			SNew(SBorder)
+			.BorderImage(FAppStyle::Get().GetBrush("WhiteBrush"))
+			.BorderBackgroundColor_Lambda([this]() { return GetThemeColor(TEXT("TableRow")); })
+			.Padding(6)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 10, 0)
+				[
+					SNew(SBox)
+					.WidthOverride(56)
+					.HeightOverride(48)
+					[
+						SNew(SImage)
+						.Image_Lambda([this, Material]()
+						{
+							if (Material)
+							{
+								if (TSharedPtr<FSlateDynamicImageBrush> Brush = GetOrCreateMaterialThumbnailBrush(Material, FVector2D(56, 48)))
+								{
+									return static_cast<const FSlateBrush*>(Brush.Get());
+								}
+							}
+							return FAppStyle::Get().GetBrush("Icons.Material");
+						})
+					]
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(STextBlock)
+						.Text(FText::FromString(Item.IsValid() ? Item->DisplayName : FString()))
+						.Font(FAppStyle::GetFontStyle("SmallFontBold"))
+						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Text"))); })
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+					[
+						SNew(STextBlock)
+						.Text(FText::FromString(Item.IsValid() ? Item->Category : FString()))
+						.Font(FAppStyle::GetFontStyle("TinyText"))
+						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					SNew(SButton)
+					.ButtonStyle(FAppStyle::Get(), "FlatButton")
+					.ContentPadding(FMargin(8, 4))
+					.OnClicked_Lambda([this, Item]()
+					{
+						ApplyBuiltinMaterialItem(Item);
+						return FReply::Handled();
+					})
+					[
+						SNew(STextBlock)
+						.Text(PBRText(TEXT("UseBuiltinMaterialSmall"), TEXT("使用"), TEXT("Use")))
+						.Font(FAppStyle::GetFontStyle("SmallFontBold"))
+					]
+				]
+			]
+		];
+}
+
+FReply SPBRMagicOutlinerWindow::OnApplySelectedBuiltinMaterialClicked()
+{
+	ApplyBuiltinMaterialItem(SelectedBuiltinMaterialItem);
+	return FReply::Handled();
 }
 
 TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialParameterPopupContent()
@@ -8854,6 +9128,127 @@ FReply SPBRMagicOutlinerWindow::OnEditSelectedMaterialSlot(TSharedPtr<FPBRMagicO
 	Invalidate(EInvalidateWidgetReason::LayoutAndVolatility);
 	OpenEditableMaterialParameterWindow();
 	return FReply::Handled();
+}
+
+bool SPBRMagicOutlinerWindow::ResolvePreferredMaterialSlot(UPrimitiveComponent*& OutComponent, int32& OutSlotIndex, TSharedPtr<FPBRMagicOutlinerItem>* OutItem) const
+{
+	OutComponent = nullptr;
+	OutSlotIndex = INDEX_NONE;
+	if (OutItem)
+	{
+		OutItem->Reset();
+	}
+
+	UPrimitiveComponent* EditableComponent = nullptr;
+	int32 EditableSlotIndex = INDEX_NONE;
+	if (ResolveEditableMaterialSlot(EditableComponent, EditableSlotIndex) && EditableComponent && EditableSlotIndex != INDEX_NONE)
+	{
+		OutComponent = EditableComponent;
+		OutSlotIndex = EditableSlotIndex;
+		return true;
+	}
+
+	TArray<TSharedPtr<FPBRMagicOutlinerItem>> CandidateItems;
+	if (ActiveTreeItem.IsValid())
+	{
+		CandidateItems.Add(ActiveTreeItem);
+	}
+	for (const TSharedPtr<FPBRMagicOutlinerItem>& Item : SelectedMaterialItems)
+	{
+		if (Item.IsValid())
+		{
+			CandidateItems.AddUnique(Item);
+		}
+	}
+
+	for (const TSharedPtr<FPBRMagicOutlinerItem>& Item : CandidateItems)
+	{
+		if (!Item.IsValid())
+		{
+			continue;
+		}
+		for (const FPBRMaterialSlotReference& SlotRef : Item->MaterialSlots)
+		{
+			if (SlotRef.MeshComponent.IsValid() && IsActorSelectedInEditor(SlotRef.Actor.Get()) && SlotRef.SlotIndex != INDEX_NONE)
+			{
+				OutComponent = SlotRef.MeshComponent.Get();
+				OutSlotIndex = SlotRef.SlotIndex;
+				if (OutItem)
+				{
+					*OutItem = Item;
+				}
+				return true;
+			}
+		}
+		for (const FPBRMaterialSlotReference& SlotRef : Item->MaterialSlots)
+		{
+			if (SlotRef.MeshComponent.IsValid() && SlotRef.SlotIndex != INDEX_NONE)
+			{
+				OutComponent = SlotRef.MeshComponent.Get();
+				OutSlotIndex = SlotRef.SlotIndex;
+				if (OutItem)
+				{
+					*OutItem = Item;
+				}
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+void SPBRMagicOutlinerWindow::ApplyBuiltinMaterialItem(TSharedPtr<FPBRMagicBuiltinMaterialItem> Item)
+{
+	if (!Item.IsValid())
+	{
+		StatusMessage = TEXT("请先选择一个内置材质");
+		return;
+	}
+
+	UMaterialInterface* NewMaterial = Item->Material.Get();
+	if (!NewMaterial)
+	{
+		NewMaterial = Cast<UMaterialInterface>(Item->AssetData.GetAsset());
+		Item->Material = NewMaterial;
+	}
+	if (!NewMaterial)
+	{
+		StatusMessage = TEXT("内置材质加载失败");
+		return;
+	}
+
+	UPrimitiveComponent* Component = nullptr;
+	int32 SlotIndex = INDEX_NONE;
+	TSharedPtr<FPBRMagicOutlinerItem> SourceItem;
+	if (!ResolvePreferredMaterialSlot(Component, SlotIndex, &SourceItem) || !Component || SlotIndex == INDEX_NONE)
+	{
+		StatusMessage = TEXT("请先在魔法大纲中选中一个材质槽或场景物体");
+		return;
+	}
+
+	const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "ApplyBuiltinMaterialToSlot", "Apply built-in material to slot"));
+	if (AActor* Owner = Component->GetOwner())
+	{
+		Owner->Modify();
+	}
+	Component->Modify();
+	Component->SetMaterial(SlotIndex, NewMaterial);
+	Component->MarkRenderStateDirty();
+	if (GEditor)
+	{
+		GEditor->RedrawLevelEditingViewports();
+	}
+
+	EditableMaterialComponent = Component;
+	EditableMaterialSlotIndex = SlotIndex;
+	StatusMessage = FString::Printf(TEXT("已应用内置材质 %s 到槽位 %d"), *NewMaterial->GetName(), SlotIndex);
+
+	RebuildItems();
+	TSet<TWeakObjectPtr<UMaterialInterface>> NewMaterials;
+	NewMaterials.Add(NewMaterial);
+	RefreshSelectedMaterialItems(NewMaterials);
+	FocusMaterialItemsFromSet(NewMaterials, true);
 }
 
 void SPBRMagicOutlinerWindow::OpenEditableMaterialParameterWindow()
