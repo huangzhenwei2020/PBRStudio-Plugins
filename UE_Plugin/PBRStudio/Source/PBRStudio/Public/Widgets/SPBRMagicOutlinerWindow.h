@@ -26,6 +26,7 @@ struct FAssetData;
 struct FPBRMagicDynamicMaterialParameter;
 struct FPBRMagicBuiltinMaterialItem;
 template<typename ItemType> class SListView;
+template<typename ItemType> class STileView;
 template<typename ItemType> class STreeView;
 enum class EPBRMaterialType : uint8;
 
@@ -119,6 +120,7 @@ private:
 	TSharedRef<SWidget> BuildCheckedListPanel();
 	TSharedRef<SWidget> BuildSelectedMaterialPanel();
 	TSharedRef<SWidget> BuildBuiltinMaterialLibraryContent();
+	TSharedRef<SWidget> BuildBuiltinMaterialCategoryButton(const FString& Category);
 	TSharedRef<SWidget> BuildMaterialParameterPopupContent();
 	TSharedRef<SWidget> BuildEditableMaterialTypeMenu();
 	TSharedRef<SWidget> BuildMaterialAISettingsContent();
@@ -137,7 +139,7 @@ private:
 	TSharedRef<SWidget> BuildMaterialThumbnail(TSharedPtr<FPBRMagicOutlinerItem> Item, const FVector2D& Size);
 	TSharedRef<ITableRow> GenerateRow(TSharedPtr<FPBRMagicOutlinerItem> Item, const TSharedRef<STableViewBase>& OwnerTable);
 	TSharedRef<ITableRow> GenerateSelectedMaterialRow(TSharedPtr<FPBRMagicOutlinerItem> Item, const TSharedRef<STableViewBase>& OwnerTable);
-	TSharedRef<ITableRow> GenerateBuiltinMaterialRow(TSharedPtr<FPBRMagicBuiltinMaterialItem> Item, const TSharedRef<STableViewBase>& OwnerTable);
+	TSharedRef<ITableRow> GenerateBuiltinMaterialTile(TSharedPtr<FPBRMagicBuiltinMaterialItem> Item, const TSharedRef<STableViewBase>& OwnerTable);
 	TSharedRef<ITableRow> GenerateNameCheckRow(TSharedPtr<FPBRNameCheckListItem> Item, const TSharedRef<STableViewBase>& OwnerTable);
 	TSharedRef<ITableRow> GenerateCheckedActorRow(TSharedPtr<FPBRCheckedActorListItem> Item, const TSharedRef<STableViewBase>& OwnerTable);
 	void GetItemChildren(TSharedPtr<FPBRMagicOutlinerItem> Item, TArray<TSharedPtr<FPBRMagicOutlinerItem>>& OutChildren) const;
@@ -213,7 +215,9 @@ private:
 	FReply OnApplySelectedBuiltinMaterialClicked();
 	void OpenBuiltinMaterialLibraryWindow();
 	void RefreshBuiltinMaterialItems();
+	void RefreshFilteredBuiltinMaterialItems();
 	void ApplyBuiltinMaterialItem(TSharedPtr<FPBRMagicBuiltinMaterialItem> Item);
+	FReply OnBuiltinMaterialDragDetected(const FGeometry& Geometry, const FPointerEvent& MouseEvent, TSharedPtr<FPBRMagicBuiltinMaterialItem> Item);
 	bool ResolvePreferredMaterialSlot(UPrimitiveComponent*& OutComponent, int32& OutSlotIndex, TSharedPtr<FPBRMagicOutlinerItem>* OutItem = nullptr) const;
 	void OpenEditableMaterialParameterWindow();
 	void OpenMaterialEditor(TSharedPtr<FPBRMagicOutlinerItem> Item);
@@ -300,7 +304,7 @@ private:
 	TSharedPtr<SListView<TSharedPtr<FPBRNameCheckListItem>>> NameCheckListView;
 	TSharedPtr<SListView<TSharedPtr<FPBRCheckedActorListItem>>> CheckedListView;
 	TSharedPtr<SListView<TSharedPtr<FPBRMagicOutlinerItem>>> SelectedMaterialListView;
-	TSharedPtr<SListView<TSharedPtr<FPBRMagicBuiltinMaterialItem>>> BuiltinMaterialListView;
+	TSharedPtr<STileView<TSharedPtr<FPBRMagicBuiltinMaterialItem>>> BuiltinMaterialTileView;
 	TSharedPtr<class SEditableTextBox> ShortcutSettingsEditBox;
 	TSharedPtr<class STextBlock> ShortcutConflictTextBlock;
 	TArray<TSharedPtr<FPBRMagicOutlinerItem>> RootItems;
@@ -308,6 +312,9 @@ private:
 	TArray<TSharedPtr<FPBRCheckedActorListItem>> CheckedListItems;
 	TArray<TSharedPtr<FPBRMagicOutlinerItem>> SelectedMaterialItems;
 	TArray<TSharedPtr<FPBRMagicBuiltinMaterialItem>> BuiltinMaterialItems;
+	TArray<TSharedPtr<FPBRMagicBuiltinMaterialItem>> FilteredBuiltinMaterialItems;
+	TArray<FString> BuiltinMaterialCategories;
+	FString ActiveBuiltinMaterialCategory;
 	TSharedPtr<FPBRMagicBuiltinMaterialItem> SelectedBuiltinMaterialItem;
 	TSharedPtr<FPBRMagicOutlinerItem> ActiveTreeItem;
 	TWeakObjectPtr<UPrimitiveComponent> EditableMaterialComponent;

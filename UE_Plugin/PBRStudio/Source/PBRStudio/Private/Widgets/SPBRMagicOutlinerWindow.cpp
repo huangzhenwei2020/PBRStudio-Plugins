@@ -87,6 +87,7 @@
 #include "Widgets/Views/SHeaderRow.h"
 #include "Widgets/Views/SListView.h"
 #include "Widgets/Views/STableRow.h"
+#include "Widgets/Views/STileView.h"
 #include "Widgets/Views/STreeView.h"
 #include "Widgets/SWindow.h"
 
@@ -96,6 +97,7 @@ struct FPBRMagicBuiltinMaterialItem
 {
 	FString DisplayName;
 	FString Category;
+	FString ParentMaterialName;
 	FAssetData AssetData;
 	TWeakObjectPtr<UMaterialInterface> Material;
 };
@@ -6920,6 +6922,8 @@ void SPBRMagicOutlinerWindow::OpenBuiltinMaterialLibraryWindow()
 void SPBRMagicOutlinerWindow::RefreshBuiltinMaterialItems()
 {
 	BuiltinMaterialItems.Reset();
+	FilteredBuiltinMaterialItems.Reset();
+	BuiltinMaterialCategories.Reset();
 	SelectedBuiltinMaterialItem.Reset();
 
 	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
@@ -6945,11 +6949,14 @@ void SPBRMagicOutlinerWindow::RefreshBuiltinMaterialItems()
 		TSharedPtr<FPBRMagicBuiltinMaterialItem> Item = MakeShared<FPBRMagicBuiltinMaterialItem>();
 		Item->AssetData = Asset;
 		Item->DisplayName = Asset.AssetName.ToString();
-		Item->Category = Asset.PackagePath.ToString().Contains(TEXT("AdvancedRealisticGlass"))
-			? TEXT("玻璃 / Advanced Realistic Glass")
-			: TEXT("内置材质");
 		Item->Material = Cast<UMaterialInterface>(Asset.GetAsset());
+		if (UMaterialInstance* Instance = Cast<UMaterialInstance>(Item->Material.Get()))
+		{
+			Item->ParentMaterialName = Instance->Parent ? Instance->Parent->GetName() : FString();
+		}
+		Item->Category = GetMagicMaterialTypeLabel(GuessMagicMaterialTypeFromMaterial(Item->Material.Get())).ToString();
 		BuiltinMaterialItems.Add(Item);
+		BuiltinMaterialCategories.AddUnique(Item->Category);
 		AddedPackages.Add(Asset.PackageName);
 	}
 
@@ -6966,14 +6973,49 @@ void SPBRMagicOutlinerWindow::RefreshBuiltinMaterialItems()
 		return A->DisplayName < B->DisplayName;
 	});
 
-	if (BuiltinMaterialListView.IsValid())
+	BuiltinMaterialCategories.Sort();
+	BuiltinMaterialCategories.Insert(TEXT("全部"), 0);
+	if (ActiveBuiltinMaterialCategory.IsEmpty())
 	{
-		BuiltinMaterialListView->RequestListRefresh();
+		ActiveBuiltinMaterialCategory = TEXT("全部");
+	}
+	RefreshFilteredBuiltinMaterialItems();
+}
+
+void SPBRMagicOutlinerWindow::RefreshFilteredBuiltinMaterialItems()
+{
+	FilteredBuiltinMaterialItems.Reset();
+	for (const TSharedPtr<FPBRMagicBuiltinMaterialItem>& Item : BuiltinMaterialItems)
+	{
+		if (!Item.IsValid())
+		{
+			continue;
+		}
+		if (ActiveBuiltinMaterialCategory.IsEmpty() || ActiveBuiltinMaterialCategory == TEXT("全部") || Item->Category == ActiveBuiltinMaterialCategory)
+		{
+			FilteredBuiltinMaterialItems.Add(Item);
+		}
+	}
+
+	if (BuiltinMaterialTileView.IsValid())
+	{
+		BuiltinMaterialTileView->RequestListRefresh();
 	}
 }
 
 TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildBuiltinMaterialLibraryContent()
 {
+	TSharedRef<SVerticalBox> CategoryBox = SNew(SVerticalBox);
+	for (const FString& Category : BuiltinMaterialCategories)
+	{
+		CategoryBox->AddSlot()
+		.AutoHeight()
+		.Padding(0, 0, 0, 2)
+		[
+			BuildBuiltinMaterialCategoryButton(Category)
+		];
+	}
+
 	return SNew(SBorder)
 		.BorderImage(FAppStyle::Get().GetBrush("Brushes.Recessed"))
 		.BorderBackgroundColor_Lambda([this]() { return GetThemeColor(TEXT("PanelRaised")); })
@@ -7033,25 +7075,49 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildBuiltinMaterialLibraryContent(
 			]
 			+ SVerticalBox::Slot().FillHeight(1.0f)
 			[
-				SAssignNew(BuiltinMaterialListView, SListView<TSharedPtr<FPBRMagicBuiltinMaterialItem>>)
-				.ListItemsSource(&BuiltinMaterialItems)
-				.SelectionMode(ESelectionMode::Single)
-				.OnGenerateRow(this, &SPBRMagicOutlinerWindow::GenerateBuiltinMaterialRow)
-				.OnSelectionChanged_Lambda([this](TSharedPtr<FPBRMagicBuiltinMaterialItem> Item, ESelectInfo::Type)
-				{
-					SelectedBuiltinMaterialItem = Item;
-				})
-				.OnMouseButtonDoubleClick_Lambda([this](TSharedPtr<FPBRMagicBuiltinMaterialItem> Item)
-				{
-					ApplyBuiltinMaterialItem(Item);
-				})
+				SNew(SSplitter)
+				.Orientation(Orient_Horizontal)
+				+ SSplitter::Slot()
+				.Value(0.22f)
+				.MinSize(120.0f)
+				[
+					SNew(SBorder)
+					.BorderImage(FAppStyle::Get().GetBrush("Brushes.Recessed"))
+					.Padding(6)
+					[
+						SNew(SScrollBox)
+						+ SScrollBox::Slot()
+						[
+							CategoryBox
+						]
+					]
+				]
+				+ SSplitter::Slot()
+				.Value(0.78f)
+				.MinSize(320.0f)
+				[
+					SAssignNew(BuiltinMaterialTileView, STileView<TSharedPtr<FPBRMagicBuiltinMaterialItem>>)
+					.ListItemsSource(&FilteredBuiltinMaterialItems)
+					.SelectionMode(ESelectionMode::Single)
+					.OnGenerateTile(this, &SPBRMagicOutlinerWindow::GenerateBuiltinMaterialTile)
+					.OnSelectionChanged_Lambda([this](TSharedPtr<FPBRMagicBuiltinMaterialItem> Item, ESelectInfo::Type)
+					{
+						SelectedBuiltinMaterialItem = Item;
+					})
+					.OnMouseButtonDoubleClick_Lambda([this](TSharedPtr<FPBRMagicBuiltinMaterialItem> Item)
+					{
+						ApplyBuiltinMaterialItem(Item);
+					})
+					.ItemWidth(148.0f)
+					.ItemHeight(176.0f)
+				]
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
 			[
 				SNew(STextBlock)
 				.Text_Lambda([this]()
 				{
-					return FText::Format(PBRText(TEXT("BuiltinMaterialCount"), TEXT("已载入 {0} 个内置材质实例。"), TEXT("{0} built-in material instances loaded.")), FText::AsNumber(BuiltinMaterialItems.Num()));
+					return FText::Format(PBRText(TEXT("BuiltinMaterialCount"), TEXT("已显示 {0} / {1} 个内置材质实例，可拖拽使用。"), TEXT("{0} / {1} built-in material instances shown. Drag to use.")), FText::AsNumber(FilteredBuiltinMaterialItems.Num()), FText::AsNumber(BuiltinMaterialItems.Num()));
 				})
 				.Font(FAppStyle::GetFontStyle("TinyText"))
 				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
@@ -7059,7 +7125,29 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildBuiltinMaterialLibraryContent(
 		];
 }
 
-TSharedRef<ITableRow> SPBRMagicOutlinerWindow::GenerateBuiltinMaterialRow(TSharedPtr<FPBRMagicBuiltinMaterialItem> Item, const TSharedRef<STableViewBase>& OwnerTable)
+TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildBuiltinMaterialCategoryButton(const FString& Category)
+{
+	return SNew(SButton)
+		.ButtonStyle(FAppStyle::Get(), "FlatButton")
+		.ContentPadding(FMargin(8, 5))
+		.OnClicked_Lambda([this, Category]()
+		{
+			ActiveBuiltinMaterialCategory = Category;
+			RefreshFilteredBuiltinMaterialItems();
+			return FReply::Handled();
+		})
+		[
+			SNew(STextBlock)
+			.Text(FText::FromString(Category))
+			.Font(FAppStyle::GetFontStyle("SmallFontBold"))
+			.ColorAndOpacity_Lambda([this, Category]()
+			{
+				return FSlateColor(ActiveBuiltinMaterialCategory == Category ? GetThemeColor(TEXT("Selection")) : GetThemeColor(TEXT("Text")));
+			})
+		];
+}
+
+TSharedRef<ITableRow> SPBRMagicOutlinerWindow::GenerateBuiltinMaterialTile(TSharedPtr<FPBRMagicBuiltinMaterialItem> Item, const TSharedRef<STableViewBase>& OwnerTable)
 {
 	UMaterialInterface* Material = Item.IsValid() ? Item->Material.Get() : nullptr;
 	if (!Material && Item.IsValid())
@@ -7070,18 +7158,19 @@ TSharedRef<ITableRow> SPBRMagicOutlinerWindow::GenerateBuiltinMaterialRow(TShare
 
 	return SNew(STableRow<TSharedPtr<FPBRMagicBuiltinMaterialItem>>, OwnerTable)
 		.Padding(4)
+		.OnDragDetected(this, &SPBRMagicOutlinerWindow::OnBuiltinMaterialDragDetected, Item)
 		[
-			SNew(SBorder)
-			.BorderImage(FAppStyle::Get().GetBrush("WhiteBrush"))
-			.BorderBackgroundColor_Lambda([this]() { return GetThemeColor(TEXT("TableRow")); })
-			.Padding(6)
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
 			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 10, 0)
+				SNew(SBox)
+				.WidthOverride(112)
+				.HeightOverride(112)
 				[
-					SNew(SBox)
-					.WidthOverride(56)
-					.HeightOverride(48)
+					SNew(SBorder)
+					.BorderImage(FAppStyle::Get().GetBrush("WhiteBrush"))
+					.BorderBackgroundColor_Lambda([this]() { return GetThemeColor(TEXT("Panel")); })
+					.Padding(4)
 					[
 						SNew(SImage)
 						.Image_Lambda([this, Material]()
@@ -7097,42 +7186,46 @@ TSharedRef<ITableRow> SPBRMagicOutlinerWindow::GenerateBuiltinMaterialRow(TShare
 						})
 					]
 				]
-				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-				[
-					SNew(SVerticalBox)
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						SNew(STextBlock)
-						.Text(FText::FromString(Item.IsValid() ? Item->DisplayName : FString()))
-						.Font(FAppStyle::GetFontStyle("SmallFontBold"))
-						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Text"))); })
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
-					[
-						SNew(STextBlock)
-						.Text(FText::FromString(Item.IsValid() ? Item->Category : FString()))
-						.Font(FAppStyle::GetFontStyle("TinyText"))
-						.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
-					]
-				]
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-				[
-					SNew(SButton)
-					.ButtonStyle(FAppStyle::Get(), "FlatButton")
-					.ContentPadding(FMargin(8, 4))
-					.OnClicked_Lambda([this, Item]()
-					{
-						ApplyBuiltinMaterialItem(Item);
-						return FReply::Handled();
-					})
-					[
-						SNew(STextBlock)
-						.Text(PBRText(TEXT("UseBuiltinMaterialSmall"), TEXT("使用"), TEXT("Use")))
-						.Font(FAppStyle::GetFontStyle("SmallFontBold"))
-					]
-				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(4, 6, 4, 0)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(Item.IsValid() ? Item->DisplayName : FString()))
+				.Font(FAppStyle::GetFontStyle("SmallFontBold"))
+				.Justification(ETextJustify::Center)
+				.AutoWrapText(true)
+				.WrapTextAt(132.0f)
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Text"))); })
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(4, 2, 4, 0)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(Item.IsValid() ? Item->Category : FString()))
+				.Font(FAppStyle::GetFontStyle("TinyText"))
+				.Justification(ETextJustify::Center)
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("Selection"))); })
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(4, 1, 4, 0)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(Item.IsValid() ? Item->ParentMaterialName : FString()))
+				.Font(FAppStyle::GetFontStyle("TinyText"))
+				.Justification(ETextJustify::Center)
+				.AutoWrapText(true)
+				.WrapTextAt(132.0f)
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(GetThemeColor(TEXT("TextMuted"))); })
 			]
 		];
+}
+
+FReply SPBRMagicOutlinerWindow::OnBuiltinMaterialDragDetected(const FGeometry& Geometry, const FPointerEvent& MouseEvent, TSharedPtr<FPBRMagicBuiltinMaterialItem> Item)
+{
+	if (!Item.IsValid() || !MouseEvent.IsMouseButtonDown(EKeys::LeftMouseButton) || !Item->AssetData.IsValid())
+	{
+		return FReply::Unhandled();
+	}
+
+	return FReply::Handled().BeginDragDrop(FAssetDragDropOp::New(Item->AssetData));
 }
 
 FReply SPBRMagicOutlinerWindow::OnApplySelectedBuiltinMaterialClicked()
