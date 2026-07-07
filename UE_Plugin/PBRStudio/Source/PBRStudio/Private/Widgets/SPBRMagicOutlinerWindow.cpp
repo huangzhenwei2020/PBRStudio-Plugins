@@ -2139,6 +2139,15 @@ static FString GetMagicDynamicParameterGroup(const FMaterialParameterMetadata& M
 
 static FString NormalizeMagicDynamicParameterGroup(const FString& ParameterName, const FString& GroupName)
 {
+	const FString TrimmedGroupName = GroupName.TrimStartAndEnd();
+	const auto IsUngroupedName = [](const FString& Candidate)
+	{
+		return Candidate.IsEmpty() ||
+			Candidate.Equals(TEXT("None"), ESearchCase::IgnoreCase) ||
+			Candidate.Equals(TEXT("Ungrouped"), ESearchCase::IgnoreCase) ||
+			Candidate.Equals(TEXT("未分组"), ESearchCase::IgnoreCase);
+	};
+
 	struct FKnownGroupName
 	{
 		const TCHAR* Raw;
@@ -2156,6 +2165,36 @@ static FString NormalizeMagicDynamicParameterGroup(const FString& ParameterName,
 		{ TEXT("Global Opacity"), TEXT("全局 - 透明") },
 		{ TEXT("Global Refraction"), TEXT("全局 - 折射") },
 		{ TEXT("Global Shadow"), TEXT("全局 - 阴影") },
+		{ TEXT("01 Base Color"), TEXT("01 基础颜色") },
+		{ TEXT("01 - Base Color"), TEXT("01 基础颜色") },
+		{ TEXT("01 BaseColor"), TEXT("01 基础颜色") },
+		{ TEXT("01 - BaseColor"), TEXT("01 基础颜色") },
+		{ TEXT("02 Normal"), TEXT("02 法线") },
+		{ TEXT("02 - Normal"), TEXT("02 法线") },
+		{ TEXT("03 Roughness"), TEXT("03 粗糙度") },
+		{ TEXT("03 - Roughness"), TEXT("03 粗糙度") },
+		{ TEXT("04 Metal and Ambient Occlusion"), TEXT("04 金属和环境遮蔽") },
+		{ TEXT("04 - Metal and Ambient Occlusion"), TEXT("04 金属和环境遮蔽") },
+		{ TEXT("04 Metallic and Ambient Occlusion"), TEXT("04 金属和环境遮蔽") },
+		{ TEXT("04 - Metallic and Ambient Occlusion"), TEXT("04 金属和环境遮蔽") },
+		{ TEXT("05 Opacity"), TEXT("05 透明") },
+		{ TEXT("05 - Opacity"), TEXT("05 透明") },
+		{ TEXT("05 Transparency"), TEXT("05 透明") },
+		{ TEXT("05 - Transparency"), TEXT("05 透明") },
+		{ TEXT("06 Emissive"), TEXT("06 自发光") },
+		{ TEXT("06 - Emissive"), TEXT("06 自发光") },
+		{ TEXT("07 Type Specific"), TEXT("07 类型专属") },
+		{ TEXT("07 - Type Specific"), TEXT("07 类型专属") },
+		{ TEXT("07 Type Special"), TEXT("07 类型专属") },
+		{ TEXT("07 - Type Special"), TEXT("07 类型专属") },
+		{ TEXT("08 UV Adjust"), TEXT("08 UV 调整") },
+		{ TEXT("08 - UV Adjust"), TEXT("08 UV 调整") },
+		{ TEXT("08 UV Adjustment"), TEXT("08 UV 调整") },
+		{ TEXT("08 - UV Adjustment"), TEXT("08 UV 调整") },
+		{ TEXT("09 Height and Displacement"), TEXT("09 高度和置换") },
+		{ TEXT("09 - Height and Displacement"), TEXT("09 高度和置换") },
+		{ TEXT("10 Clear Coat"), TEXT("10 清漆") },
+		{ TEXT("10 - Clear Coat"), TEXT("10 清漆") },
 		{ TEXT("00 - Color"), TEXT("00 - 颜色") },
 		{ TEXT("01 - Opacity"), TEXT("01 - 透明") },
 		{ TEXT("02 - Refraction"), TEXT("02 - 折射") },
@@ -2168,25 +2207,32 @@ static FString NormalizeMagicDynamicParameterGroup(const FString& ParameterName,
 
 	for (const FKnownGroupName& KnownGroup : KnownGroups)
 	{
-		if (GroupName.Equals(KnownGroup.Raw, ESearchCase::IgnoreCase))
+		if (TrimmedGroupName.Equals(KnownGroup.Raw, ESearchCase::IgnoreCase))
 		{
 			return KnownGroup.Display;
 		}
 	}
 
+	if (!IsUngroupedName(TrimmedGroupName))
+	{
+		return TrimmedGroupName;
+	}
+
 	if (ParameterName == TEXT("法线贴图") ||
 		ParameterName == TEXT("使用法线贴图") ||
-		ParameterName == TEXT("法线强度") ||
-		ParameterName == TEXT("法线影响折射") ||
+		ParameterName == TEXT("法线强度"))
+	{
+		return TEXT("02 法线");
+	}
+
+	if (ParameterName == TEXT("法线影响折射") ||
 		ParameterName == TEXT("法线影响折射强度") ||
 		ParameterName == TEXT("使用高质量法线"))
 	{
 		return TEXT("03 - 法线");
 	}
 
-	return GroupName.IsEmpty()
-		? PBRText(TEXT("MagicParamGroupUngrouped"), TEXT("未分组"), TEXT("Ungrouped")).ToString()
-		: GroupName;
+	return PBRText(TEXT("MagicParamGroupUngrouped"), TEXT("未分组"), TEXT("Ungrouped")).ToString();
 }
 
 static int32 GetMagicDynamicParameterSortPriority(const FMaterialParameterMetadata& Metadata)
