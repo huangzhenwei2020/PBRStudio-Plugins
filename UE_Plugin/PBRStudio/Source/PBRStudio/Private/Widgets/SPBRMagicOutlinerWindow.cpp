@@ -216,6 +216,65 @@ static FText GetMagicMaterialTypeLabel(EPBRMaterialType MaterialType)
 	return PBRText(TEXT("MagicMaterialTypeUnknown"), TEXT("未知"), TEXT("Unknown"));
 }
 
+static FString GetMagicBuiltinMaterialChineseDisplayName(const FString& AssetName)
+{
+	struct FKnownBuiltinMaterialName
+	{
+		const TCHAR* Raw;
+		const TCHAR* Display;
+	};
+
+	static const FKnownBuiltinMaterialName KnownNames[] =
+	{
+		{ TEXT("MI_GlassClean_01"), TEXT("清澈玻璃 01") },
+		{ TEXT("MI_GlassClean_02"), TEXT("清澈玻璃 02") },
+		{ TEXT("MI_GlassClean_NoCaustic"), TEXT("清澈玻璃 - 无焦散") },
+		{ TEXT("MI_GlassDirt"), TEXT("污渍玻璃") },
+		{ TEXT("MI_GlassDistortion_01"), TEXT("扭曲玻璃 01") },
+		{ TEXT("MI_GlassDistortion_02"), TEXT("扭曲玻璃 02") },
+		{ TEXT("MI_GlassFrosted_01"), TEXT("磨砂玻璃 01") },
+		{ TEXT("MI_GlassFrosted_02"), TEXT("磨砂玻璃 02") },
+		{ TEXT("MI_GlassPattern_01"), TEXT("图案玻璃 01") },
+		{ TEXT("MI_GlassPattern_02"), TEXT("图案玻璃 02") },
+		{ TEXT("MI_GlassPattern_03"), TEXT("图案玻璃 03") },
+		{ TEXT("MI_GlassPattern_04"), TEXT("图案玻璃 04") },
+		{ TEXT("MI_GlassPattern_05"), TEXT("图案玻璃 05") }
+	};
+
+	for (const FKnownBuiltinMaterialName& KnownName : KnownNames)
+	{
+		if (AssetName.Equals(KnownName.Raw, ESearchCase::IgnoreCase))
+		{
+			return KnownName.Display;
+		}
+	}
+
+	FString DisplayName = AssetName;
+	DisplayName.RemoveFromStart(TEXT("MI_"));
+	DisplayName.ReplaceInline(TEXT("Glass"), TEXT("玻璃"));
+	DisplayName.ReplaceInline(TEXT("Clean"), TEXT("清澈"));
+	DisplayName.ReplaceInline(TEXT("Dirt"), TEXT("污渍"));
+	DisplayName.ReplaceInline(TEXT("Distortion"), TEXT("扭曲"));
+	DisplayName.ReplaceInline(TEXT("Frosted"), TEXT("磨砂"));
+	DisplayName.ReplaceInline(TEXT("Pattern"), TEXT("图案"));
+	DisplayName.ReplaceInline(TEXT("NoCaustic"), TEXT("无焦散"));
+	DisplayName.ReplaceInline(TEXT("_"), TEXT(" "));
+	return DisplayName.TrimStartAndEnd();
+}
+
+static FString GetMagicBuiltinParentMaterialChineseDisplayName(const FString& ParentMaterialName)
+{
+	if (ParentMaterialName.Equals(TEXT("M_AdvancedGlass"), ESearchCase::IgnoreCase))
+	{
+		return TEXT("高级玻璃母材质");
+	}
+	if (ParentMaterialName.Contains(TEXT("Glass"), ESearchCase::IgnoreCase))
+	{
+		return TEXT("玻璃母材质");
+	}
+	return ParentMaterialName;
+}
+
 static EPBRMaterialType GuessMagicMaterialTypeFromMaterial(UMaterialInterface* Material)
 {
 	const UMaterialInterface* InspectMaterial = Material;
@@ -2176,6 +2235,19 @@ static FString NormalizeMagicDynamicParameterGroup(const FString& ParameterName,
 		{ TEXT("Global Opacity"), TEXT("全局 - 透明") },
 		{ TEXT("Global Refraction"), TEXT("全局 - 折射") },
 		{ TEXT("Global Shadow"), TEXT("全局 - 阴影") },
+		{ TEXT("Color"), TEXT("00 - 颜色") },
+		{ TEXT("Opacity"), TEXT("01 - 透明") },
+		{ TEXT("Refraction"), TEXT("02 - 折射") },
+		{ TEXT("Normal"), TEXT("03 - 法线") },
+		{ TEXT("Dirt"), TEXT("06 - 污渍") },
+		{ TEXT("Distortion"), TEXT("07 - 扭曲") },
+		{ TEXT("Frosted"), TEXT("08 - 磨砂") },
+		{ TEXT("Shadow"), TEXT("09 - 阴影") },
+		{ TEXT("Caustic"), TEXT("10 - 焦散") },
+		{ TEXT("Caustics"), TEXT("10 - 焦散") },
+		{ TEXT("RayTracing"), TEXT("11 - 光线追踪") },
+		{ TEXT("Ray Tracing"), TEXT("11 - 光线追踪") },
+		{ TEXT("RayTracing Settings"), TEXT("11 - 光线追踪") },
 		{ TEXT("01 Base Color"), TEXT("01 基础颜色") },
 		{ TEXT("01 - Base Color"), TEXT("01 基础颜色") },
 		{ TEXT("01 BaseColor"), TEXT("01 基础颜色") },
@@ -2213,7 +2285,11 @@ static FString NormalizeMagicDynamicParameterGroup(const FString& ParameterName,
 		{ TEXT("06 - Dirt"), TEXT("06 - 污渍") },
 		{ TEXT("07 - Distortion"), TEXT("07 - 扭曲") },
 		{ TEXT("08 - Frosted"), TEXT("08 - 磨砂") },
-		{ TEXT("09 - Shadow"), TEXT("09 - 阴影") }
+		{ TEXT("09 - Shadow"), TEXT("09 - 阴影") },
+		{ TEXT("10 - Caustic"), TEXT("10 - 焦散") },
+		{ TEXT("10 - Caustics"), TEXT("10 - 焦散") },
+		{ TEXT("11 - RayTracing"), TEXT("11 - 光线追踪") },
+		{ TEXT("11 - Ray Tracing"), TEXT("11 - 光线追踪") }
 	};
 
 	for (const FKnownGroupName& KnownGroup : KnownGroups)
@@ -2781,12 +2857,33 @@ static FString GetMagicMaterialParameterDisplayName(const FName& ParameterName)
 		{ TEXT("HeightTexture"), TEXT("高度贴图") },
 		{ TEXT("HeightStrength"), TEXT("高度强度") },
 		{ TEXT("UseHeightTexture"), TEXT("使用高度贴图") },
-		{ TEXT("IOR"), TEXT("折射率") },
-		{ TEXT("Refraction"), TEXT("折射强度") },
-		{ TEXT("GlassTint"), TEXT("玻璃颜色") },
-		{ TEXT("GlassDirtTexture"), TEXT("玻璃污渍贴图") },
-		{ TEXT("GlassDistortionTexture"), TEXT("玻璃扭曲贴图") },
-		{ TEXT("GlassFrostedTexture"), TEXT("玻璃磨砂贴图") },
+			{ TEXT("IOR"), TEXT("折射率") },
+			{ TEXT("Refraction"), TEXT("折射强度") },
+			{ TEXT("GlassTint"), TEXT("玻璃颜色") },
+			{ TEXT("GlassOpacityFresnelStrength"), TEXT("透明菲涅尔强度") },
+			{ TEXT("GlassFresnelBaseReflection"), TEXT("菲涅尔基础反射") },
+			{ TEXT("GlassFresnelExp"), TEXT("菲涅尔指数") },
+			{ TEXT("GlassFrostedStrength"), TEXT("磨砂强度") },
+			{ TEXT("GlassAbsorptionColor"), TEXT("玻璃吸收颜色") },
+			{ TEXT("GlassAbsorptionStrength"), TEXT("玻璃吸收强度") },
+			{ TEXT("GlassEdgeTintStrength"), TEXT("边缘染色强度") },
+			{ TEXT("GlassDirtColor"), TEXT("玻璃污渍颜色") },
+			{ TEXT("GlassDirtIntensity"), TEXT("玻璃污渍强度") },
+			{ TEXT("GlassDirtOpacity"), TEXT("玻璃污渍透明度") },
+			{ TEXT("GlassDirtRoughness"), TEXT("玻璃污渍粗糙度") },
+			{ TEXT("GlassDistortionIntensity"), TEXT("玻璃扭曲强度") },
+			{ TEXT("GlassDistortionIORIntensity"), TEXT("折射扭曲强度") },
+			{ TEXT("GlassShadowOpacity"), TEXT("玻璃阴影透明度") },
+			{ TEXT("GlassShadowNormalIntensity"), TEXT("玻璃阴影法线强度") },
+			{ TEXT("GlassCausticsIntensity"), TEXT("玻璃焦散强度") },
+			{ TEXT("GlassCausticsScale"), TEXT("玻璃焦散大小") },
+			{ TEXT("GlassCausticsSpeed"), TEXT("玻璃焦散速度") },
+			{ TEXT("UseGlassDirtTexture"), TEXT("使用玻璃污渍贴图") },
+			{ TEXT("UseGlassDistortionTexture"), TEXT("使用玻璃扭曲贴图") },
+			{ TEXT("UseGlassFrostedTexture"), TEXT("使用磨砂玻璃贴图") },
+			{ TEXT("GlassDirtTexture"), TEXT("玻璃污渍贴图") },
+			{ TEXT("GlassDistortionTexture"), TEXT("玻璃扭曲贴图") },
+			{ TEXT("GlassFrostedTexture"), TEXT("玻璃磨砂贴图") },
 		{ TEXT("Base Color Texture"), TEXT("基础色贴图") },
 		{ TEXT("Base Color Texture ?"), TEXT("使用基础色贴图") },
 		{ TEXT("BaseColor"), TEXT("基础色") },
@@ -2849,10 +2946,12 @@ static FString GetMagicMaterialParameterDisplayName(const FName& ParameterName)
 		{ TEXT("RT Frosted Intensity"), TEXT("光追磨砂强度") },
 		{ TEXT("RT Frosted UV"), TEXT("光追磨砂 UV 缩放") },
 		{ TEXT("RT Frosted IOR Advanced"), TEXT("光追磨砂高级折射") },
-		{ TEXT("RT Frosted Glass Normal"), TEXT("光追磨砂玻璃法线") },
-		{ TEXT("RT Distortion Intensity"), TEXT("光追扭曲强度") },
-		{ TEXT("RT Distortion Intensity IOR"), TEXT("光追折射扭曲强度") },
-		{ TEXT("Use High Quality Normals"), TEXT("使用高质量法线") },
+			{ TEXT("RT Frosted Glass Normal"), TEXT("光追磨砂玻璃法线") },
+			{ TEXT("RT Distortion Intensity"), TEXT("光追扭曲强度") },
+			{ TEXT("RT Distortion Intensity IOR"), TEXT("光追折射扭曲强度") },
+			{ TEXT("RT Distortion Texture"), TEXT("光追扭曲贴图") },
+			{ TEXT("RT Frosted Normal Texture"), TEXT("光追磨砂法线贴图") },
+			{ TEXT("Use High Quality Normals"), TEXT("使用高质量法线") },
 		{ TEXT("Texture Scale"), TEXT("贴图缩放") },
 		{ TEXT("UV"), TEXT("整体 UV 缩放") },
 		{ TEXT("WorldPositionOffset"), TEXT("世界位置偏移") },
@@ -5348,6 +5447,27 @@ private:
 			{ TEXT("IOR"), TEXT("折射率") },
 			{ TEXT("Refraction"), TEXT("折射强度") },
 			{ TEXT("GlassTint"), TEXT("玻璃颜色") },
+			{ TEXT("GlassOpacityFresnelStrength"), TEXT("透明菲涅尔强度") },
+			{ TEXT("GlassFresnelBaseReflection"), TEXT("菲涅尔基础反射") },
+			{ TEXT("GlassFresnelExp"), TEXT("菲涅尔指数") },
+			{ TEXT("GlassFrostedStrength"), TEXT("磨砂强度") },
+			{ TEXT("GlassAbsorptionColor"), TEXT("玻璃吸收颜色") },
+			{ TEXT("GlassAbsorptionStrength"), TEXT("玻璃吸收强度") },
+			{ TEXT("GlassEdgeTintStrength"), TEXT("边缘染色强度") },
+			{ TEXT("GlassDirtColor"), TEXT("玻璃污渍颜色") },
+			{ TEXT("GlassDirtIntensity"), TEXT("玻璃污渍强度") },
+			{ TEXT("GlassDirtOpacity"), TEXT("玻璃污渍透明度") },
+			{ TEXT("GlassDirtRoughness"), TEXT("玻璃污渍粗糙度") },
+			{ TEXT("GlassDistortionIntensity"), TEXT("玻璃扭曲强度") },
+			{ TEXT("GlassDistortionIORIntensity"), TEXT("折射扭曲强度") },
+			{ TEXT("GlassShadowOpacity"), TEXT("玻璃阴影透明度") },
+			{ TEXT("GlassShadowNormalIntensity"), TEXT("玻璃阴影法线强度") },
+			{ TEXT("GlassCausticsIntensity"), TEXT("玻璃焦散强度") },
+			{ TEXT("GlassCausticsScale"), TEXT("玻璃焦散大小") },
+			{ TEXT("GlassCausticsSpeed"), TEXT("玻璃焦散速度") },
+			{ TEXT("UseGlassDirtTexture"), TEXT("使用玻璃污渍贴图") },
+			{ TEXT("UseGlassDistortionTexture"), TEXT("使用玻璃扭曲贴图") },
+			{ TEXT("UseGlassFrostedTexture"), TEXT("使用磨砂玻璃贴图") },
 			{ TEXT("GlassDirtTexture"), TEXT("玻璃污渍贴图") },
 			{ TEXT("GlassDistortionTexture"), TEXT("玻璃扭曲贴图") },
 			{ TEXT("GlassFrostedTexture"), TEXT("玻璃磨砂贴图") },
@@ -5416,6 +5536,8 @@ private:
 			{ TEXT("RT Frosted Glass Normal"), TEXT("光追磨砂玻璃法线") },
 			{ TEXT("RT Distortion Intensity"), TEXT("光追扭曲强度") },
 			{ TEXT("RT Distortion Intensity IOR"), TEXT("光追折射扭曲强度") },
+			{ TEXT("RT Distortion Texture"), TEXT("光追扭曲贴图") },
+			{ TEXT("RT Frosted Normal Texture"), TEXT("光追磨砂法线贴图") },
 			{ TEXT("Use High Quality Normals"), TEXT("使用高质量法线") },
 			{ TEXT("Texture Scale"), TEXT("贴图缩放") },
 			{ TEXT("UV"), TEXT("整体 UV 缩放") },
@@ -6956,11 +7078,11 @@ void SPBRMagicOutlinerWindow::RefreshBuiltinMaterialItems()
 
 		TSharedPtr<FPBRMagicBuiltinMaterialItem> Item = MakeShared<FPBRMagicBuiltinMaterialItem>();
 		Item->AssetData = Asset;
-		Item->DisplayName = Asset.AssetName.ToString();
+		Item->DisplayName = GetMagicBuiltinMaterialChineseDisplayName(Asset.AssetName.ToString());
 		Item->Material = Cast<UMaterialInterface>(Asset.GetAsset());
 		if (UMaterialInstance* Instance = Cast<UMaterialInstance>(Item->Material.Get()))
 		{
-			Item->ParentMaterialName = Instance->Parent ? Instance->Parent->GetName() : FString();
+			Item->ParentMaterialName = Instance->Parent ? GetMagicBuiltinParentMaterialChineseDisplayName(Instance->Parent->GetName()) : FString();
 		}
 		Item->Category = GetMagicMaterialTypeLabel(GuessMagicMaterialTypeFromMaterial(Item->Material.Get())).ToString();
 		BuiltinMaterialItems.Add(Item);
