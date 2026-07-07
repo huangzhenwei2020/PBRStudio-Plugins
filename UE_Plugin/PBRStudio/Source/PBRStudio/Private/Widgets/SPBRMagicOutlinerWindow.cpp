@@ -6903,7 +6903,7 @@ void SPBRMagicOutlinerWindow::OpenBuiltinMaterialLibraryWindow()
 	if (TSharedPtr<SWindow> ExistingWindow = BuiltinMaterialLibraryWindow.Pin())
 	{
 		ExistingWindow->SetContent(BuildBuiltinMaterialLibraryContent());
-		ExistingWindow->BringToFront();
+		ExistingWindow->BringToFront(true);
 		return;
 	}
 
@@ -6916,7 +6916,15 @@ void SPBRMagicOutlinerWindow::OpenBuiltinMaterialLibraryWindow()
 			BuildBuiltinMaterialLibraryContent()
 		];
 	BuiltinMaterialLibraryWindow = Window;
-	FSlateApplication::Get().AddWindow(Window);
+	if (TSharedPtr<SWindow> ParentWindow = FSlateApplication::Get().FindWidgetWindow(AsShared()))
+	{
+		FSlateApplication::Get().AddWindowAsNativeChild(Window, ParentWindow.ToSharedRef());
+	}
+	else
+	{
+		FSlateApplication::Get().AddWindow(Window);
+	}
+	Window->BringToFront(true);
 }
 
 void SPBRMagicOutlinerWindow::RefreshBuiltinMaterialItems()
