@@ -829,6 +829,49 @@ static TArray<FPBRSceneTextureParameterBinding> GetSceneTextureParameterBindings
 	};
 }
 
+static TArray<FName> GetSceneMigrationTextureParametersForTarget(UMaterialInstanceConstant* TargetInstance)
+{
+	const TArray<FName> CandidateTextureParameters = {
+		FPBRMaterialParameters::BaseColorTexture,
+		FPBRMaterialParameters::NormalTexture,
+		FPBRMaterialParameters::RoughnessTexture,
+		FPBRMaterialParameters::SpecularTexture,
+		FPBRMaterialParameters::MetallicTexture,
+		FPBRMaterialParameters::AOTexture,
+		FPBRMaterialParameters::OpacityTexture,
+		FPBRMaterialParameters::HeightTexture,
+		FPBRMaterialParameters::EmissiveTexture
+	};
+
+	if (!TargetInstance)
+	{
+		return CandidateTextureParameters;
+	}
+
+	TMap<FMaterialParameterInfo, FMaterialParameterMetadata> TextureParameters;
+	TargetInstance->GetAllParametersOfType(EMaterialParameterType::Texture, TextureParameters);
+	if (TextureParameters.IsEmpty())
+	{
+		return CandidateTextureParameters;
+	}
+
+	TSet<FName> AvailableParameterNames;
+	for (const TPair<FMaterialParameterInfo, FMaterialParameterMetadata>& Pair : TextureParameters)
+	{
+		AvailableParameterNames.Add(Pair.Key.Name);
+	}
+
+	TArray<FName> Result;
+	for (const FName& CandidateName : CandidateTextureParameters)
+	{
+		if (AvailableParameterNames.Contains(CandidateName))
+		{
+			Result.Add(CandidateName);
+		}
+	}
+	return Result.IsEmpty() ? CandidateTextureParameters : Result;
+}
+
 static bool ReadSceneStaticSwitchParameter(const UMaterialInstanceConstant* Instance, const FName& ParameterName, bool bDefaultValue)
 {
 	if (!Instance)
@@ -1183,11 +1226,6 @@ static FPBRSceneSourceChannelState AnalyzeSceneSourceMaterialChannel(UMaterialIn
 		bValueChainIsSimple = bValueChainIsSimple && IsSimpleSceneValueMigrationExpression(Expression);
 	}
 
-	if (UniqueTextures.Num() == 1)
-	{
-		State.Texture = UniqueTextures[0];
-		return State;
-	}
 	if (bSawAnyChainTexture && UniqueTextures.IsEmpty())
 	{
 		return State;
@@ -1195,6 +1233,11 @@ static FPBRSceneSourceChannelState AnalyzeSceneSourceMaterialChannel(UMaterialIn
 	if (UniqueTextures.Num() > 1)
 	{
 		State.bShouldBake = true;
+		return State;
+	}
+	if (UniqueTextures.Num() == 1)
+	{
+		State.Texture = UniqueTextures[0];
 		return State;
 	}
 
@@ -1213,6 +1256,11 @@ static FPBRSceneSourceChannelState AnalyzeSceneSourceMaterialChannel(UMaterialIn
 				return State;
 			}
 		}
+	}
+
+	if (State.bHasPropertyChain && !bValueChainIsSimple)
+	{
+		State.bShouldBake = true;
 	}
 
 	return State;
@@ -1827,17 +1875,7 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 		return;
 	}
 
-	const TArray<FName> CandidateTextureParameters = {
-		FPBRMaterialParameters::BaseColorTexture,
-		FPBRMaterialParameters::NormalTexture,
-		FPBRMaterialParameters::RoughnessTexture,
-		FPBRMaterialParameters::SpecularTexture,
-		FPBRMaterialParameters::MetallicTexture,
-		FPBRMaterialParameters::AOTexture,
-		FPBRMaterialParameters::OpacityTexture,
-		FPBRMaterialParameters::HeightTexture,
-		FPBRMaterialParameters::EmissiveTexture
-	};
+	const TArray<FName> CandidateTextureParameters = GetSceneMigrationTextureParametersForTarget(TargetInstance);
 
 	for (const FName& TargetParameterName : CandidateTextureParameters)
 	{
@@ -1853,10 +1891,18 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 			ChannelState.Texture = SourceTexture;
 		}
 
-		UTexture* SourceTexture = ChannelState.Texture;
-		if (!SourceTexture && ChannelState.bShouldBake)
+		UTexture* SourceTexture = nullptr;
+		if (ChannelState.bShouldBake)
 		{
 			SourceTexture = BakeSceneSourceMaterialPropertyTexture(SourceMaterial, Component, SlotIndex, TargetParameterName, OutputRoot);
+			if (!SourceTexture)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Failed to bake source material channel %s from %s"), *TargetParameterName.ToString(), *SourceMaterial->GetName());
+			}
+		}
+		if (!SourceTexture)
+		{
+			SourceTexture = ChannelState.Texture;
 		}
 
 		if (SourceTexture)
@@ -3765,7 +3811,7 @@ FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMateria
 	Result.Message = ConvertMessage.IsEmpty() ? FString::Printf(TEXT("已接管材质槽：%s"), *Instance->GetName()) : ConvertMessage;
 	if (Candidate.bBaseColorNeedsBake)
 	{
-		Result.Message += TEXT("；注意：原材质基础色由多张贴图/节点混合，目前未烘焙最终颜色，只提取最优基础色贴图。");
+		Result.Message += TEXT("；原材质复杂基础色通道已按目标材质通道尝试烘焙迁移。");
 	}
 	Result.bCreatedOrUpdatedInstance = true;
 	Result.bAssignedToSlot = true;
