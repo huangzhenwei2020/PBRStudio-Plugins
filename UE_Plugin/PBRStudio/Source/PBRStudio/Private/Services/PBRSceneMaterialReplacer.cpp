@@ -1081,6 +1081,121 @@ static bool DoesSceneParameterNameMatchTargetChannel(const FName& ParameterName,
 	return SceneNameContainsAnyToken(ParameterName.ToString(), GetSceneTextureParameterSearchTokens(TargetParameterName));
 }
 
+static bool IsGenericSceneTextureParameterName(const FName& ParameterName)
+{
+	const FString RawName = ParameterName.ToString().TrimStartAndEnd();
+	if (RawName.IsEmpty())
+	{
+		return false;
+	}
+
+	FString Normalized = NormalizeParameterNameForLooseMatch(RawName);
+	if (Normalized == TEXT("texture") || Normalized == TEXT("tex") || Normalized == TEXT("map"))
+	{
+		return true;
+	}
+
+	int32 OpenParen = INDEX_NONE;
+	int32 CloseParen = INDEX_NONE;
+	if (RawName.FindChar(TEXT('('), OpenParen) && RawName.FindChar(TEXT(')'), CloseParen) && CloseParen > OpenParen)
+	{
+		const FString Prefix = RawName.Left(OpenParen).TrimStartAndEnd();
+		FString NumberText = RawName.Mid(OpenParen + 1, CloseParen - OpenParen - 1).TrimStartAndEnd();
+		if (NormalizeParameterNameForLooseMatch(Prefix) == TEXT("texture") && NumberText.IsNumeric())
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool HasSceneGenericVrayMaterialParameters(UMaterialInterface* SourceMaterial)
+{
+	if (!SourceMaterial)
+	{
+		return false;
+	}
+
+	bool bHasGenericTextureParameter = false;
+	TArray<FMaterialParameterInfo> TextureInfos;
+	TArray<FGuid> TextureIds;
+	SourceMaterial->GetAllTextureParameterInfo(TextureInfos, TextureIds);
+	for (const FMaterialParameterInfo& Info : TextureInfos)
+	{
+		if (IsGenericSceneTextureParameterName(Info.Name))
+		{
+			bHasGenericTextureParameter = true;
+			break;
+		}
+	}
+
+	if (!bHasGenericTextureParameter)
+	{
+		return false;
+	}
+
+	TArray<FMaterialParameterInfo> VectorInfos;
+	TArray<FGuid> VectorIds;
+	SourceMaterial->GetAllVectorParameterInfo(VectorInfos, VectorIds);
+	for (const FMaterialParameterInfo& Info : VectorInfos)
+	{
+		if (IsDiffuseLikeParameterName(Info.Name) ||
+			Info.Name.ToString().Contains(TEXT("Reflection"), ESearchCase::IgnoreCase))
+		{
+			return true;
+		}
+	}
+
+	TArray<FMaterialParameterInfo> ScalarInfos;
+	TArray<FGuid> ScalarIds;
+	SourceMaterial->GetAllScalarParameterInfo(ScalarInfos, ScalarIds);
+	for (const FMaterialParameterInfo& Info : ScalarInfos)
+	{
+		const FString NameText = Info.Name.ToString();
+		if (NameText.Contains(TEXT("Reflection"), ESearchCase::IgnoreCase) ||
+			NameText.Contains(TEXT("Glossiness"), ESearchCase::IgnoreCase) ||
+			NameText.Contains(TEXT("Fresnel"), ESearchCase::IgnoreCase) ||
+			NameText.Contains(TEXT("IOR"), ESearchCase::IgnoreCase))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool FindSingleGenericSceneSourceTextureParameter(UMaterialInterface* SourceMaterial, UTexture*& OutTexture)
+{
+	OutTexture = nullptr;
+	if (!SourceMaterial)
+	{
+		return false;
+	}
+
+	TArray<FMaterialParameterInfo> TextureInfos;
+	TArray<FGuid> TextureIds;
+	SourceMaterial->GetAllTextureParameterInfo(TextureInfos, TextureIds);
+
+	TSet<FSoftObjectPath> UniqueTexturePaths;
+	for (const FMaterialParameterInfo& Info : TextureInfos)
+	{
+		if (!IsGenericSceneTextureParameterName(Info.Name))
+		{
+			continue;
+		}
+
+		UTexture* Texture = nullptr;
+		if (SourceMaterial->GetTextureParameterValue(Info, Texture, true) && IsValidSceneSourceMigrationTexture(Texture))
+		{
+			UniqueTexturePaths.Add(FSoftObjectPath(Texture));
+			OutTexture = Texture;
+		}
+	}
+
+	return UniqueTexturePaths.Num() == 1 && OutTexture != nullptr;
+}
+
 static EMaterialProperty GetSceneMaterialPropertyForTextureParameter(const FName& TargetParameterName)
 {
 	if (TargetParameterName == FPBRMaterialParameters::BaseColorTexture) { return MP_BaseColor; }
@@ -1308,6 +1423,10 @@ static FPBRSceneSourceChannelState AnalyzeSceneSourceMaterialChannel(UMaterialIn
 	{
 		UTexture* SingleTexture = UniqueTextures[0];
 		const FName SingleParameterName = UniqueTextureParameterNames.IsValidIndex(0) ? UniqueTextureParameterNames[0] : NAME_None;
+		const bool bAmbiguousGenericVrayTexture =
+			TargetParameterName == FPBRMaterialParameters::BaseColorTexture &&
+			IsGenericSceneTextureParameterName(SingleParameterName) &&
+			HasSceneGenericVrayMaterialParameters(SourceMaterial);
 		const bool bTextureMatchesTarget =
 			DoesSceneTextureNameMatchTargetChannel(SingleTexture, TargetParameterName) ||
 			DoesSceneParameterNameMatchTargetChannel(SingleParameterName, TargetParameterName);
@@ -1317,14 +1436,14 @@ static FPBRSceneSourceChannelState AnalyzeSceneSourceMaterialChannel(UMaterialIn
 			Cast<UTexture2D>(SingleTexture)->SRGB &&
 			Cast<UTexture2D>(SingleTexture)->CompressionSettings == TextureCompressionSettings::TC_Default &&
 			bTextureMatchesTarget;
-		if ((bTextureMatchesTarget || bLooksLikeDirectColorTexture) && bTextureChainIsDirect)
+		if (!bAmbiguousGenericVrayTexture && (bTextureMatchesTarget || bLooksLikeDirectColorTexture) && bTextureChainIsDirect)
 		{
 			State.Texture = SingleTexture;
 			return State;
 		}
 
 		State.Texture = SingleTexture;
-		State.bShouldBake = State.bHasPropertyChain;
+		State.bShouldBake = State.bHasPropertyChain || bAmbiguousGenericVrayTexture;
 		State.bTextureRequiresBake = State.bShouldBake;
 		return State;
 	}
@@ -1712,6 +1831,95 @@ static UTexture2D* BakeSceneSourceMaterialPropertyTexture(
 
 	UPackage* Package = CreatePackage(*PackagePath);
 	UTexture2D* Texture = FMaterialUtilities::CreateTexture(Package, PackagePath, *BakedSize, *Samples, CompressionSettings, TEXTUREGROUP_World, RF_Public | RF_Standalone, bSRGB);
+	if (!Texture)
+	{
+		return nullptr;
+	}
+
+	Texture->MarkPackageDirty();
+	FAssetRegistryModule::AssetCreated(Texture);
+	if (GeneratedPackageCallback)
+	{
+		GeneratedPackageCallback(Texture->GetPackage());
+	}
+	if (bSaveGeneratedAsset)
+	{
+		UEditorLoadingAndSavingUtils::SavePackages({ Texture->GetPackage() }, true);
+	}
+	return Texture;
+}
+
+static UTexture2D* CreateSceneDiffuseTintedBaseColorTexture(
+	UMaterialInterface* SourceMaterial,
+	const UPrimitiveComponent* Component,
+	int32 SlotIndex,
+	const FString& OutputRoot,
+	UTexture* SourceTexture,
+	int32 MaxBakeTextureSize,
+	bool bSaveGeneratedAsset,
+	const TFunction<void(UPackage*)>& GeneratedPackageCallback)
+{
+	UTexture2D* SourceTexture2D = Cast<UTexture2D>(SourceTexture);
+	if (!SourceMaterial || !SourceTexture2D)
+	{
+		return nullptr;
+	}
+
+	FLinearColor DiffuseColor = FLinearColor::White;
+	if (!TryGetDiffuseColorFromInstanceOverrides(SourceMaterial, DiffuseColor))
+	{
+		return nullptr;
+	}
+
+	if (DiffuseColor.Equals(FLinearColor::White, 0.001f))
+	{
+		return SourceTexture2D;
+	}
+
+	TArray<FColor> Pixels;
+	int32 Width = 0;
+	int32 Height = 0;
+	if (!FPBRSceneMaterialReplacer::LoadTexturePixels(SourceTexture2D, Pixels, Width, Height, MaxBakeTextureSize) ||
+		Pixels.Num() != Width * Height ||
+		Width <= 0 ||
+		Height <= 0)
+	{
+		return nullptr;
+	}
+
+	for (FColor& Pixel : Pixels)
+	{
+		FLinearColor LinearPixel = FLinearColor::FromSRGBColor(Pixel);
+		LinearPixel.R *= DiffuseColor.R;
+		LinearPixel.G *= DiffuseColor.G;
+		LinearPixel.B *= DiffuseColor.B;
+		LinearPixel.A = Pixel.A / 255.0f;
+		Pixel = LinearPixel.ToFColorSRGB();
+	}
+
+	FString PackagePath = BuildSceneBakedTexturePackagePath(Component, SlotIndex, FPBRMaterialParameters::BaseColorTexture, OutputRoot) + TEXT("_DiffuseTinted");
+	if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
+	{
+		if (UTexture2D* ExistingTexture = Cast<UTexture2D>(UEditorAssetLibrary::LoadAsset(PackagePath)))
+		{
+			if (ExistingTexture->GetSizeX() == Width && ExistingTexture->GetSizeY() == Height)
+			{
+				return ExistingTexture;
+			}
+		}
+		if (bSaveGeneratedAsset)
+		{
+			UEditorAssetLibrary::DeleteAsset(PackagePath);
+		}
+		else
+		{
+			PackagePath += FString::Printf(TEXT("_%dx%d"), Width, Height);
+		}
+	}
+
+	const FIntPoint TextureSize(Width, Height);
+	UPackage* Package = CreatePackage(*PackagePath);
+	UTexture2D* Texture = FMaterialUtilities::CreateTexture(Package, PackagePath, TextureSize, Pixels, TC_Default, TEXTUREGROUP_World, RF_Public | RF_Standalone, true);
 	if (!Texture)
 	{
 		return nullptr;
@@ -2133,6 +2341,17 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 		if (!ChannelState.bHasPropertyChain)
 		{
 			UTexture* SourceTexture = FindBestSceneSourceTextureParameter(SourceMaterial, TargetParameterName);
+			if (!SourceTexture &&
+				TargetParameterName == FPBRMaterialParameters::BaseColorTexture &&
+				HasSceneGenericVrayMaterialParameters(SourceMaterial))
+			{
+				FindSingleGenericSceneSourceTextureParameter(SourceMaterial, SourceTexture);
+				if (SourceTexture)
+				{
+					ChannelState.bShouldBake = true;
+					ChannelState.bTextureRequiresBake = true;
+				}
+			}
 			if (!SourceTexture)
 			{
 				continue;
@@ -2174,6 +2393,17 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 			UE_LOG(LogTemp, Verbose, TEXT("PBRStudio: Skipped baking channel %s from %s because complex channel baking is disabled or no valid source texture was found"),
 				*TargetParameterName.ToString(),
 				*SourceMaterial->GetName());
+		}
+		if (!SourceTexture &&
+			ChannelState.bTextureRequiresBake &&
+			TargetParameterName == FPBRMaterialParameters::BaseColorTexture &&
+			IsValidSceneSourceMigrationTexture(FallbackTexture))
+		{
+			SourceTexture = CreateSceneDiffuseTintedBaseColorTexture(SourceMaterial, Component, SlotIndex, OutputRoot, FallbackTexture, MaxBakeTextureSize, bSaveGeneratedAssets, GeneratedPackageCallback);
+			if (SourceTexture)
+			{
+				UE_LOG(LogTemp, Log, TEXT("PBRStudio: Built diffuse-tinted base color fallback for %s from %s"), *SourceMaterial->GetName(), *FallbackTexture->GetName());
+			}
 		}
 		if (!SourceTexture && !ChannelState.bTextureRequiresBake)
 		{
@@ -3490,6 +3720,11 @@ static bool DoesBaseColorNeedMaterialBake(UMaterialInterface* Material)
 	if (!Material)
 	{
 		return false;
+	}
+
+	if (HasSceneGenericVrayMaterialParameters(Material))
+	{
+		return true;
 	}
 
 	TArray<UTexture*> UsedTextures;
