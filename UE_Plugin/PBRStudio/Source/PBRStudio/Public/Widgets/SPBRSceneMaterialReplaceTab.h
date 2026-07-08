@@ -43,6 +43,7 @@ private:
 	TSharedPtr<SCheckBox> GenerateORMCheck;
 	float ReplaceProgress = 0.0f;
 	float NormalStrength = 2.0f;
+	int32 MaxTextureSize = 2048;
 	double LastProgressUiPumpTime = 0.0;
 
 	FReply OnScanScene();

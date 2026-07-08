@@ -310,6 +310,26 @@ void SPBRSceneMaterialReplaceTab::Construct(const FArguments& InArgs)
 						NormalStrength = FMath::Clamp(Value, 0.0f, 8.0f);
 					})
 				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(18, 0, 6, 0)
+				[
+					SNew(STextBlock).Text(LOCTEXT("MaxTextureSize", "最大贴图尺寸"))
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SNumericEntryBox<int32>)
+					.MinDesiredValueWidth(70)
+					.MinValue(1)
+					.MaxValue(16384)
+					.Value_Lambda([this]() { return MaxTextureSize; })
+					.OnValueChanged_Lambda([this](int32 Value)
+					{
+						MaxTextureSize = FMath::Clamp(Value, 1, 16384);
+					})
+					.OnValueCommitted_Lambda([this](int32 Value, ETextCommit::Type)
+					{
+						MaxTextureSize = FMath::Clamp(Value, 1, 16384);
+					})
+				]
 			]
 		]
 
@@ -525,6 +545,7 @@ FPBRSceneReplaceSettings SPBRSceneMaterialReplaceTab::BuildSettings() const
 		Settings.OutputRoot = OutputRootBox->GetText().ToString();
 	}
 	Settings.NormalStrength = FMath::Clamp(NormalStrength, 0.0f, 8.0f);
+	Settings.OutputSize = FMath::Clamp(MaxTextureSize, 1, 16384);
 	Settings.bGenerateHeight = GenerateHeightCheck.IsValid() && GenerateHeightCheck->IsChecked();
 	Settings.bGenerateORM = GenerateORMCheck.IsValid() && GenerateORMCheck->IsChecked();
 	Settings.bGenerateNormal = !GenerateNormalCheck.IsValid() || GenerateNormalCheck->IsChecked();
