@@ -44,7 +44,13 @@ private:
 	float ReplaceProgress = 0.0f;
 	float NormalStrength = 2.0f;
 	int32 MaxTextureSize = 2048;
+	bool bReplaceInProgress = false;
+	int32 BatchedReplaceIndex = 0;
+	int32 BatchedReplaceTotal = 0;
 	double LastProgressUiPumpTime = 0.0;
+	FPBRSceneReplaceSettings BatchedReplaceSettings;
+	FPBRSceneReplaceResult BatchedReplaceResult;
+	TArray<TSharedPtr<FPBRSceneMaterialCandidate>> BatchedReplaceItems;
 
 	FReply OnScanScene();
 	FReply OnReplaceChecked();
@@ -63,6 +69,7 @@ private:
 	void RefreshList();
 	void UpdateSummary();
 	void UpdateReplaceProgress(int32 Current, int32 Total, const FString& Status);
+	EActiveTimerReturnType ProcessReplaceBatch(double InCurrentTime, float InDeltaTime);
 	FPBRSceneReplaceSettings BuildSettings() const;
 	EVisibility GetCandidateVisibility(TSharedPtr<FPBRSceneMaterialCandidate> Item) const;
 };

@@ -579,22 +579,89 @@ void SPBRSceneMaterialReplaceTab::UpdateReplaceProgress(int32 Current, int32 Tot
 
 FReply SPBRSceneMaterialReplaceTab::OnReplaceChecked()
 {
-	FPBRSceneReplaceResult Result;
-	FPBRSceneReplaceSettings Settings = BuildSettings();
+	if (bReplaceInProgress)
+	{
+		if (ProgressText.IsValid())
+		{
+			ProgressText->SetText(LOCTEXT("ReplaceAlreadyRunning", "正在分批转换，请等待当前批次完成"));
+		}
+		return FReply::Handled();
+	}
+
+	BatchedReplaceItems.Reset();
+	for (const TSharedPtr<FPBRSceneMaterialCandidate>& Candidate : Candidates)
+	{
+		if (Candidate.IsValid() && Candidate->bCanReplace && Candidate->bChecked && !Candidate->bIsPBRStudioMaterial)
+		{
+			BatchedReplaceItems.Add(Candidate);
+		}
+	}
+
+	if (BatchedReplaceItems.IsEmpty())
+	{
+		if (ProgressText.IsValid())
+		{
+			ProgressText->SetText(LOCTEXT("NoReplaceItems", "没有需要转换的材质"));
+		}
+		return FReply::Handled();
+	}
+
+	BatchedReplaceSettings = BuildSettings();
+	BatchedReplaceResult = FPBRSceneReplaceResult();
+	BatchedReplaceIndex = 0;
+	BatchedReplaceTotal = BatchedReplaceItems.Num();
+	bReplaceInProgress = true;
 	ReplaceProgress = 0.0f;
 	LastProgressUiPumpTime = 0.0;
-	Settings.ProgressCallback = [this](int32 Current, int32 Total, const FString& Status)
-	{
-		UpdateReplaceProgress(Current, Total, Status);
-	};
-	FPBRSceneMaterialReplacer::ReplaceCandidates(Candidates, Settings, Result);
-	ReplaceProgress = 1.0f;
-	RefreshList();
+
 	if (ProgressText.IsValid())
 	{
-		ProgressText->SetText(FText::FromString(Result.Messages.Num() > 0 ? Result.Messages.Last() : TEXT("替换完成")));
+		ProgressText->SetText(FText::FromString(FString::Printf(TEXT("准备分批转换 %d 个材质"), BatchedReplaceTotal)));
 	}
+	RegisterActiveTimer(0.05f, FWidgetActiveTimerDelegate::CreateSP(this, &SPBRSceneMaterialReplaceTab::ProcessReplaceBatch));
 	return FReply::Handled();
+}
+
+EActiveTimerReturnType SPBRSceneMaterialReplaceTab::ProcessReplaceBatch(double InCurrentTime, float InDeltaTime)
+{
+	if (!bReplaceInProgress)
+	{
+		return EActiveTimerReturnType::Stop;
+	}
+
+	if (!BatchedReplaceItems.IsValidIndex(BatchedReplaceIndex))
+	{
+		bReplaceInProgress = false;
+		ReplaceProgress = 1.0f;
+		RefreshList();
+		if (ProgressText.IsValid())
+		{
+			ProgressText->SetText(FText::FromString(BatchedReplaceResult.Messages.Num() > 0 ? BatchedReplaceResult.Messages.Last() : TEXT("分批转换完成")));
+		}
+		return EActiveTimerReturnType::Stop;
+	}
+
+	TSharedPtr<FPBRSceneMaterialCandidate> CurrentItem = BatchedReplaceItems[BatchedReplaceIndex];
+	const int32 DisplayIndex = BatchedReplaceIndex + 1;
+	const FString CurrentName = CurrentItem.IsValid() ? CurrentItem->MaterialName : FString(TEXT("无效材质"));
+	UpdateReplaceProgress(BatchedReplaceIndex, BatchedReplaceTotal, FString::Printf(TEXT("正在转换 %d/%d: %s"), DisplayIndex, BatchedReplaceTotal, *CurrentName));
+
+	TArray<TSharedPtr<FPBRSceneMaterialCandidate>> SingleItemBatch;
+	SingleItemBatch.Add(CurrentItem);
+	FPBRSceneReplaceResult BatchResult;
+	FPBRSceneReplaceSettings SingleSettings = BatchedReplaceSettings;
+	SingleSettings.ProgressCallback = nullptr;
+	FPBRSceneMaterialReplacer::ReplaceCandidates(SingleItemBatch, SingleSettings, BatchResult);
+
+	BatchedReplaceResult.ScannedMaterials += BatchResult.ScannedMaterials;
+	BatchedReplaceResult.ReplaceableMaterials += BatchResult.ReplaceableMaterials;
+	BatchedReplaceResult.ReplacedMaterials += BatchResult.ReplacedMaterials;
+	BatchedReplaceResult.ReplacedSlots += BatchResult.ReplacedSlots;
+	BatchedReplaceResult.Messages.Append(BatchResult.Messages);
+
+	++BatchedReplaceIndex;
+	UpdateReplaceProgress(BatchedReplaceIndex, BatchedReplaceTotal, FString::Printf(TEXT("已处理 %d/%d: %s"), BatchedReplaceIndex, BatchedReplaceTotal, *CurrentName));
+	return EActiveTimerReturnType::Continue;
 }
 
 FReply SPBRSceneMaterialReplaceTab::OnManualRefreshScene()
