@@ -51,6 +51,8 @@ private:
 	FPBRSceneReplaceSettings BatchedReplaceSettings;
 	FPBRSceneReplaceResult BatchedReplaceResult;
 	TArray<TSharedPtr<FPBRSceneMaterialCandidate>> BatchedReplaceItems;
+	TArray<TWeakObjectPtr<UPackage>> BatchedReplacePackagesToSave;
+	int32 BatchedReplaceLastSaveIndex = 0;
 
 	FReply OnScanScene();
 	FReply OnReplaceChecked();
@@ -70,6 +72,8 @@ private:
 	void RefreshList();
 	void UpdateSummary();
 	void UpdateReplaceProgress(int32 Current, int32 Total, const FString& Status);
+	void AddBatchedReplacePackage(UPackage* Package);
+	void SavePendingBatchedReplacePackages(const FString& StatusPrefix);
 	EActiveTimerReturnType ProcessReplaceBatch(double InCurrentTime, float InDeltaTime);
 	FPBRSceneReplaceSettings BuildSettings() const;
 	EVisibility GetCandidateVisibility(TSharedPtr<FPBRSceneMaterialCandidate> Item) const;

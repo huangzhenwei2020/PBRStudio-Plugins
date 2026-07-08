@@ -577,6 +577,32 @@ void SPBRSceneMaterialReplaceTab::UpdateReplaceProgress(int32 Current, int32 Tot
 	}
 }
 
+void SPBRSceneMaterialReplaceTab::AddBatchedReplacePackage(UPackage* Package)
+{
+	if (!Package)
+	{
+		return;
+	}
+
+	for (const TWeakObjectPtr<UPackage>& ExistingPackage : BatchedReplacePackagesToSave)
+	{
+		if (ExistingPackage.Get() == Package)
+		{
+			return;
+		}
+	}
+	BatchedReplacePackagesToSave.Add(Package);
+}
+
+void SPBRSceneMaterialReplaceTab::SavePendingBatchedReplacePackages(const FString& StatusPrefix)
+{
+	if (ProgressText.IsValid() && !BatchedReplacePackagesToSave.IsEmpty())
+	{
+		ProgressText->SetText(FText::FromString(FString::Printf(TEXT("%s，已生成 %d 个未保存材质包，请转换完成后使用保存所有"), *StatusPrefix, BatchedReplacePackagesToSave.Num())));
+	}
+	BatchedReplacePackagesToSave.Reset();
+}
+
 FReply SPBRSceneMaterialReplaceTab::OnReplaceChecked()
 {
 	if (bReplaceInProgress)
@@ -607,9 +633,16 @@ FReply SPBRSceneMaterialReplaceTab::OnReplaceChecked()
 	}
 
 	BatchedReplaceSettings = BuildSettings();
+	BatchedReplaceSettings.bSaveGeneratedAssets = false;
+	BatchedReplaceSettings.GeneratedPackageCallback = [this](UPackage* Package)
+	{
+		AddBatchedReplacePackage(Package);
+	};
 	BatchedReplaceResult = FPBRSceneReplaceResult();
 	BatchedReplaceIndex = 0;
 	BatchedReplaceTotal = BatchedReplaceItems.Num();
+	BatchedReplaceLastSaveIndex = 0;
+	BatchedReplacePackagesToSave.Reset();
 	bReplaceInProgress = true;
 	bCancelReplaceRequested = false;
 	ReplaceProgress = 0.0f;
@@ -644,12 +677,14 @@ EActiveTimerReturnType SPBRSceneMaterialReplaceTab::ProcessReplaceBatch(double I
 
 	if (bCancelReplaceRequested)
 	{
+		const int32 UnsavedPackageCount = BatchedReplacePackagesToSave.Num();
+		SavePendingBatchedReplacePackages(TEXT("正在取消转换"));
 		bReplaceInProgress = false;
 		bCancelReplaceRequested = false;
 		BatchedReplaceItems.Reset();
 		if (ProgressText.IsValid())
 		{
-			ProgressText->SetText(FText::FromString(FString::Printf(TEXT("已取消转换，已处理 %d/%d"), BatchedReplaceIndex, BatchedReplaceTotal)));
+			ProgressText->SetText(FText::FromString(FString::Printf(TEXT("已取消转换，已处理 %d/%d，%d 个材质包未自动保存"), BatchedReplaceIndex, BatchedReplaceTotal, UnsavedPackageCount)));
 		}
 		RefreshList();
 		return EActiveTimerReturnType::Stop;
@@ -657,6 +692,8 @@ EActiveTimerReturnType SPBRSceneMaterialReplaceTab::ProcessReplaceBatch(double I
 
 	if (!BatchedReplaceItems.IsValidIndex(BatchedReplaceIndex))
 	{
+		const int32 UnsavedPackageCount = BatchedReplacePackagesToSave.Num();
+		SavePendingBatchedReplacePackages(TEXT("分批转换完成"));
 		bReplaceInProgress = false;
 		bCancelReplaceRequested = false;
 		ReplaceProgress = 1.0f;
@@ -664,7 +701,7 @@ EActiveTimerReturnType SPBRSceneMaterialReplaceTab::ProcessReplaceBatch(double I
 		RefreshList();
 		if (ProgressText.IsValid())
 		{
-			ProgressText->SetText(FText::FromString(BatchedReplaceResult.Messages.Num() > 0 ? BatchedReplaceResult.Messages.Last() : TEXT("分批转换完成")));
+			ProgressText->SetText(FText::FromString(FString::Printf(TEXT("分批转换完成，已生成 %d 个材质包，请使用保存所有写入磁盘"), UnsavedPackageCount)));
 		}
 		return EActiveTimerReturnType::Stop;
 	}

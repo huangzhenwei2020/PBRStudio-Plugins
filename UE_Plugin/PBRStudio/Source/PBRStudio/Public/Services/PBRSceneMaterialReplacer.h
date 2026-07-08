@@ -88,7 +88,9 @@ struct PBRSTUDIO_API FPBRSceneReplaceSettings
 	bool bGenerateHeight = false;
 	bool bGenerateORM = false;
 	bool bOnlyImageExtensions = true;
+	bool bSaveGeneratedAssets = true;
 	TFunction<void(int32 Current, int32 Total, const FString& Status)> ProgressCallback;
+	TFunction<void(UPackage* Package)> GeneratedPackageCallback;
 };
 
 struct PBRSTUDIO_API FPBRSceneReplaceResult

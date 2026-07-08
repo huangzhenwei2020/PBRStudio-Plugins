@@ -1550,7 +1550,9 @@ static UTexture2D* BakeSceneSourceMaterialPropertyTexture(
 	const FName& TargetParameterName,
 	const FString& OutputRoot,
 	const UTexture* ReferenceTexture,
-	int32 MaxBakeTextureSize)
+	int32 MaxBakeTextureSize,
+	bool bSaveGeneratedAsset,
+	const TFunction<void(UPackage*)>& GeneratedPackageCallback)
 {
 	if (!SourceMaterial)
 	{
@@ -1564,7 +1566,7 @@ static UTexture2D* BakeSceneSourceMaterialPropertyTexture(
 	}
 
 	const FIntPoint TextureSize = CalculateSceneBakeTextureSize(SourceMaterial, TargetParameterName, ReferenceTexture, MaxBakeTextureSize);
-	const FString PackagePath = BuildSceneBakedTexturePackagePath(Component, SlotIndex, TargetParameterName, OutputRoot);
+	FString PackagePath = BuildSceneBakedTexturePackagePath(Component, SlotIndex, TargetParameterName, OutputRoot);
 	if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
 	{
 		if (UTexture2D* ExistingTexture = Cast<UTexture2D>(UEditorAssetLibrary::LoadAsset(PackagePath)))
@@ -1574,9 +1576,23 @@ static UTexture2D* BakeSceneSourceMaterialPropertyTexture(
 			{
 				return ExistingTexture;
 			}
+			if (!bSaveGeneratedAsset)
+			{
+				PackagePath += FString::Printf(TEXT("_%dx%d"), TextureSize.X, TextureSize.Y);
+				if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
+				{
+					if (UTexture2D* SizedExistingTexture = Cast<UTexture2D>(UEditorAssetLibrary::LoadAsset(PackagePath)))
+					{
+						return SizedExistingTexture;
+					}
+				}
+			}
 			UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Rebuilding baked texture %s from %dx%d to %dx%d"), *PackagePath, ExistingSize.X, ExistingSize.Y, TextureSize.X, TextureSize.Y);
 		}
-		UEditorAssetLibrary::DeleteAsset(PackagePath);
+		if (bSaveGeneratedAsset)
+		{
+			UEditorAssetLibrary::DeleteAsset(PackagePath);
+		}
 	}
 
 	FMeshData MeshSettings;
@@ -1641,7 +1657,14 @@ static UTexture2D* BakeSceneSourceMaterialPropertyTexture(
 
 	Texture->MarkPackageDirty();
 	FAssetRegistryModule::AssetCreated(Texture);
-	UEditorLoadingAndSavingUtils::SavePackages({ Texture->GetPackage() }, true);
+	if (GeneratedPackageCallback)
+	{
+		GeneratedPackageCallback(Texture->GetPackage());
+	}
+	if (bSaveGeneratedAsset)
+	{
+		UEditorLoadingAndSavingUtils::SavePackages({ Texture->GetPackage() }, true);
+	}
 	return Texture;
 }
 
@@ -2020,7 +2043,9 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 	const UPrimitiveComponent* Component,
 	int32 SlotIndex,
 	const FString& OutputRoot,
-	int32 MaxBakeTextureSize)
+	int32 MaxBakeTextureSize,
+	bool bSaveGeneratedAssets,
+	const TFunction<void(UPackage*)>& GeneratedPackageCallback)
 {
 	if (!SourceMaterial || !TargetInstance)
 	{
@@ -2066,7 +2091,7 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 		const bool bHasBakeableTextureSource = bHasExplicitChannelTexture || bCanBakeAmbiguousTextureChain;
 		if (ChannelState.bShouldBake && bHasBakeableTextureSource)
 		{
-			SourceTexture = BakeSceneSourceMaterialPropertyTexture(SourceMaterial, Component, SlotIndex, TargetParameterName, OutputRoot, FallbackTexture, MaxBakeTextureSize);
+			SourceTexture = BakeSceneSourceMaterialPropertyTexture(SourceMaterial, Component, SlotIndex, TargetParameterName, OutputRoot, FallbackTexture, MaxBakeTextureSize, bSaveGeneratedAssets, GeneratedPackageCallback);
 			if (!SourceTexture)
 			{
 				UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Failed to bake source material channel %s from %s"), *TargetParameterName.ToString(), *SourceMaterial->GetName());
@@ -2165,7 +2190,9 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 
 	const FString InstancePackagePath = BuildSceneManagedInstancePackagePath(Settings.OutputRoot, OutputName);
 	const FString InstanceAssetName = FPackageName::GetLongPackageAssetName(InstancePackagePath);
-	UMaterialInstanceConstant* Instance = Cast<UMaterialInstanceConstant>(UEditorAssetLibrary::LoadAsset(InstancePackagePath));
+	UMaterialInstanceConstant* Instance = UEditorAssetLibrary::DoesAssetExist(InstancePackagePath)
+		? Cast<UMaterialInstanceConstant>(UEditorAssetLibrary::LoadAsset(InstancePackagePath))
+		: nullptr;
 
 	if (!Instance)
 	{
@@ -2224,7 +2251,9 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 		Candidate.Slots.Num() > 0 ? Candidate.Slots[0].Component.Get() : nullptr,
 		Candidate.Slots.Num() > 0 ? Candidate.Slots[0].MaterialIndex : INDEX_NONE,
 		Settings.OutputRoot,
-		GetSafeSceneReplaceOutputSize(Settings));
+		GetSafeSceneReplaceOutputSize(Settings),
+		Settings.bSaveGeneratedAssets,
+		Settings.GeneratedPackageCallback);
 	SyncSceneTextureUsageSwitches(Instance);
 
 	if (!ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseBaseColorTexture, false))
@@ -2236,7 +2265,14 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 	Instance->PostEditChange();
 	Instance->MarkPackageDirty();
 	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
-	UEditorLoadingAndSavingUtils::SavePackages({ Instance->GetPackage() }, true);
+	if (Settings.GeneratedPackageCallback)
+	{
+		Settings.GeneratedPackageCallback(Instance->GetPackage());
+	}
+	if (Settings.bSaveGeneratedAssets)
+	{
+		UEditorLoadingAndSavingUtils::SavePackages({ Instance->GetPackage() }, true);
+	}
 
 	OutMessage = FString::Printf(TEXT("已按 PBRStudio 统一母材质逻辑转换材质实例：%s"), *Instance->GetName());
 	return Instance;
