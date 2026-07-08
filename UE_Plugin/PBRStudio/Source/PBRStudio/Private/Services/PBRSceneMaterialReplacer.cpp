@@ -1071,6 +1071,89 @@ static bool DoesSceneTextureNameMatchTargetChannel(const UTexture* Texture, cons
 		SceneNameContainsAnyToken(Texture->GetPathName(), SearchTokens);
 }
 
+static bool DoesSceneTextureLookLikeNormalMap(const UTexture* Texture)
+{
+	const UTexture2D* Texture2D = Cast<UTexture2D>(Texture);
+	if (!Texture2D)
+	{
+		return false;
+	}
+
+	const FString TextureText = Texture2D->GetName() + TEXT(" ") + Texture2D->GetPathName();
+	return Texture2D->CompressionSettings == TextureCompressionSettings::TC_Normalmap ||
+		TextureText.Contains(TEXT("normal"), ESearchCase::IgnoreCase) ||
+		TextureText.Contains(TEXT("_nrm"), ESearchCase::IgnoreCase) ||
+		TextureText.Contains(TEXT("_nor"), ESearchCase::IgnoreCase) ||
+		TextureText.Contains(TEXT("_n_"), ESearchCase::IgnoreCase) ||
+		TextureText.Contains(TEXT("法线"), ESearchCase::IgnoreCase);
+}
+
+static bool DoesSceneTextureLookLikeBlueNormalPixels(UTexture2D* Texture, int32 MaxBakeTextureSize)
+{
+	if (!Texture)
+	{
+		return false;
+	}
+
+	TArray<FColor> Pixels;
+	int32 Width = 0;
+	int32 Height = 0;
+	if (!FPBRSceneMaterialReplacer::LoadTexturePixels(Texture, Pixels, Width, Height, FMath::Min(MaxBakeTextureSize, 256)) ||
+		Pixels.IsEmpty())
+	{
+		return false;
+	}
+
+	int32 SampleCount = 0;
+	int32 BlueNormalLikeCount = 0;
+	int32 ColorfulCount = 0;
+	const int32 Step = FMath::Max(1, Pixels.Num() / 1024);
+	for (int32 Index = 0; Index < Pixels.Num(); Index += Step)
+	{
+		const FColor& Pixel = Pixels[Index];
+		++SampleCount;
+		if (Pixel.B > 150 && Pixel.R >= 70 && Pixel.R <= 190 && Pixel.G >= 70 && Pixel.G <= 190 && Pixel.B > Pixel.R + 35 && Pixel.B > Pixel.G + 35)
+		{
+			++BlueNormalLikeCount;
+		}
+		if (FMath::Abs(static_cast<int32>(Pixel.R) - static_cast<int32>(Pixel.G)) > 10 ||
+			FMath::Abs(static_cast<int32>(Pixel.R) - static_cast<int32>(Pixel.B)) > 10 ||
+			FMath::Abs(static_cast<int32>(Pixel.G) - static_cast<int32>(Pixel.B)) > 10)
+		{
+			++ColorfulCount;
+		}
+	}
+
+	return SampleCount > 0 &&
+		static_cast<float>(BlueNormalLikeCount) / static_cast<float>(SampleCount) > 0.55f &&
+		static_cast<float>(ColorfulCount) / static_cast<float>(SampleCount) > 0.55f;
+}
+
+static bool ShouldRejectSceneTextureForTargetChannel(const UTexture* Texture, const FName& TargetParameterName, int32 MaxBakeTextureSize)
+{
+	if (!Texture)
+	{
+		return false;
+	}
+
+	if (TargetParameterName == FPBRMaterialParameters::NormalTexture)
+	{
+		return false;
+	}
+
+	if (DoesSceneTextureLookLikeNormalMap(Texture))
+	{
+		return true;
+	}
+
+	if (IsSceneStrictScalarTextureParameter(TargetParameterName))
+	{
+		return DoesSceneTextureLookLikeBlueNormalPixels(Cast<UTexture2D>(const_cast<UTexture*>(Texture)), MaxBakeTextureSize);
+	}
+
+	return false;
+}
+
 static bool DoesSceneParameterNameMatchTargetChannel(const FName& ParameterName, const FName& TargetParameterName)
 {
 	if (ParameterName.IsNone())
@@ -2370,11 +2453,25 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 		{
 			FallbackTexture = nullptr;
 		}
+		if (ShouldRejectSceneTextureForTargetChannel(FallbackTexture, TargetParameterName, MaxBakeTextureSize))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Rejected normal-like fallback texture %s for channel %s"),
+				FallbackTexture ? *FallbackTexture->GetName() : TEXT("None"),
+				*TargetParameterName.ToString());
+			FallbackTexture = nullptr;
+		}
 
 		UTexture* SourceTexture = nullptr;
 		const bool bHasExplicitChannelTexture = IsValidSceneSourceMigrationTexture(FallbackTexture) &&
 			(!IsSceneStrictScalarTextureParameter(TargetParameterName) || DoesSceneTextureNameMatchTargetChannel(FallbackTexture, TargetParameterName));
-		const bool bHasBakeableTextureSource = bHasExplicitChannelTexture || ChannelState.bHasTexture;
+		const bool bCanBakeFromAmbiguousBaseColor =
+			TargetParameterName == FPBRMaterialParameters::BaseColorTexture &&
+			ChannelState.bTextureRequiresBake &&
+			ChannelState.bHasTexture;
+		const bool bHasBakeableTextureSource =
+			bHasExplicitChannelTexture ||
+			(ChannelState.bHasPropertyChain && ChannelState.bHasTexture) ||
+			bCanBakeFromAmbiguousBaseColor;
 		if (ChannelState.bShouldBake && bHasBakeableTextureSource && bBakeComplexMaterialChannels)
 		{
 			SourceTexture = BakeSceneSourceMaterialPropertyTexture(SourceMaterial, Component, SlotIndex, TargetParameterName, OutputRoot, FallbackTexture, MaxBakeTextureSize, bSaveGeneratedAssets, GeneratedPackageCallback);
@@ -2385,6 +2482,13 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 			else if (ShouldRejectSceneBakedTextureForFallback(SourceTexture, FallbackTexture))
 			{
 				UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Rejected tiny baked texture %s for channel %s; falling back to source texture %s"), *SourceTexture->GetName(), *TargetParameterName.ToString(), *FallbackTexture->GetName());
+				SourceTexture = nullptr;
+			}
+			else if (ShouldRejectSceneTextureForTargetChannel(SourceTexture, TargetParameterName, MaxBakeTextureSize))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Rejected normal-like baked texture %s for channel %s"),
+					*SourceTexture->GetName(),
+					*TargetParameterName.ToString());
 				SourceTexture = nullptr;
 			}
 		}
@@ -2408,6 +2512,13 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 		if (!SourceTexture && !ChannelState.bTextureRequiresBake)
 		{
 			SourceTexture = FallbackTexture;
+		}
+		if (ShouldRejectSceneTextureForTargetChannel(SourceTexture, TargetParameterName, MaxBakeTextureSize))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Rejected normal-like source texture %s for channel %s"),
+				SourceTexture ? *SourceTexture->GetName() : TEXT("None"),
+				*TargetParameterName.ToString());
+			SourceTexture = nullptr;
 		}
 
 		if (SourceTexture)
@@ -2461,21 +2572,42 @@ static FString BuildSceneManagedInstancePackagePath(const FString& OutputRoot, c
 	return Root / CleanName / CleanName;
 }
 
-static bool ShouldGenerateSceneBPRCompanionTextures(const FPBRSceneMaterialCandidate& Candidate)
+static bool ShouldGenerateSceneBPRCompanionTexturesForInstance(
+	UMaterialInstanceConstant* Instance,
+	const FPBRSceneMaterialCandidate& Candidate,
+	UTexture2D*& OutBaseColorTexture)
 {
-	return Candidate.BaseColorTexture.IsValid() &&
-		!Candidate.NormalTexture.IsValid() &&
-		!Candidate.RoughnessTexture.IsValid() &&
-		!Candidate.MetallicTexture.IsValid() &&
-		!Candidate.AOTexture.IsValid() &&
-		!Candidate.SpecularTexture.IsValid() &&
-		!Candidate.HeightTexture.IsValid() &&
-		!Candidate.OpacityTexture.IsValid() &&
-		!Candidate.EmissiveTexture.IsValid() &&
-		!Candidate.bLooksTransparent &&
-		!Candidate.bLooksEmissive &&
-		Candidate.ReplacementKind != EPBRSceneReplacementKind::Glass &&
-		Candidate.ReplacementKind != EPBRSceneReplacementKind::Emissive;
+	OutBaseColorTexture = nullptr;
+	if (!Instance ||
+		Candidate.bLooksTransparent ||
+		Candidate.bLooksEmissive ||
+		Candidate.ReplacementKind == EPBRSceneReplacementKind::Glass ||
+		Candidate.ReplacementKind == EPBRSceneReplacementKind::Emissive)
+	{
+		return false;
+	}
+
+	UTexture* BaseColorTexture = nullptr;
+	Instance->GetTextureParameterValue(FMaterialParameterInfo(FPBRMaterialParameters::BaseColorTexture), BaseColorTexture);
+	OutBaseColorTexture = Cast<UTexture2D>(BaseColorTexture);
+	if (!OutBaseColorTexture ||
+		!IsValidSceneSourceMigrationTexture(OutBaseColorTexture) ||
+		!ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseBaseColorTexture, false))
+	{
+		return false;
+	}
+
+	const bool bHasAnyExplicitCompanionChannel =
+		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseNormalTexture, false) ||
+		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseRoughnessTexture, false) ||
+		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseMetallicTexture, false) ||
+		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseAOTexture, false) ||
+		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseSpecularTexture, false) ||
+		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseHeightTexture, false) ||
+		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseOpacityTexture, false) ||
+		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseEmissiveTexture, false);
+
+	return !bHasAnyExplicitCompanionChannel;
 }
 
 static void ApplySceneGeneratedTextureChannel(
@@ -2519,14 +2651,26 @@ static bool ApplySceneBPRCompanionTexturesIfNeeded(
 	const FString& InstancePackagePath,
 	FString& OutMessage)
 {
-	if (!Instance || !ShouldGenerateSceneBPRCompanionTextures(Candidate))
+	UTexture2D* BaseColorTexture = nullptr;
+	if (!ShouldGenerateSceneBPRCompanionTexturesForInstance(Instance, Candidate, BaseColorTexture))
 	{
 		return false;
 	}
 
+	FPBRSceneMaterialCandidate GenerationCandidate = Candidate;
+	GenerationCandidate.BaseColorTexture = BaseColorTexture;
+	GenerationCandidate.NormalTexture.Reset();
+	GenerationCandidate.RoughnessTexture.Reset();
+	GenerationCandidate.MetallicTexture.Reset();
+	GenerationCandidate.AOTexture.Reset();
+	GenerationCandidate.SpecularTexture.Reset();
+	GenerationCandidate.HeightTexture.Reset();
+	GenerationCandidate.OpacityTexture.Reset();
+	GenerationCandidate.EmissiveTexture.Reset();
+
 	FPBRMaterialSet GeneratedSet;
 	FString GenerateMessage;
-	if (!FPBRSceneMaterialReplacer::GeneratePBRSetFromTexture(Candidate.BaseColorTexture.Get(), OutputName, Settings, Candidate, GeneratedSet, GenerateMessage))
+	if (!FPBRSceneMaterialReplacer::GeneratePBRSetFromTexture(BaseColorTexture, OutputName, Settings, GenerationCandidate, GeneratedSet, GenerateMessage))
 	{
 		OutMessage = GenerateMessage;
 		return false;
