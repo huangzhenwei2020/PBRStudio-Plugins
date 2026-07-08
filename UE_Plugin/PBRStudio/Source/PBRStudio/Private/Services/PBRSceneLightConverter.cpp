@@ -1,10 +1,12 @@
 #include "Services/PBRSceneLightConverter.h"
 
 #include "Editor.h"
+#include "Components/DirectionalLightComponent.h"
 #include "Components/LightComponent.h"
 #include "Components/LocalLightComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/RectLightComponent.h"
+#include "Components/SkyLightComponent.h"
 #include "Components/SpotLightComponent.h"
 #include "DatasmithAssetUserData.h"
 #include "DatasmithSceneActor.h"
@@ -671,6 +673,10 @@ static bool ShouldBatchAdjustLight(AActor* Actor, ULightComponent* LightComponen
 	{
 		return Settings.bAffectSpotLights;
 	}
+	if (Cast<UDirectionalLightComponent>(LightComponent))
+	{
+		return Settings.bAffectDirectionalLights;
+	}
 	if (Cast<UPointLightComponent>(LightComponent))
 	{
 		return Settings.bAffectPointLights;
@@ -729,7 +735,11 @@ int32 FPBRSceneLightConverter::BatchAdjustSceneLights(
 
 			Actor->Modify();
 			LightComponent->Modify();
-			if (Settings.bSetIntensityMultiplier)
+			if (Settings.bUseInteriorSunSkyPreset && Cast<UDirectionalLightComponent>(LightComponent))
+			{
+				LightComponent->SetIntensity(FMath::Max(0.0f, Settings.InteriorDirectionalIntensity));
+			}
+			else if (Settings.bSetIntensityMultiplier)
 			{
 				LightComponent->SetIntensity(FMath::Max(0.0f, LightComponent->Intensity * Settings.IntensityMultiplier));
 			}
@@ -787,6 +797,43 @@ int32 FPBRSceneLightConverter::BatchAdjustSceneLights(
 			LightComponent->PostEditChange();
 			Actor->MarkPackageDirty();
 			Adjusted++;
+		}
+
+		if (Settings.bAffectSkyLights)
+		{
+			TArray<USkyLightComponent*> SkyLightComponents;
+			Actor->GetComponents<USkyLightComponent>(SkyLightComponents);
+			for (USkyLightComponent* SkyLightComponent : SkyLightComponents)
+			{
+				if (!SkyLightComponent)
+				{
+					continue;
+				}
+				if (Settings.bOnlySelectedActors && !IsActorSelected(Actor))
+				{
+					continue;
+				}
+				if (Settings.bSkipPBRStudioLights && FPBRSceneLightConverter::IsPBRStudioGeneratedLight(Actor))
+				{
+					continue;
+				}
+
+				Actor->Modify();
+				SkyLightComponent->Modify();
+				if (Settings.bUseInteriorSunSkyPreset)
+				{
+					SkyLightComponent->SetIntensity(FMath::Max(0.0f, Settings.InteriorSkyLightIntensity));
+				}
+				else if (Settings.bSetIntensityMultiplier)
+				{
+					SkyLightComponent->SetIntensity(FMath::Max(0.0f, SkyLightComponent->Intensity * Settings.IntensityMultiplier));
+				}
+				SkyLightComponent->RecaptureSky();
+				SkyLightComponent->RecreateRenderState_Concurrent();
+				SkyLightComponent->PostEditChange();
+				Actor->MarkPackageDirty();
+				Adjusted++;
+			}
 		}
 	}
 

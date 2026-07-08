@@ -61,6 +61,20 @@ void SPBRSceneBatchAdjustTab::Construct(const FArguments& InArgs)
 					]
 					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 12, 0)
 					[
+						SAssignNew(LightDirectionalCheck, SCheckBox)
+						[
+							SNew(STextBlock).Text(LOCTEXT("LightDirectional", "太阳光"))
+						]
+					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 12, 0)
+					[
+						SAssignNew(LightSkyCheck, SCheckBox)
+						[
+							SNew(STextBlock).Text(LOCTEXT("LightSky", "天空光"))
+						]
+					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 12, 0)
+					[
 						SAssignNew(LightOnlySelectedCheck, SCheckBox)
 						[
 							SNew(STextBlock).Text(LOCTEXT("LightOnlySelected", "只调选中"))
@@ -221,6 +235,13 @@ void SPBRSceneBatchAdjustTab::Construct(const FArguments& InArgs)
 						.Text(LOCTEXT("ApplyLight", "应用灯光调节"))
 						.ButtonStyle(FAppStyle::Get(), "FlatButton.Success")
 						.OnClicked(this, &SPBRSceneBatchAdjustTab::OnAdjustLights)
+					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(8, 0, 0, 0)
+					[
+						SNew(SButton)
+						.Text(LOCTEXT("InteriorSunSky", "一键室内SunSky"))
+						.ButtonStyle(FAppStyle::Get(), "FlatButton.Warning")
+						.OnClicked(this, &SPBRSceneBatchAdjustTab::OnApplyInteriorSunSky)
 					]
 				]
 			]
@@ -423,6 +444,8 @@ FPBRSceneLightBatchAdjustSettings SPBRSceneBatchAdjustTab::BuildLightSettings() 
 	Settings.bAffectRectLights = !LightRectCheck.IsValid() || LightRectCheck->IsChecked();
 	Settings.bAffectPointLights = !LightPointCheck.IsValid() || LightPointCheck->IsChecked();
 	Settings.bAffectSpotLights = !LightSpotCheck.IsValid() || LightSpotCheck->IsChecked();
+	Settings.bAffectDirectionalLights = LightDirectionalCheck.IsValid() && LightDirectionalCheck->IsChecked();
+	Settings.bAffectSkyLights = LightSkyCheck.IsValid() && LightSkyCheck->IsChecked();
 	Settings.bSkipPBRStudioLights = LightSkipPBRStudioCheck.IsValid() && LightSkipPBRStudioCheck->IsChecked();
 	Settings.bClearProjectionSettings = !LightClearProjectionCheck.IsValid() || LightClearProjectionCheck->IsChecked();
 	Settings.bSetIntensityMultiplier = !LightIntensityCheck.IsValid() || LightIntensityCheck->IsChecked();
@@ -476,6 +499,27 @@ FReply SPBRSceneBatchAdjustTab::OnAdjustLights()
 	FPBRSceneLightConvertResult Result;
 	FPBRSceneLightConverter::BatchAdjustSceneLights(BuildLightSettings(), Result);
 	SetStatus(Result.Messages.Num() > 0 ? Result.Messages.Last() : TEXT("已调节场景灯光"));
+	return FReply::Handled();
+}
+
+FReply SPBRSceneBatchAdjustTab::OnApplyInteriorSunSky()
+{
+	FPBRSceneLightBatchAdjustSettings Settings;
+	Settings.bAffectRectLights = false;
+	Settings.bAffectPointLights = false;
+	Settings.bAffectSpotLights = false;
+	Settings.bAffectDirectionalLights = true;
+	Settings.bAffectSkyLights = true;
+	Settings.bSkipPBRStudioLights = false;
+	Settings.bClearProjectionSettings = false;
+	Settings.bSetIntensityMultiplier = false;
+	Settings.bUseInteriorSunSkyPreset = true;
+	Settings.InteriorDirectionalIntensity = 3.0f;
+	Settings.InteriorSkyLightIntensity = 0.25f;
+
+	FPBRSceneLightConvertResult Result;
+	FPBRSceneLightConverter::BatchAdjustSceneLights(Settings, Result);
+	SetStatus(Result.Messages.Num() > 0 ? Result.Messages.Last() : TEXT("已应用室内 SunSky 设置"));
 	return FReply::Handled();
 }
 

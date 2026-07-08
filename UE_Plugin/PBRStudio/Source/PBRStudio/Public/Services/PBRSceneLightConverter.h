@@ -61,8 +61,11 @@ struct PBRSTUDIO_API FPBRSceneLightBatchAdjustSettings
 	bool bAffectRectLights = true;
 	bool bAffectPointLights = true;
 	bool bAffectSpotLights = true;
+	bool bAffectDirectionalLights = false;
+	bool bAffectSkyLights = false;
 	bool bSkipPBRStudioLights = false;
 	bool bClearProjectionSettings = true;
+	bool bUseInteriorSunSkyPreset = false;
 	bool bSetIntensityMultiplier = true;
 	bool bSetLightColor = false;
 	bool bSetTemperature = false;
@@ -79,6 +82,8 @@ struct PBRSTUDIO_API FPBRSceneLightBatchAdjustSettings
 	float SourceHeight = 64.0f;
 	float InnerConeAngle = 15.0f;
 	float OuterConeAngle = 44.0f;
+	float InteriorDirectionalIntensity = 3.0f;
+	float InteriorSkyLightIntensity = 0.25f;
 };
 
 struct PBRSTUDIO_API FPBRSceneLightConvertResult

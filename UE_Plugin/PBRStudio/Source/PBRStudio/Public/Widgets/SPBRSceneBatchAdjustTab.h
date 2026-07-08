@@ -22,6 +22,8 @@ private:
 	TSharedPtr<SCheckBox> LightRectCheck;
 	TSharedPtr<SCheckBox> LightPointCheck;
 	TSharedPtr<SCheckBox> LightSpotCheck;
+	TSharedPtr<SCheckBox> LightDirectionalCheck;
+	TSharedPtr<SCheckBox> LightSkyCheck;
 	TSharedPtr<SCheckBox> LightOnlySelectedCheck;
 	TSharedPtr<SCheckBox> LightSkipPBRStudioCheck;
 	TSharedPtr<SCheckBox> LightClearProjectionCheck;
@@ -67,6 +69,7 @@ private:
 	float VignetteIntensity = 0.0f;
 
 	FReply OnAdjustLights();
+	FReply OnApplyInteriorSunSky();
 	FReply OnAdjustCameras();
 	FPBRSceneLightBatchAdjustSettings BuildLightSettings() const;
 	FPBRSceneCameraBatchAdjustSettings BuildCameraSettings() const;
