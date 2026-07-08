@@ -2045,6 +2045,7 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 	const FString& OutputRoot,
 	int32 MaxBakeTextureSize,
 	bool bBakeComplexMaterialChannels,
+	bool bAllowEmissiveMigration,
 	bool bSaveGeneratedAssets,
 	const TFunction<void(UPackage*)>& GeneratedPackageCallback)
 {
@@ -2057,6 +2058,15 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 
 	for (const FName& TargetParameterName : CandidateTextureParameters)
 	{
+		if (TargetParameterName == FPBRMaterialParameters::EmissiveTexture && !bAllowEmissiveMigration)
+		{
+			SetSceneSwitchParameterEditorOnly(TargetInstance, FPBRMaterialParameters::UseEmissiveTexture, false);
+			SetSceneSwitchParameterEditorOnly(TargetInstance, FPBRMaterialParameters::UseEmissiveTemperature, false);
+			SetSceneVectorParameterEditorOnly(TargetInstance, FPBRMaterialParameters::EmissiveColor, FLinearColor::Black);
+			SetSceneScalarParameterEditorOnly(TargetInstance, FPBRMaterialParameters::EmissiveIntensity, 0.0f);
+			continue;
+		}
+
 		FPBRSceneSourceChannelState ChannelState = AnalyzeSceneSourceMaterialChannel(SourceMaterial, TargetParameterName);
 		if (!ChannelState.bHasPropertyChain)
 		{
@@ -2125,7 +2135,7 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 	}
 }
 
-static bool SyncSceneTextureUsageSwitches(UMaterialInstanceConstant* Instance)
+static bool SyncSceneTextureUsageSwitches(UMaterialInstanceConstant* Instance, bool bAllowEmissiveTexture)
 {
 	if (!Instance)
 	{
@@ -2135,6 +2145,16 @@ static bool SyncSceneTextureUsageSwitches(UMaterialInstanceConstant* Instance)
 	bool bChanged = false;
 	for (const FPBRSceneTextureParameterBinding& Binding : GetSceneTextureParameterBindings())
 	{
+		if (Binding.TextureParameterName == FPBRMaterialParameters::EmissiveTexture && !bAllowEmissiveTexture)
+		{
+			if (ReadSceneStaticSwitchParameter(Instance, Binding.SwitchParameterName, false))
+			{
+				SetSceneSwitchParameterEditorOnly(Instance, Binding.SwitchParameterName, false);
+				bChanged = true;
+			}
+			continue;
+		}
+
 		UTexture* Texture = nullptr;
 		Instance->GetTextureParameterValue(FMaterialParameterInfo(Binding.TextureParameterName), Texture);
 		const bool bShouldUseTexture = IsValidSceneSourceMigrationTexture(Texture);
@@ -2181,6 +2201,7 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 {
 	OutMessage.Empty();
 	const EPBRMaterialType MaterialType = ResolveSceneManagedMaterialType(Candidate, SourceMaterial);
+	const bool bAllowEmissiveMigration = Candidate.ReplacementKind == EPBRSceneReplacementKind::Emissive || Candidate.bLooksEmissive;
 	FString ParentMessage;
 	UMaterial* ParentMaterial = FPBRMaterialTemplateManager::EnsureTemplateMaterial(MaterialType, ParentMessage);
 	if (!ParentMaterial)
@@ -2254,9 +2275,10 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 		Settings.OutputRoot,
 		GetSafeSceneReplaceOutputSize(Settings),
 		Settings.bBakeComplexMaterialChannels,
+		bAllowEmissiveMigration,
 		Settings.bSaveGeneratedAssets,
 		Settings.GeneratedPackageCallback);
-	SyncSceneTextureUsageSwitches(Instance);
+	SyncSceneTextureUsageSwitches(Instance, bAllowEmissiveMigration);
 
 	if (!ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseBaseColorTexture, false))
 	{
