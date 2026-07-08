@@ -131,6 +131,8 @@ public:
 	static bool SetVectorParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, const FLinearColor& Value, FString& OutMessage);
 	static bool SetStaticSwitchParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, bool bValue, FString& OutMessage);
 	static bool SetTextureParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, UTexture* Texture, FString& OutMessage);
+	static bool GeneratePBRSetFromTexture(UTexture2D* BaseColorTexture, const FString& MaterialName,
+		const FPBRSceneReplaceSettings& Settings, const FPBRSceneMaterialCandidate& Candidate, FPBRMaterialSet& OutSet, FString& OutMessage);
 
 private:
 	static TArray<FPBRSceneMaterialSlot> LastReplacementSlots;
@@ -149,8 +151,6 @@ private:
 	static UMaterial* EnsureSceneReplaceMasterMaterial(FString& OutMessage);
 	static UMaterial* EnsureSceneGlassMasterMaterial(FString& OutMessage);
 	static UMaterial* EnsureSceneEmissiveMasterMaterial(FString& OutMessage);
-	static bool GeneratePBRSetFromTexture(UTexture2D* BaseColorTexture, const FString& MaterialName,
-		const FPBRSceneReplaceSettings& Settings, const FPBRSceneMaterialCandidate& Candidate, FPBRMaterialSet& OutSet, FString& OutMessage);
 	static bool SaveGeneratedImage(const FString& FilePath, const TArray<FColor>& Pixels, int32 Width, int32 Height);
 	static bool LoadTexturePixels(UTexture2D* Texture, TArray<FColor>& OutPixels, int32& OutWidth, int32& OutHeight, int32 MaxDimension = 0);
 };

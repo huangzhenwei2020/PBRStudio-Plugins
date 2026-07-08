@@ -34,6 +34,7 @@
 #include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialExpressionStaticSwitchParameter.h"
 #include "Materials/MaterialExpressionTextureCoordinate.h"
+#include "Materials/MaterialExpressionTextureObject.h"
 #include "Materials/MaterialExpressionTextureSampleParameter2D.h"
 #include "Materials/MaterialExpressionVectorParameter.h"
 #include "Materials/MaterialExpressionTextureSample.h"
@@ -803,6 +804,7 @@ struct FPBRSceneSourceChannelState
 	bool bHasPropertyChain = false;
 	bool bHasTexture = false;
 	bool bShouldBake = false;
+	bool bTextureRequiresBake = false;
 	UTexture* Texture = nullptr;
 	bool bHasColor = false;
 	FLinearColor Color = FLinearColor::White;
@@ -1069,6 +1071,16 @@ static bool DoesSceneTextureNameMatchTargetChannel(const UTexture* Texture, cons
 		SceneNameContainsAnyToken(Texture->GetPathName(), SearchTokens);
 }
 
+static bool DoesSceneParameterNameMatchTargetChannel(const FName& ParameterName, const FName& TargetParameterName)
+{
+	if (ParameterName.IsNone())
+	{
+		return false;
+	}
+
+	return SceneNameContainsAnyToken(ParameterName.ToString(), GetSceneTextureParameterSearchTokens(TargetParameterName));
+}
+
 static EMaterialProperty GetSceneMaterialPropertyForTextureParameter(const FName& TargetParameterName)
 {
 	if (TargetParameterName == FPBRMaterialParameters::BaseColorTexture) { return MP_BaseColor; }
@@ -1091,6 +1103,17 @@ static bool IsSimpleSceneValueMigrationExpression(const UMaterialExpression* Exp
 		Cast<UMaterialExpressionConstant2Vector>(Expression) ||
 		Cast<UMaterialExpressionConstant3Vector>(Expression) ||
 		Cast<UMaterialExpressionConstant4Vector>(Expression) ||
+		Cast<UMaterialExpressionReroute>(Expression) ||
+		Cast<UMaterialExpressionNamedRerouteDeclaration>(Expression) ||
+		Cast<UMaterialExpressionNamedRerouteUsage>(Expression);
+}
+
+static bool IsSimpleSceneTextureMigrationExpression(const UMaterialExpression* Expression)
+{
+	return Cast<UMaterialExpressionTextureSample>(Expression) ||
+		Cast<UMaterialExpressionTextureObject>(Expression) ||
+		Cast<UMaterialExpressionTextureCoordinate>(Expression) ||
+		Cast<UMaterialExpressionComponentMask>(Expression) ||
 		Cast<UMaterialExpressionReroute>(Expression) ||
 		Cast<UMaterialExpressionNamedRerouteDeclaration>(Expression) ||
 		Cast<UMaterialExpressionNamedRerouteUsage>(Expression);
@@ -1214,10 +1237,12 @@ static FPBRSceneSourceChannelState AnalyzeSceneSourceMaterialChannel(UMaterialIn
 	SourceMaterial->GetTexturesInPropertyChain(MaterialProperty, ChainTextures, &TextureParameterNames, &StaticParameters, ERHIFeatureLevel::Num, EMaterialQualityLevel::Num);
 
 	TArray<UTexture*> UniqueTextures;
+	TArray<FName> UniqueTextureParameterNames;
 	bool bSawAnyChainTexture = false;
 	for (int32 TextureIndex = 0; TextureIndex < ChainTextures.Num(); ++TextureIndex)
 	{
 		UTexture* ResolvedTexture = ChainTextures[TextureIndex];
+		FName ResolvedParameterName = TextureParameterNames.IsValidIndex(TextureIndex) ? TextureParameterNames[TextureIndex] : NAME_None;
 		if (TextureParameterNames.IsValidIndex(TextureIndex) && !TextureParameterNames[TextureIndex].IsNone())
 		{
 			UTexture* ParameterTexture = nullptr;
@@ -1233,7 +1258,16 @@ static FPBRSceneSourceChannelState AnalyzeSceneSourceMaterialChannel(UMaterialIn
 		}
 		if (IsValidSceneSourceMigrationTexture(ResolvedTexture))
 		{
-			UniqueTextures.AddUnique(ResolvedTexture);
+			const int32 ExistingIndex = UniqueTextures.Find(ResolvedTexture);
+			if (ExistingIndex == INDEX_NONE)
+			{
+				UniqueTextures.Add(ResolvedTexture);
+				UniqueTextureParameterNames.Add(ResolvedParameterName);
+			}
+			else if (UniqueTextureParameterNames.IsValidIndex(ExistingIndex) && UniqueTextureParameterNames[ExistingIndex].IsNone())
+			{
+				UniqueTextureParameterNames[ExistingIndex] = ResolvedParameterName;
+			}
 		}
 	}
 
@@ -1251,6 +1285,15 @@ static FPBRSceneSourceChannelState AnalyzeSceneSourceMaterialChannel(UMaterialIn
 		}
 		bValueChainIsSimple = bValueChainIsSimple && IsSimpleSceneValueMigrationExpression(Expression);
 	}
+	bool bTextureChainIsDirect = UniqueTextures.Num() == 1;
+	for (const UMaterialExpression* Expression : ChainExpressions)
+	{
+		if (!Expression)
+		{
+			continue;
+		}
+		bTextureChainIsDirect = bTextureChainIsDirect && IsSimpleSceneTextureMigrationExpression(Expression);
+	}
 
 	if (bSawAnyChainTexture && UniqueTextures.IsEmpty())
 	{
@@ -1263,7 +1306,26 @@ static FPBRSceneSourceChannelState AnalyzeSceneSourceMaterialChannel(UMaterialIn
 	}
 	if (UniqueTextures.Num() == 1)
 	{
-		State.Texture = UniqueTextures[0];
+		UTexture* SingleTexture = UniqueTextures[0];
+		const FName SingleParameterName = UniqueTextureParameterNames.IsValidIndex(0) ? UniqueTextureParameterNames[0] : NAME_None;
+		const bool bTextureMatchesTarget =
+			DoesSceneTextureNameMatchTargetChannel(SingleTexture, TargetParameterName) ||
+			DoesSceneParameterNameMatchTargetChannel(SingleParameterName, TargetParameterName);
+		const bool bLooksLikeDirectColorTexture =
+			IsSceneColorTargetParameter(TargetParameterName) &&
+			Cast<UTexture2D>(SingleTexture) &&
+			Cast<UTexture2D>(SingleTexture)->SRGB &&
+			Cast<UTexture2D>(SingleTexture)->CompressionSettings == TextureCompressionSettings::TC_Default &&
+			bTextureMatchesTarget;
+		if ((bTextureMatchesTarget || bLooksLikeDirectColorTexture) && bTextureChainIsDirect)
+		{
+			State.Texture = SingleTexture;
+			return State;
+		}
+
+		State.Texture = SingleTexture;
+		State.bShouldBake = State.bHasPropertyChain;
+		State.bTextureRequiresBake = State.bShouldBake;
 		return State;
 	}
 
@@ -2093,13 +2155,7 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 		UTexture* SourceTexture = nullptr;
 		const bool bHasExplicitChannelTexture = IsValidSceneSourceMigrationTexture(FallbackTexture) &&
 			(!IsSceneStrictScalarTextureParameter(TargetParameterName) || DoesSceneTextureNameMatchTargetChannel(FallbackTexture, TargetParameterName));
-		const bool bCanBakeAmbiguousTextureChain =
-			(TargetParameterName == FPBRMaterialParameters::BaseColorTexture ||
-				TargetParameterName == FPBRMaterialParameters::NormalTexture ||
-				TargetParameterName == FPBRMaterialParameters::OpacityTexture ||
-				TargetParameterName == FPBRMaterialParameters::EmissiveTexture) &&
-			ChannelState.bHasTexture;
-		const bool bHasBakeableTextureSource = bHasExplicitChannelTexture || bCanBakeAmbiguousTextureChain;
+		const bool bHasBakeableTextureSource = bHasExplicitChannelTexture || ChannelState.bHasTexture;
 		if (ChannelState.bShouldBake && bHasBakeableTextureSource && bBakeComplexMaterialChannels)
 		{
 			SourceTexture = BakeSceneSourceMaterialPropertyTexture(SourceMaterial, Component, SlotIndex, TargetParameterName, OutputRoot, FallbackTexture, MaxBakeTextureSize, bSaveGeneratedAssets, GeneratedPackageCallback);
@@ -2119,7 +2175,7 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 				*TargetParameterName.ToString(),
 				*SourceMaterial->GetName());
 		}
-		if (!SourceTexture)
+		if (!SourceTexture && !ChannelState.bTextureRequiresBake)
 		{
 			SourceTexture = FallbackTexture;
 		}
@@ -2173,6 +2229,100 @@ static FString BuildSceneManagedInstancePackagePath(const FString& OutputRoot, c
 	Root.RemoveFromEnd(TEXT("/"));
 	const FString CleanName = FPBRMaterialInstanceFactory::SanitizeAssetName(OutputName);
 	return Root / CleanName / CleanName;
+}
+
+static bool ShouldGenerateSceneBPRCompanionTextures(const FPBRSceneMaterialCandidate& Candidate)
+{
+	return Candidate.BaseColorTexture.IsValid() &&
+		!Candidate.NormalTexture.IsValid() &&
+		!Candidate.RoughnessTexture.IsValid() &&
+		!Candidate.MetallicTexture.IsValid() &&
+		!Candidate.AOTexture.IsValid() &&
+		!Candidate.SpecularTexture.IsValid() &&
+		!Candidate.HeightTexture.IsValid() &&
+		!Candidate.OpacityTexture.IsValid() &&
+		!Candidate.EmissiveTexture.IsValid() &&
+		!Candidate.bLooksTransparent &&
+		!Candidate.bLooksEmissive &&
+		Candidate.ReplacementKind != EPBRSceneReplacementKind::Glass &&
+		Candidate.ReplacementKind != EPBRSceneReplacementKind::Emissive;
+}
+
+static void ApplySceneGeneratedTextureChannel(
+	UMaterialInstanceConstant* Instance,
+	const FString& Channel,
+	const FName& TextureParameterName,
+	const FName& SwitchParameterName,
+	const FPBRMaterialSet& GeneratedSet,
+	const FString& PackagePath,
+	const FString& CleanName,
+	const TFunction<void(UPackage*)>& GeneratedPackageCallback)
+{
+	if (!Instance || !GeneratedSet.Channels.Contains(Channel))
+	{
+		return;
+	}
+
+	const FString* FilePath = GeneratedSet.Channels.Find(Channel);
+	if (!FilePath || FilePath->IsEmpty())
+	{
+		return;
+	}
+
+	const FString TextureName = TEXT("T_") + CleanName + TEXT("_") + Channel;
+	if (UTexture2D* Texture = FPBRMaterialInstanceFactory::ImportTextureToAsset(*FilePath, PackagePath, TextureName, Channel))
+	{
+		SetSceneTextureParameterEditorOnly(Instance, TextureParameterName, Texture);
+		SetSceneSwitchParameterEditorOnly(Instance, SwitchParameterName, true);
+		if (GeneratedPackageCallback)
+		{
+			GeneratedPackageCallback(Texture->GetPackage());
+		}
+	}
+}
+
+static bool ApplySceneBPRCompanionTexturesIfNeeded(
+	UMaterialInstanceConstant* Instance,
+	const FPBRSceneMaterialCandidate& Candidate,
+	const FString& OutputName,
+	const FPBRSceneReplaceSettings& Settings,
+	const FString& InstancePackagePath,
+	FString& OutMessage)
+{
+	if (!Instance || !ShouldGenerateSceneBPRCompanionTextures(Candidate))
+	{
+		return false;
+	}
+
+	FPBRMaterialSet GeneratedSet;
+	FString GenerateMessage;
+	if (!FPBRSceneMaterialReplacer::GeneratePBRSetFromTexture(Candidate.BaseColorTexture.Get(), OutputName, Settings, Candidate, GeneratedSet, GenerateMessage))
+	{
+		OutMessage = GenerateMessage;
+		return false;
+	}
+
+	const FString CleanName = FPBRMaterialInstanceFactory::SanitizeAssetName(OutputName);
+	const FString PackagePath = FPackageName::GetLongPackagePath(InstancePackagePath);
+	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::NormalDX.ToString(), FPBRMaterialParameters::NormalTexture, FPBRMaterialParameters::UseNormalTexture, GeneratedSet, PackagePath, CleanName, Settings.GeneratedPackageCallback);
+	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Roughness.ToString(), FPBRMaterialParameters::RoughnessTexture, FPBRMaterialParameters::UseRoughnessTexture, GeneratedSet, PackagePath, CleanName, Settings.GeneratedPackageCallback);
+	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Metallic.ToString(), FPBRMaterialParameters::MetallicTexture, FPBRMaterialParameters::UseMetallicTexture, GeneratedSet, PackagePath, CleanName, Settings.GeneratedPackageCallback);
+	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::AO.ToString(), FPBRMaterialParameters::AOTexture, FPBRMaterialParameters::UseAOTexture, GeneratedSet, PackagePath, CleanName, Settings.GeneratedPackageCallback);
+	if (Settings.bGenerateSpecular)
+	{
+		ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Specular.ToString(), FPBRMaterialParameters::SpecularTexture, FPBRMaterialParameters::UseSpecularTexture, GeneratedSet, PackagePath, CleanName, Settings.GeneratedPackageCallback);
+	}
+	if (Settings.bGenerateHeight)
+	{
+		ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Height.ToString(), FPBRMaterialParameters::HeightTexture, FPBRMaterialParameters::UseHeightTexture, GeneratedSet, PackagePath, CleanName, Settings.GeneratedPackageCallback);
+	}
+
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, Settings.NormalStrength);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RoughnessMultiplier, 1.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::MetallicMultiplier, 1.0f);
+	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::AOMultiplier, 1.0f);
+	OutMessage = GenerateMessage;
+	return true;
 }
 
 static EPBRMaterialType ResolveSceneManagedMaterialType(const FPBRSceneMaterialCandidate& Candidate, UMaterialInterface* SourceMaterial)
@@ -2278,6 +2428,14 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 		bAllowEmissiveMigration,
 		Settings.bSaveGeneratedAssets,
 		Settings.GeneratedPackageCallback);
+	FString CompanionMessage;
+	const bool bGeneratedCompanionTextures = ApplySceneBPRCompanionTexturesIfNeeded(
+		Instance,
+		Candidate,
+		OutputName,
+		Settings,
+		InstancePackagePath,
+		CompanionMessage);
 	SyncSceneTextureUsageSwitches(Instance, bAllowEmissiveMigration);
 
 	if (!ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseBaseColorTexture, false))
@@ -2299,6 +2457,14 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 	}
 
 	OutMessage = FString::Printf(TEXT("已按 PBRStudio 统一母材质逻辑转换材质实例：%s"), *Instance->GetName());
+	if (bGeneratedCompanionTextures)
+	{
+		OutMessage += TEXT("；仅检测到基础色贴图，已自动生成补充 BPR 通道");
+	}
+	else if (!CompanionMessage.IsEmpty())
+	{
+		OutMessage += TEXT("；自动生成补充 BPR 通道失败：") + CompanionMessage;
+	}
 	return Instance;
 }
 

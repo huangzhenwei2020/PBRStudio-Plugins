@@ -634,7 +634,7 @@ FReply SPBRSceneMaterialReplaceTab::OnReplaceChecked()
 
 	BatchedReplaceSettings = BuildSettings();
 	BatchedReplaceSettings.bSaveGeneratedAssets = false;
-	BatchedReplaceSettings.bBakeComplexMaterialChannels = false;
+	BatchedReplaceSettings.bBakeComplexMaterialChannels = true;
 	BatchedReplaceSettings.GeneratedPackageCallback = [this](UPackage* Package)
 	{
 		AddBatchedReplacePackage(Package);
