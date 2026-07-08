@@ -1,8 +1,6 @@
 #include "Widgets/SPBRSceneMaterialReplaceTab.h"
 
 #include "Styling/AppStyle.h"
-#include "Framework/Application/SlateApplication.h"
-#include "HAL/PlatformTime.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
@@ -58,6 +56,14 @@ void SPBRSceneMaterialReplaceTab::Construct(const FArguments& InArgs)
 				.Text(LOCTEXT("Replace", "一键生成并替换"))
 				.ButtonStyle(FAppStyle::Get(), "FlatButton.Success")
 				.OnClicked(this, &SPBRSceneMaterialReplaceTab::OnReplaceChecked)
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("CancelReplace", "取消转换"))
+				.ButtonStyle(FAppStyle::Get(), "FlatButton.Warning")
+				.IsEnabled_Lambda([this]() { return bReplaceInProgress; })
+				.OnClicked(this, &SPBRSceneMaterialReplaceTab::OnCancelReplace)
 			]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
 			[
@@ -569,12 +575,6 @@ void SPBRSceneMaterialReplaceTab::UpdateReplaceProgress(int32 Current, int32 Tot
 	{
 		ReplaceProgressBar->Invalidate(EInvalidateWidgetReason::Paint);
 	}
-	const double Now = FPlatformTime::Seconds();
-	if (FSlateApplication::IsInitialized() && (Now - LastProgressUiPumpTime > 0.15 || Current >= Total))
-	{
-		LastProgressUiPumpTime = Now;
-		FSlateApplication::Get().Tick();
-	}
 }
 
 FReply SPBRSceneMaterialReplaceTab::OnReplaceChecked()
@@ -611,14 +611,27 @@ FReply SPBRSceneMaterialReplaceTab::OnReplaceChecked()
 	BatchedReplaceIndex = 0;
 	BatchedReplaceTotal = BatchedReplaceItems.Num();
 	bReplaceInProgress = true;
+	bCancelReplaceRequested = false;
 	ReplaceProgress = 0.0f;
-	LastProgressUiPumpTime = 0.0;
 
 	if (ProgressText.IsValid())
 	{
 		ProgressText->SetText(FText::FromString(FString::Printf(TEXT("准备分批转换 %d 个材质"), BatchedReplaceTotal)));
 	}
 	RegisterActiveTimer(0.05f, FWidgetActiveTimerDelegate::CreateSP(this, &SPBRSceneMaterialReplaceTab::ProcessReplaceBatch));
+	return FReply::Handled();
+}
+
+FReply SPBRSceneMaterialReplaceTab::OnCancelReplace()
+{
+	if (bReplaceInProgress)
+	{
+		bCancelReplaceRequested = true;
+		if (ProgressText.IsValid())
+		{
+			ProgressText->SetText(LOCTEXT("ReplaceCancelRequested", "已请求取消，当前材质处理完成后停止"));
+		}
+	}
 	return FReply::Handled();
 }
 
@@ -629,10 +642,25 @@ EActiveTimerReturnType SPBRSceneMaterialReplaceTab::ProcessReplaceBatch(double I
 		return EActiveTimerReturnType::Stop;
 	}
 
+	if (bCancelReplaceRequested)
+	{
+		bReplaceInProgress = false;
+		bCancelReplaceRequested = false;
+		BatchedReplaceItems.Reset();
+		if (ProgressText.IsValid())
+		{
+			ProgressText->SetText(FText::FromString(FString::Printf(TEXT("已取消转换，已处理 %d/%d"), BatchedReplaceIndex, BatchedReplaceTotal)));
+		}
+		RefreshList();
+		return EActiveTimerReturnType::Stop;
+	}
+
 	if (!BatchedReplaceItems.IsValidIndex(BatchedReplaceIndex))
 	{
 		bReplaceInProgress = false;
+		bCancelReplaceRequested = false;
 		ReplaceProgress = 1.0f;
+		BatchedReplaceItems.Reset();
 		RefreshList();
 		if (ProgressText.IsValid())
 		{

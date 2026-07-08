@@ -1043,6 +1043,32 @@ static TArray<FString> GetSceneTextureParameterSearchTokens(const FName& TargetP
 	return {};
 }
 
+static bool IsSceneStrictScalarTextureParameter(const FName& TargetParameterName)
+{
+	return TargetParameterName == FPBRMaterialParameters::RoughnessTexture ||
+		TargetParameterName == FPBRMaterialParameters::SpecularTexture ||
+		TargetParameterName == FPBRMaterialParameters::MetallicTexture ||
+		TargetParameterName == FPBRMaterialParameters::AOTexture ||
+		TargetParameterName == FPBRMaterialParameters::HeightTexture;
+}
+
+static bool DoesSceneTextureNameMatchTargetChannel(const UTexture* Texture, const FName& TargetParameterName)
+{
+	if (!Texture)
+	{
+		return false;
+	}
+
+	const TArray<FString> SearchTokens = GetSceneTextureParameterSearchTokens(TargetParameterName);
+	if (SearchTokens.IsEmpty())
+	{
+		return true;
+	}
+
+	return SceneNameContainsAnyToken(Texture->GetName(), SearchTokens) ||
+		SceneNameContainsAnyToken(Texture->GetPathName(), SearchTokens);
+}
+
 static EMaterialProperty GetSceneMaterialPropertyForTextureParameter(const FName& TargetParameterName)
 {
 	if (TargetParameterName == FPBRMaterialParameters::BaseColorTexture) { return MP_BaseColor; }
@@ -1539,14 +1565,17 @@ static UTexture2D* BakeSceneSourceMaterialPropertyTexture(
 
 	const FIntPoint TextureSize = CalculateSceneBakeTextureSize(SourceMaterial, TargetParameterName, ReferenceTexture, MaxBakeTextureSize);
 	const FString PackagePath = BuildSceneBakedTexturePackagePath(Component, SlotIndex, TargetParameterName, OutputRoot);
-	if (UTexture2D* ExistingTexture = Cast<UTexture2D>(UEditorAssetLibrary::LoadAsset(PackagePath)))
+	if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
 	{
-		const FIntPoint ExistingSize(ExistingTexture->GetSizeX(), ExistingTexture->GetSizeY());
-		if (ExistingSize == TextureSize)
+		if (UTexture2D* ExistingTexture = Cast<UTexture2D>(UEditorAssetLibrary::LoadAsset(PackagePath)))
 		{
-			return ExistingTexture;
+			const FIntPoint ExistingSize(ExistingTexture->GetSizeX(), ExistingTexture->GetSizeY());
+			if (ExistingSize == TextureSize)
+			{
+				return ExistingTexture;
+			}
+			UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Rebuilding baked texture %s from %dx%d to %dx%d"), *PackagePath, ExistingSize.X, ExistingSize.Y, TextureSize.X, TextureSize.Y);
 		}
-		UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Rebuilding baked texture %s from %dx%d to %dx%d"), *PackagePath, ExistingSize.X, ExistingSize.Y, TextureSize.X, TextureSize.Y);
 		UEditorAssetLibrary::DeleteAsset(PackagePath);
 	}
 
@@ -2019,9 +2048,23 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 		{
 			FallbackTexture = FindBestSceneSourceTextureParameter(SourceMaterial, TargetParameterName);
 		}
+		if (IsSceneStrictScalarTextureParameter(TargetParameterName) &&
+			!DoesSceneTextureNameMatchTargetChannel(FallbackTexture, TargetParameterName))
+		{
+			FallbackTexture = nullptr;
+		}
 
 		UTexture* SourceTexture = nullptr;
-		if (ChannelState.bShouldBake)
+		const bool bHasExplicitChannelTexture = IsValidSceneSourceMigrationTexture(FallbackTexture) &&
+			(!IsSceneStrictScalarTextureParameter(TargetParameterName) || DoesSceneTextureNameMatchTargetChannel(FallbackTexture, TargetParameterName));
+		const bool bCanBakeAmbiguousTextureChain =
+			(TargetParameterName == FPBRMaterialParameters::BaseColorTexture ||
+				TargetParameterName == FPBRMaterialParameters::NormalTexture ||
+				TargetParameterName == FPBRMaterialParameters::OpacityTexture ||
+				TargetParameterName == FPBRMaterialParameters::EmissiveTexture) &&
+			ChannelState.bHasTexture;
+		const bool bHasBakeableTextureSource = bHasExplicitChannelTexture || bCanBakeAmbiguousTextureChain;
+		if (ChannelState.bShouldBake && bHasBakeableTextureSource)
 		{
 			SourceTexture = BakeSceneSourceMaterialPropertyTexture(SourceMaterial, Component, SlotIndex, TargetParameterName, OutputRoot, FallbackTexture, MaxBakeTextureSize);
 			if (!SourceTexture)
@@ -2033,6 +2076,12 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 				UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Rejected tiny baked texture %s for channel %s; falling back to source texture %s"), *SourceTexture->GetName(), *TargetParameterName.ToString(), *FallbackTexture->GetName());
 				SourceTexture = nullptr;
 			}
+		}
+		else if (ChannelState.bShouldBake)
+		{
+			UE_LOG(LogTemp, Verbose, TEXT("PBRStudio: Skipped baking channel %s from %s because no valid source texture was found"),
+				*TargetParameterName.ToString(),
+				*SourceMaterial->GetName());
 		}
 		if (!SourceTexture)
 		{

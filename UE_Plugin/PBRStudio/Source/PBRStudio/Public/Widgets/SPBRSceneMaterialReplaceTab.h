@@ -45,15 +45,16 @@ private:
 	float NormalStrength = 2.0f;
 	int32 MaxTextureSize = 2048;
 	bool bReplaceInProgress = false;
+	bool bCancelReplaceRequested = false;
 	int32 BatchedReplaceIndex = 0;
 	int32 BatchedReplaceTotal = 0;
-	double LastProgressUiPumpTime = 0.0;
 	FPBRSceneReplaceSettings BatchedReplaceSettings;
 	FPBRSceneReplaceResult BatchedReplaceResult;
 	TArray<TSharedPtr<FPBRSceneMaterialCandidate>> BatchedReplaceItems;
 
 	FReply OnScanScene();
 	FReply OnReplaceChecked();
+	FReply OnCancelReplace();
 	FReply OnUndoReplacement();
 	FReply OnManualRefreshScene();
 	FReply OnSelectAll();
