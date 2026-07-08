@@ -2708,10 +2708,7 @@ UMaterial* FPBRMaterialTemplateManager::EnsureTemplateMaterial(EPBRMaterialType 
 	{
 		if (UMaterial* ExistingMaterial = Cast<UMaterial>(Existing))
 		{
-			ResetMaterialGraph(ExistingMaterial);
-			BuildTemplateGraph(ExistingMaterial, MaterialType, OutMessage);
-			SaveMaterial(ExistingMaterial);
-			OutMessage = TEXT("已重建插件自带母材质图表并清理多余节点");
+			OutMessage = TEXT("已使用插件自带母材质");
 			return ExistingMaterial;
 		}
 	}
@@ -2744,10 +2741,7 @@ UMaterial* FPBRMaterialTemplateManager::EnsureTemplateMaterial(EPBRMaterialType 
 		{
 			if (UMaterial* ExistingProjectMaterial = Cast<UMaterial>(ExistingProject))
 			{
-				ResetMaterialGraph(ExistingProjectMaterial);
-				BuildTemplateGraph(ExistingProjectMaterial, MaterialType, OutMessage);
-				SaveMaterial(ExistingProjectMaterial);
-				OutMessage = TEXT("插件母材质不可写，已回退并重建项目母材质: ") + PluginMessage;
+				OutMessage = TEXT("插件母材质不可写，已回退使用项目母材质: ") + PluginMessage;
 				return ExistingProjectMaterial;
 			}
 		}

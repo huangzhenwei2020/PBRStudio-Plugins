@@ -1584,6 +1584,17 @@ static UTexture2D* BakeSceneSourceMaterialPropertyTexture(
 	{
 		return nullptr;
 	}
+	if (BakedSize->X < TextureSize.X || BakedSize->Y < TextureSize.Y)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Rejected undersized baked output for %s from %s. Requested %dx%d, got %dx%d"),
+			*TargetParameterName.ToString(),
+			*SourceMaterial->GetName(),
+			TextureSize.X,
+			TextureSize.Y,
+			BakedSize->X,
+			BakedSize->Y);
+		return nullptr;
+	}
 
 	const EMaterialSamplerType SamplerType = GetSceneSamplerTypeForTextureParameter(TargetParameterName);
 	const TextureCompressionSettings CompressionSettings = SamplerType == EMaterialSamplerType::SAMPLERTYPE_Normal
