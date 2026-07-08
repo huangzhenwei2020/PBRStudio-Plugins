@@ -634,6 +634,7 @@ FReply SPBRSceneMaterialReplaceTab::OnReplaceChecked()
 
 	BatchedReplaceSettings = BuildSettings();
 	BatchedReplaceSettings.bSaveGeneratedAssets = false;
+	BatchedReplaceSettings.bBakeComplexMaterialChannels = false;
 	BatchedReplaceSettings.GeneratedPackageCallback = [this](UPackage* Package)
 	{
 		AddBatchedReplacePackage(Package);
@@ -710,6 +711,7 @@ EActiveTimerReturnType SPBRSceneMaterialReplaceTab::ProcessReplaceBatch(double I
 	const int32 DisplayIndex = BatchedReplaceIndex + 1;
 	const FString CurrentName = CurrentItem.IsValid() ? CurrentItem->MaterialName : FString(TEXT("无效材质"));
 	UpdateReplaceProgress(BatchedReplaceIndex, BatchedReplaceTotal, FString::Printf(TEXT("正在转换 %d/%d: %s"), DisplayIndex, BatchedReplaceTotal, *CurrentName));
+	UE_LOG(LogTemp, Display, TEXT("PBRStudio: Scene material replace batch %d/%d: %s"), DisplayIndex, BatchedReplaceTotal, *CurrentName);
 
 	TArray<TSharedPtr<FPBRSceneMaterialCandidate>> SingleItemBatch;
 	SingleItemBatch.Add(CurrentItem);

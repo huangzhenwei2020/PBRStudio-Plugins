@@ -2044,6 +2044,7 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 	int32 SlotIndex,
 	const FString& OutputRoot,
 	int32 MaxBakeTextureSize,
+	bool bBakeComplexMaterialChannels,
 	bool bSaveGeneratedAssets,
 	const TFunction<void(UPackage*)>& GeneratedPackageCallback)
 {
@@ -2089,7 +2090,7 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 				TargetParameterName == FPBRMaterialParameters::EmissiveTexture) &&
 			ChannelState.bHasTexture;
 		const bool bHasBakeableTextureSource = bHasExplicitChannelTexture || bCanBakeAmbiguousTextureChain;
-		if (ChannelState.bShouldBake && bHasBakeableTextureSource)
+		if (ChannelState.bShouldBake && bHasBakeableTextureSource && bBakeComplexMaterialChannels)
 		{
 			SourceTexture = BakeSceneSourceMaterialPropertyTexture(SourceMaterial, Component, SlotIndex, TargetParameterName, OutputRoot, FallbackTexture, MaxBakeTextureSize, bSaveGeneratedAssets, GeneratedPackageCallback);
 			if (!SourceTexture)
@@ -2104,7 +2105,7 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 		}
 		else if (ChannelState.bShouldBake)
 		{
-			UE_LOG(LogTemp, Verbose, TEXT("PBRStudio: Skipped baking channel %s from %s because no valid source texture was found"),
+			UE_LOG(LogTemp, Verbose, TEXT("PBRStudio: Skipped baking channel %s from %s because complex channel baking is disabled or no valid source texture was found"),
 				*TargetParameterName.ToString(),
 				*SourceMaterial->GetName());
 		}
@@ -2252,6 +2253,7 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 		Candidate.Slots.Num() > 0 ? Candidate.Slots[0].MaterialIndex : INDEX_NONE,
 		Settings.OutputRoot,
 		GetSafeSceneReplaceOutputSize(Settings),
+		Settings.bBakeComplexMaterialChannels,
 		Settings.bSaveGeneratedAssets,
 		Settings.GeneratedPackageCallback);
 	SyncSceneTextureUsageSwitches(Instance);

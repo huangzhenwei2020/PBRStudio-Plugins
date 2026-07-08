@@ -89,6 +89,7 @@ struct PBRSTUDIO_API FPBRSceneReplaceSettings
 	bool bGenerateORM = false;
 	bool bOnlyImageExtensions = true;
 	bool bSaveGeneratedAssets = true;
+	bool bBakeComplexMaterialChannels = true;
 	TFunction<void(int32 Current, int32 Total, const FString& Status)> ProgressCallback;
 	TFunction<void(UPackage* Package)> GeneratedPackageCallback;
 };
