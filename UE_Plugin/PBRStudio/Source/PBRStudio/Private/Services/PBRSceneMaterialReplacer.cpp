@@ -1413,6 +1413,76 @@ static bool ShouldRejectSceneBakedTextureForFallback(const UTexture* BakedTextur
 		!IsSceneMigrationTextureSuspiciouslySmall(FallbackTexture);
 }
 
+static FIntPoint GetSceneTextureImportedOrResidentSize(const UTexture* Texture)
+{
+	const UTexture2D* Texture2D = Cast<UTexture2D>(Texture);
+	if (!Texture2D)
+	{
+		return FIntPoint::ZeroValue;
+	}
+
+	const FIntPoint ImportedSize = Texture2D->GetImportedSize();
+	if (ImportedSize.X > 0 && ImportedSize.Y > 0)
+	{
+		return ImportedSize;
+	}
+	return FIntPoint(Texture2D->GetSizeX(), Texture2D->GetSizeY());
+}
+
+static void AccumulateSceneBakeTextureSize(const UTexture* Texture, FIntPoint& InOutSize)
+{
+	if (!IsValidSceneSourceMigrationTexture(Texture))
+	{
+		return;
+	}
+
+	const FIntPoint TextureSize = GetSceneTextureImportedOrResidentSize(Texture);
+	if (TextureSize.X > 0 && TextureSize.Y > 0)
+	{
+		InOutSize.X = FMath::Max(InOutSize.X, TextureSize.X);
+		InOutSize.Y = FMath::Max(InOutSize.Y, TextureSize.Y);
+	}
+}
+
+static FIntPoint CalculateSceneBakeTextureSize(UMaterialInterface* SourceMaterial, const FName& TargetParameterName, const UTexture* ReferenceTexture)
+{
+	FIntPoint DesiredSize = FIntPoint::ZeroValue;
+	AccumulateSceneBakeTextureSize(ReferenceTexture, DesiredSize);
+
+	const EMaterialProperty MaterialProperty = GetSceneMaterialPropertyForTextureParameter(TargetParameterName);
+	if (SourceMaterial && MaterialProperty != MP_MAX)
+	{
+		FStaticParameterSet StaticParameters;
+		SourceMaterial->GetStaticParameterValues(StaticParameters);
+
+		TArray<UTexture*> ChainTextures;
+		TArray<FName> TextureParameterNames;
+		SourceMaterial->GetTexturesInPropertyChain(MaterialProperty, ChainTextures, &TextureParameterNames, &StaticParameters, ERHIFeatureLevel::Num, EMaterialQualityLevel::Num);
+		for (int32 TextureIndex = 0; TextureIndex < ChainTextures.Num(); ++TextureIndex)
+		{
+			UTexture* ResolvedTexture = ChainTextures[TextureIndex];
+			if (TextureParameterNames.IsValidIndex(TextureIndex) && !TextureParameterNames[TextureIndex].IsNone())
+			{
+				UTexture* ParameterTexture = nullptr;
+				if (SourceMaterial->GetTextureParameterValue(FMaterialParameterInfo(TextureParameterNames[TextureIndex]), ParameterTexture))
+				{
+					ResolvedTexture = ParameterTexture;
+				}
+			}
+			AccumulateSceneBakeTextureSize(ResolvedTexture, DesiredSize);
+		}
+	}
+
+	if (DesiredSize.X <= 0 || DesiredSize.Y <= 0)
+	{
+		DesiredSize = SourceMaterial ? FMaterialUtilities::FindMaxTextureSize(SourceMaterial, FIntPoint(512, 512)) : FIntPoint(512, 512);
+	}
+
+	DesiredSize.X = FMath::Clamp(DesiredSize.X, 512, 4096);
+	DesiredSize.Y = FMath::Clamp(DesiredSize.Y, 512, 4096);
+	return DesiredSize;
+}
+
 static FString BuildSceneBakedTexturePackagePath(const UPrimitiveComponent* Component, int32 SlotIndex, const FName& TargetParameterName, const FString& OutputRoot)
 {
 	const AActor* Owner = Component ? Component->GetOwner() : nullptr;
@@ -1429,7 +1499,8 @@ static UTexture2D* BakeSceneSourceMaterialPropertyTexture(
 	const UPrimitiveComponent* Component,
 	int32 SlotIndex,
 	const FName& TargetParameterName,
-	const FString& OutputRoot)
+	const FString& OutputRoot,
+	const UTexture* ReferenceTexture)
 {
 	if (!SourceMaterial)
 	{
@@ -1442,15 +1513,18 @@ static UTexture2D* BakeSceneSourceMaterialPropertyTexture(
 		return nullptr;
 	}
 
+	const FIntPoint TextureSize = CalculateSceneBakeTextureSize(SourceMaterial, TargetParameterName, ReferenceTexture);
 	const FString PackagePath = BuildSceneBakedTexturePackagePath(Component, SlotIndex, TargetParameterName, OutputRoot);
 	if (UTexture2D* ExistingTexture = Cast<UTexture2D>(UEditorAssetLibrary::LoadAsset(PackagePath)))
 	{
-		return ExistingTexture;
+		const FIntPoint ExistingSize(ExistingTexture->GetSizeX(), ExistingTexture->GetSizeY());
+		if (ExistingSize.X >= TextureSize.X && ExistingSize.Y >= TextureSize.Y)
+		{
+			return ExistingTexture;
+		}
+		UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Rebuilding undersized baked texture %s from %dx%d to %dx%d"), *PackagePath, ExistingSize.X, ExistingSize.Y, TextureSize.X, TextureSize.Y);
+		UEditorAssetLibrary::DeleteAsset(PackagePath);
 	}
-
-	FIntPoint TextureSize = FMaterialUtilities::FindMaxTextureSize(SourceMaterial, FIntPoint(512, 512));
-	TextureSize.X = FMath::Clamp(TextureSize.X, 256, 2048);
-	TextureSize.Y = FMath::Clamp(TextureSize.Y, 256, 2048);
 
 	FMeshData MeshSettings;
 	MeshSettings.MeshDescription = nullptr;
@@ -1913,7 +1987,7 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 		UTexture* SourceTexture = nullptr;
 		if (ChannelState.bShouldBake)
 		{
-			SourceTexture = BakeSceneSourceMaterialPropertyTexture(SourceMaterial, Component, SlotIndex, TargetParameterName, OutputRoot);
+			SourceTexture = BakeSceneSourceMaterialPropertyTexture(SourceMaterial, Component, SlotIndex, TargetParameterName, OutputRoot, FallbackTexture);
 			if (!SourceTexture)
 			{
 				UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Failed to bake source material channel %s from %s"), *TargetParameterName.ToString(), *SourceMaterial->GetName());
