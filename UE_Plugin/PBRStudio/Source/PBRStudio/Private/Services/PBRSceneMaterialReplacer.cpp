@@ -2335,6 +2335,28 @@ static bool SetSceneTextureParameterEditorOnly(UMaterialInstanceConstant* Instan
 	return SwitchNames.Num() > 0;
 }
 
+static void ResetSceneTextureParameterToDefault(UMaterialInstanceConstant* Instance, const FName& TextureParameterName)
+{
+	if (!Instance)
+	{
+		return;
+	}
+
+	UTexture* DefaultTexture = LoadSceneEngineDefaultTexture(GetSceneSamplerTypeForTextureParameter(TextureParameterName));
+	TArray<FName> TextureNames;
+	AppendSceneTextureParameterAliases(TextureParameterName, TextureNames);
+	for (const FName& Name : TextureNames)
+	{
+		Instance->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(Name), DefaultTexture);
+	}
+
+	const FName SwitchParameterName = GetSceneTextureSwitchParameterName(TextureParameterName);
+	if (!SwitchParameterName.IsNone())
+	{
+		SetSceneSwitchParameterEditorOnly(Instance, SwitchParameterName, false);
+	}
+}
+
 static void ApplyAdvancedGlassParameterDefaults(UMaterialInstanceConstant* Instance)
 {
 	if (!Instance)
@@ -2519,6 +2541,7 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 				SourceTexture ? *SourceTexture->GetName() : TEXT("None"),
 				*TargetParameterName.ToString());
 			SourceTexture = nullptr;
+			ResetSceneTextureParameterToDefault(TargetInstance, TargetParameterName);
 		}
 
 		if (SourceTexture)
@@ -2529,6 +2552,10 @@ static void MigrateSceneSourceMaterialToManagedInstance(
 		}
 
 		ApplySimpleSceneSourceChannelValue(TargetInstance, TargetParameterName, ChannelState);
+		if (IsSceneStrictScalarTextureParameter(TargetParameterName) && !ChannelState.bHasScalar)
+		{
+			ResetSceneTextureParameterToDefault(TargetInstance, TargetParameterName);
+		}
 	}
 }
 
@@ -2554,6 +2581,13 @@ static bool SyncSceneTextureUsageSwitches(UMaterialInstanceConstant* Instance, b
 
 		UTexture* Texture = nullptr;
 		Instance->GetTextureParameterValue(FMaterialParameterInfo(Binding.TextureParameterName), Texture);
+		if (ShouldRejectSceneTextureForTargetChannel(Texture, Binding.TextureParameterName, 1024))
+		{
+			ResetSceneTextureParameterToDefault(Instance, Binding.TextureParameterName);
+			bChanged = true;
+			continue;
+		}
+
 		const bool bShouldUseTexture = IsValidSceneSourceMigrationTexture(Texture);
 		if (ReadSceneStaticSwitchParameter(Instance, Binding.SwitchParameterName, false) != bShouldUseTexture)
 		{
@@ -2572,7 +2606,7 @@ static FString BuildSceneManagedInstancePackagePath(const FString& OutputRoot, c
 	return Root / CleanName / CleanName;
 }
 
-static bool ShouldGenerateSceneBPRCompanionTexturesForInstance(
+static bool CanGenerateSceneBPRCompanionTexturesForInstance(
 	UMaterialInstanceConstant* Instance,
 	const FPBRSceneMaterialCandidate& Candidate,
 	UTexture2D*& OutBaseColorTexture)
@@ -2597,17 +2631,29 @@ static bool ShouldGenerateSceneBPRCompanionTexturesForInstance(
 		return false;
 	}
 
-	const bool bHasAnyExplicitCompanionChannel =
-		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseNormalTexture, false) ||
-		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseRoughnessTexture, false) ||
-		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseMetallicTexture, false) ||
-		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseAOTexture, false) ||
-		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseSpecularTexture, false) ||
-		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseHeightTexture, false) ||
-		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseOpacityTexture, false) ||
-		ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseEmissiveTexture, false);
+	return true;
+}
 
-	return !bHasAnyExplicitCompanionChannel;
+static bool ShouldFillSceneGeneratedTextureChannel(
+	UMaterialInstanceConstant* Instance,
+	const FName& TextureParameterName,
+	const FName& SwitchParameterName,
+	int32 MaxBakeTextureSize)
+{
+	if (!Instance)
+	{
+		return false;
+	}
+
+	UTexture* ExistingTexture = nullptr;
+	Instance->GetTextureParameterValue(FMaterialParameterInfo(TextureParameterName), ExistingTexture);
+	const bool bSwitchEnabled = ReadSceneStaticSwitchParameter(Instance, SwitchParameterName, false);
+	if (!bSwitchEnabled || !IsValidSceneSourceMigrationTexture(ExistingTexture))
+	{
+		return true;
+	}
+
+	return ShouldRejectSceneTextureForTargetChannel(ExistingTexture, TextureParameterName, MaxBakeTextureSize);
 }
 
 static void ApplySceneGeneratedTextureChannel(
@@ -2618,9 +2664,14 @@ static void ApplySceneGeneratedTextureChannel(
 	const FPBRMaterialSet& GeneratedSet,
 	const FString& PackagePath,
 	const FString& CleanName,
+	int32 MaxBakeTextureSize,
 	const TFunction<void(UPackage*)>& GeneratedPackageCallback)
 {
 	if (!Instance || !GeneratedSet.Channels.Contains(Channel))
+	{
+		return;
+	}
+	if (!ShouldFillSceneGeneratedTextureChannel(Instance, TextureParameterName, SwitchParameterName, MaxBakeTextureSize))
 	{
 		return;
 	}
@@ -2631,9 +2682,17 @@ static void ApplySceneGeneratedTextureChannel(
 		return;
 	}
 
-	const FString TextureName = TEXT("T_") + CleanName + TEXT("_") + Channel;
+	const FString TextureName = TEXT("T_") + CleanName + TEXT("_Auto_") + Channel;
 	if (UTexture2D* Texture = FPBRMaterialInstanceFactory::ImportTextureToAsset(*FilePath, PackagePath, TextureName, Channel))
 	{
+		if (ShouldRejectSceneTextureForTargetChannel(Texture, TextureParameterName, MaxBakeTextureSize))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Skipped generated normal-like texture %s for channel %s"),
+				*Texture->GetName(),
+				*TextureParameterName.ToString());
+			ResetSceneTextureParameterToDefault(Instance, TextureParameterName);
+			return;
+		}
 		SetSceneTextureParameterEditorOnly(Instance, TextureParameterName, Texture);
 		SetSceneSwitchParameterEditorOnly(Instance, SwitchParameterName, true);
 		if (GeneratedPackageCallback)
@@ -2652,7 +2711,7 @@ static bool ApplySceneBPRCompanionTexturesIfNeeded(
 	FString& OutMessage)
 {
 	UTexture2D* BaseColorTexture = nullptr;
-	if (!ShouldGenerateSceneBPRCompanionTexturesForInstance(Instance, Candidate, BaseColorTexture))
+	if (!CanGenerateSceneBPRCompanionTexturesForInstance(Instance, Candidate, BaseColorTexture))
 	{
 		return false;
 	}
@@ -2678,17 +2737,17 @@ static bool ApplySceneBPRCompanionTexturesIfNeeded(
 
 	const FString CleanName = FPBRMaterialInstanceFactory::SanitizeAssetName(OutputName);
 	const FString PackagePath = FPackageName::GetLongPackagePath(InstancePackagePath);
-	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::NormalDX.ToString(), FPBRMaterialParameters::NormalTexture, FPBRMaterialParameters::UseNormalTexture, GeneratedSet, PackagePath, CleanName, Settings.GeneratedPackageCallback);
-	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Roughness.ToString(), FPBRMaterialParameters::RoughnessTexture, FPBRMaterialParameters::UseRoughnessTexture, GeneratedSet, PackagePath, CleanName, Settings.GeneratedPackageCallback);
-	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Metallic.ToString(), FPBRMaterialParameters::MetallicTexture, FPBRMaterialParameters::UseMetallicTexture, GeneratedSet, PackagePath, CleanName, Settings.GeneratedPackageCallback);
-	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::AO.ToString(), FPBRMaterialParameters::AOTexture, FPBRMaterialParameters::UseAOTexture, GeneratedSet, PackagePath, CleanName, Settings.GeneratedPackageCallback);
+	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::NormalDX.ToString(), FPBRMaterialParameters::NormalTexture, FPBRMaterialParameters::UseNormalTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.GeneratedPackageCallback);
+	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Roughness.ToString(), FPBRMaterialParameters::RoughnessTexture, FPBRMaterialParameters::UseRoughnessTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.GeneratedPackageCallback);
+	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Metallic.ToString(), FPBRMaterialParameters::MetallicTexture, FPBRMaterialParameters::UseMetallicTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.GeneratedPackageCallback);
+	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::AO.ToString(), FPBRMaterialParameters::AOTexture, FPBRMaterialParameters::UseAOTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.GeneratedPackageCallback);
 	if (Settings.bGenerateSpecular)
 	{
-		ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Specular.ToString(), FPBRMaterialParameters::SpecularTexture, FPBRMaterialParameters::UseSpecularTexture, GeneratedSet, PackagePath, CleanName, Settings.GeneratedPackageCallback);
+		ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Specular.ToString(), FPBRMaterialParameters::SpecularTexture, FPBRMaterialParameters::UseSpecularTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.GeneratedPackageCallback);
 	}
 	if (Settings.bGenerateHeight)
 	{
-		ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Height.ToString(), FPBRMaterialParameters::HeightTexture, FPBRMaterialParameters::UseHeightTexture, GeneratedSet, PackagePath, CleanName, Settings.GeneratedPackageCallback);
+		ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Height.ToString(), FPBRMaterialParameters::HeightTexture, FPBRMaterialParameters::UseHeightTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.GeneratedPackageCallback);
 	}
 
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, Settings.NormalStrength);
@@ -4700,6 +4759,17 @@ bool FPBRSceneMaterialReplacer::SetStaticSwitchParameterForSlot(UPrimitiveCompon
 	const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRSetSelectedMaterialSwitch", "PBRStudio Set Selected Material Switch"));
 	Instance->Modify();
 	SetSceneSwitchParameterEditorOnly(Instance, ParameterName, bValue);
+	if (!bValue)
+	{
+		for (const FPBRSceneTextureParameterBinding& Binding : GetSceneTextureParameterBindings())
+		{
+			if (Binding.SwitchParameterName == ParameterName)
+			{
+				ResetSceneTextureParameterToDefault(Instance, Binding.TextureParameterName);
+				break;
+			}
+		}
+	}
 	Instance->InitStaticPermutation();
 	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
 	Instance->PostEditChange();
