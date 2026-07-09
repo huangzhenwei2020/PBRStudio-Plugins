@@ -2862,13 +2862,15 @@ static UMaterialInstanceConstant* CreateOrUpdateSceneManagedReplacementInstance(
 		Settings.bSaveGeneratedAssets,
 		Settings.GeneratedPackageCallback);
 	FString CompanionMessage;
-	const bool bGeneratedCompanionTextures = ApplySceneBPRCompanionTexturesIfNeeded(
-		Instance,
-		Candidate,
-		OutputName,
-		Settings,
-		InstancePackagePath,
-		CompanionMessage);
+	const bool bGeneratedCompanionTextures = Settings.bGenerateCompanionTextures
+		? ApplySceneBPRCompanionTexturesIfNeeded(
+			Instance,
+			Candidate,
+			OutputName,
+			Settings,
+			InstancePackagePath,
+			CompanionMessage)
+		: false;
 	SyncSceneTextureUsageSwitches(Instance, bAllowEmissiveMigration);
 
 	if (!ReadSceneStaticSwitchParameter(Instance, FPBRMaterialParameters::UseBaseColorTexture, false))
@@ -4634,6 +4636,9 @@ FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMateria
 	Settings.OutputRoot = TEXT("/Game/PBRStudio/SelectedMaterials");
 	Settings.bGenerateOpacity = true;
 	Settings.bGenerateEmissive = true;
+	Settings.bSaveGeneratedAssets = false;
+	Settings.bBakeComplexMaterialChannels = false;
+	Settings.bGenerateCompanionTextures = false;
 
 	FString ConvertMessage;
 	UMaterialInstanceConstant* Instance = nullptr;
@@ -4659,7 +4664,7 @@ FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMateria
 	Result.Message = ConvertMessage.IsEmpty() ? FString::Printf(TEXT("已接管材质槽：%s"), *Instance->GetName()) : ConvertMessage;
 	if (Candidate.bBaseColorNeedsBake)
 	{
-		Result.Message += TEXT("；原材质复杂基础色通道已按目标材质通道尝试烘焙迁移。");
+		Result.Message += TEXT("；调参已使用轻量接管模式，复杂贴图烘焙请使用材质转换功能执行。");
 	}
 	Result.bCreatedOrUpdatedInstance = true;
 	Result.bAssignedToSlot = true;
