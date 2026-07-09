@@ -112,6 +112,12 @@ struct PBRSTUDIO_API FPBRSceneEditableMaterialResult
 	bool bAssignedToSlot = false;
 };
 
+struct PBRSTUDIO_API FPBRSceneEditableMaterialOptions
+{
+	bool bBakeComplexMaterialChannels = false;
+	bool bGenerateCompanionTextures = true;
+};
+
 class PBRSTUDIO_API FPBRSceneMaterialReplacer
 {
 public:
@@ -126,7 +132,7 @@ public:
 
 	static void RefreshCurrentLevelMaterialAssignments();
 	static int32 UndoLastReplacement(FPBRSceneReplaceResult& OutResult);
-	static FPBRSceneEditableMaterialResult EnsureEditableMaterialForSlot(UPrimitiveComponent* Component, int32 MaterialIndex);
+	static FPBRSceneEditableMaterialResult EnsureEditableMaterialForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FPBRSceneEditableMaterialOptions& Options = FPBRSceneEditableMaterialOptions());
 	static bool SetMaterialTypeForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, EPBRMaterialType MaterialType, FString& OutMessage);
 	static bool SetScalarParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, float Value, FString& OutMessage);
 	static bool SetVectorParameterForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FName& ParameterName, const FLinearColor& Value, FString& OutMessage);

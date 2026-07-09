@@ -1138,7 +1138,14 @@ static bool ShouldRejectSceneTextureForTargetChannel(const UTexture* Texture, co
 
 	if (TargetParameterName == FPBRMaterialParameters::NormalTexture)
 	{
-		return false;
+		const UTexture2D* Texture2D = Cast<UTexture2D>(Texture);
+		if (!Texture2D)
+		{
+			return true;
+		}
+
+		return Texture2D->CompressionSettings != TextureCompressionSettings::TC_Normalmap &&
+			!DoesSceneTextureLookLikeBlueNormalPixels(Cast<UTexture2D>(const_cast<UTexture*>(Texture)), MaxBakeTextureSize);
 	}
 
 	if (DoesSceneTextureLookLikeNormalMap(Texture))
@@ -4572,7 +4579,7 @@ static void ApplySelectionMaterialTypeDefaults(UMaterialInstanceConstant* Instan
 	}
 }
 
-FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMaterialForSlot(UPrimitiveComponent* Component, int32 MaterialIndex)
+FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMaterialForSlot(UPrimitiveComponent* Component, int32 MaterialIndex, const FPBRSceneEditableMaterialOptions& Options)
 {
 	FPBRSceneEditableMaterialResult Result;
 	if (!Component)
@@ -4637,8 +4644,8 @@ FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMateria
 	Settings.bGenerateOpacity = true;
 	Settings.bGenerateEmissive = true;
 	Settings.bSaveGeneratedAssets = false;
-	Settings.bBakeComplexMaterialChannels = false;
-	Settings.bGenerateCompanionTextures = false;
+	Settings.bBakeComplexMaterialChannels = Options.bBakeComplexMaterialChannels;
+	Settings.bGenerateCompanionTextures = Options.bGenerateCompanionTextures;
 
 	FString ConvertMessage;
 	UMaterialInstanceConstant* Instance = nullptr;
@@ -4662,7 +4669,7 @@ FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMateria
 
 	Result.Instance = Instance;
 	Result.Message = ConvertMessage.IsEmpty() ? FString::Printf(TEXT("已接管材质槽：%s"), *Instance->GetName()) : ConvertMessage;
-	if (Candidate.bBaseColorNeedsBake)
+	if (Candidate.bBaseColorNeedsBake && !Options.bBakeComplexMaterialChannels)
 	{
 		Result.Message += TEXT("；调参已使用轻量接管模式，复杂贴图烘焙请使用材质转换功能执行。");
 	}

@@ -25,6 +25,7 @@ class FDragDropEvent;
 struct FAssetData;
 struct FPBRMagicDynamicMaterialParameter;
 struct FPBRMagicBuiltinMaterialItem;
+struct FPBRSceneEditableMaterialOptions;
 template<typename ItemType> class SListView;
 template<typename ItemType> class STileView;
 template<typename ItemType> class STreeView;
@@ -211,6 +212,7 @@ private:
 	FReply OnMaterialSlotDrop(const FGeometry& Geometry, const FDragDropEvent& DragDropEvent, TSharedPtr<FPBRMagicOutlinerItem> Item, int32 MaterialSlotIndex);
 	FReply OnModelReplacementDrop(const FGeometry& Geometry, const FDragDropEvent& DragDropEvent, TSharedPtr<FPBRMagicOutlinerItem> Item);
 	FReply OnEditSelectedMaterialSlot(TSharedPtr<FPBRMagicOutlinerItem> Item, int32 MaterialSlotIndex = INDEX_NONE);
+	bool PromptEditableMaterialOptions(FPBRSceneEditableMaterialOptions& OutOptions);
 	FReply OnOpenBuiltinMaterialLibraryClicked();
 	FReply OnApplySelectedBuiltinMaterialClicked();
 	void OpenBuiltinMaterialLibraryWindow();

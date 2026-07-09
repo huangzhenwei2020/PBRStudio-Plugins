@@ -9401,7 +9401,14 @@ FReply SPBRMagicOutlinerWindow::OnEditSelectedMaterialSlot(TSharedPtr<FPBRMagicO
 
 	UPrimitiveComponent* Component = PreferredSlot->MeshComponent.Get();
 	const int32 SlotIndex = PreferredSlot->SlotIndex;
-	FPBRSceneEditableMaterialResult Result = FPBRSceneMaterialReplacer::EnsureEditableMaterialForSlot(Component, SlotIndex);
+	FPBRSceneEditableMaterialOptions Options;
+	if (!PromptEditableMaterialOptions(Options))
+	{
+		StatusMessage = TEXT("已取消调参");
+		return FReply::Handled();
+	}
+
+	FPBRSceneEditableMaterialResult Result = FPBRSceneMaterialReplacer::EnsureEditableMaterialForSlot(Component, SlotIndex, Options);
 	if (!Result.Instance)
 	{
 		EditableMaterialComponent.Reset();
@@ -9417,6 +9424,119 @@ FReply SPBRMagicOutlinerWindow::OnEditSelectedMaterialSlot(TSharedPtr<FPBRMagicO
 	Invalidate(EInvalidateWidgetReason::LayoutAndVolatility);
 	OpenEditableMaterialParameterWindow();
 	return FReply::Handled();
+}
+
+bool SPBRMagicOutlinerWindow::PromptEditableMaterialOptions(FPBRSceneEditableMaterialOptions& OutOptions)
+{
+	OutOptions = FPBRSceneEditableMaterialOptions();
+
+	TSharedRef<bool> bAccepted = MakeShared<bool>(false);
+	TSharedRef<FPBRSceneEditableMaterialOptions> DialogOptions = MakeShared<FPBRSceneEditableMaterialOptions>(OutOptions);
+	TSharedRef<TWeakPtr<SWindow>> DialogWeak = MakeShared<TWeakPtr<SWindow>>();
+
+	TSharedRef<SWindow> Dialog = SNew(SWindow)
+		.Title(PBRText(TEXT("MagicAdjustOptionsTitle"), TEXT("调参接管选项"), TEXT("Adjust Material Options")))
+		.ClientSize(FVector2D(420.0f, 210.0f))
+		.SizingRule(ESizingRule::FixedSize)
+		.SupportsMaximize(false)
+		.SupportsMinimize(false);
+	*DialogWeak = Dialog;
+
+	Dialog->SetContent(
+		SNew(SBorder)
+		.BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
+		.Padding(14.0f)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
+			[
+				SNew(STextBlock)
+				.Text(PBRText(TEXT("MagicAdjustOptionsHeader"), TEXT("选择调参前怎么接管当前材质"), TEXT("Choose how to prepare this material before adjusting")))
+				.Font(FAppStyle::GetFontStyle("NormalFontBold"))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+			[
+				SNew(SCheckBox)
+				.IsChecked(ECheckBoxState::Unchecked)
+				.OnCheckStateChanged_Lambda([DialogOptions](ECheckBoxState State)
+				{
+					DialogOptions->bBakeComplexMaterialChannels = State == ECheckBoxState::Checked;
+				})
+				[
+					SNew(STextBlock)
+					.Text(PBRText(TEXT("MagicAdjustBakeComplex"), TEXT("烘焙复杂材质通道（更准但可能较慢）"), TEXT("Bake complex material channels (more accurate, slower)")))
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+			[
+				SNew(SCheckBox)
+				.IsChecked(ECheckBoxState::Checked)
+				.OnCheckStateChanged_Lambda([DialogOptions](ECheckBoxState State)
+				{
+					DialogOptions->bGenerateCompanionTextures = State == ECheckBoxState::Checked;
+				})
+				[
+					SNew(STextBlock)
+					.Text(PBRText(TEXT("MagicAdjustGenerateMissing"), TEXT("从基础色生成缺失通道贴图（法线 / 粗糙度 / 金属 / AO）"), TEXT("Generate missing channels from base color")))
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text(PBRText(TEXT("MagicAdjustOptionsHint"), TEXT("建议默认只生成缺失通道；遇到颜色混合、复杂节点材质时再启用烘焙。"), TEXT("Recommended: generate missing channels only; enable baking for complex mixed materials.")))
+				.Font(FAppStyle::GetFontStyle("SmallFont"))
+				.ColorAndOpacity(FSlateColor(FLinearColor(0.65f, 0.72f, 0.78f)))
+				.AutoWrapText(true)
+			]
+			+ SVerticalBox::Slot().FillHeight(1.0f)
+			[
+				SNew(SSpacer)
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.0f)
+				[
+					SNew(SSpacer)
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+				[
+					SNew(SButton)
+					.Text(PBRText(TEXT("MagicAdjustOptionsCancel"), TEXT("取消"), TEXT("Cancel")))
+					.OnClicked_Lambda([DialogWeak]()
+					{
+						if (TSharedPtr<SWindow> Window = DialogWeak->Pin())
+						{
+							Window->RequestDestroyWindow();
+						}
+						return FReply::Handled();
+					})
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SButton)
+					.Text(PBRText(TEXT("MagicAdjustOptionsApply"), TEXT("继续调参"), TEXT("Continue")))
+					.ButtonStyle(FAppStyle::Get(), "PrimaryButton")
+					.OnClicked_Lambda([bAccepted, DialogWeak]()
+					{
+						*bAccepted = true;
+						if (TSharedPtr<SWindow> Window = DialogWeak->Pin())
+						{
+							Window->RequestDestroyWindow();
+						}
+						return FReply::Handled();
+					})
+				]
+			]
+		]);
+
+	FSlateApplication::Get().AddModalWindow(Dialog, nullptr);
+
+	if (*bAccepted)
+	{
+		OutOptions = *DialogOptions;
+	}
+	return *bAccepted;
 }
 
 bool SPBRMagicOutlinerWindow::ResolvePreferredMaterialSlot(UPrimitiveComponent*& OutComponent, int32& OutSlotIndex, TSharedPtr<FPBRMagicOutlinerItem>* OutItem) const
