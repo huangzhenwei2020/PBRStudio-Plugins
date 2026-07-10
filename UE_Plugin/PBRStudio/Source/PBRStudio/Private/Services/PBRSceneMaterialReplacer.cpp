@@ -721,9 +721,15 @@ static UTexture2D* FindUsedTextureByTokens(
 	return nullptr;
 }
 
-static void AddOriginalTextureChannel(FPBRMaterialSet& Set, const FName& Channel, UTexture2D* Texture)
+static bool ShouldRejectSceneTextureForTargetChannel(const UTexture* Texture, const FName& TargetParameterName, int32 MaxBakeTextureSize);
+
+static void AddOriginalTextureChannel(
+	FPBRMaterialSet& Set,
+	const FName& Channel,
+	const FName& TargetParameterName,
+	UTexture2D* Texture)
 {
-	if (!Texture)
+	if (!Texture || ShouldRejectSceneTextureForTargetChannel(Texture, TargetParameterName, 1024))
 	{
 		return;
 	}
@@ -2574,6 +2580,8 @@ static bool SyncSceneTextureUsageSwitches(UMaterialInstanceConstant* Instance, b
 	}
 
 	bool bChanged = false;
+	UTexture* NormalTexture = nullptr;
+	Instance->GetTextureParameterValue(FMaterialParameterInfo(FPBRMaterialParameters::NormalTexture), NormalTexture);
 	for (const FPBRSceneTextureParameterBinding& Binding : GetSceneTextureParameterBindings())
 	{
 		if (Binding.TextureParameterName == FPBRMaterialParameters::EmissiveTexture && !bAllowEmissiveTexture)
@@ -2588,8 +2596,14 @@ static bool SyncSceneTextureUsageSwitches(UMaterialInstanceConstant* Instance, b
 
 		UTexture* Texture = nullptr;
 		Instance->GetTextureParameterValue(FMaterialParameterInfo(Binding.TextureParameterName), Texture);
-		if (ShouldRejectSceneTextureForTargetChannel(Texture, Binding.TextureParameterName, 1024))
+		const bool bDuplicatesNormalInScalarChannel =
+			IsSceneStrictScalarTextureParameter(Binding.TextureParameterName) &&
+			Texture && Texture == NormalTexture;
+		if (bDuplicatesNormalInScalarChannel || ShouldRejectSceneTextureForTargetChannel(Texture, Binding.TextureParameterName, 1024))
 		{
+			UE_LOG(LogTemp, Warning, TEXT("PBRStudio: Cleared invalid or cross-channel normal texture %s from %s"),
+				Texture ? *Texture->GetName() : TEXT("None"),
+				*Binding.TextureParameterName.ToString());
 			ResetSceneTextureParameterToDefault(Instance, Binding.TextureParameterName);
 			bChanged = true;
 			continue;
@@ -4600,14 +4614,10 @@ FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMateria
 		return Result;
 	}
 
-	if (UMaterialInstanceConstant* ExistingInstance = Cast<UMaterialInstanceConstant>(CurrentMaterial))
+	UMaterialInstanceConstant* ExistingManagedInstance = Cast<UMaterialInstanceConstant>(CurrentMaterial);
+	if (ExistingManagedInstance && !IsPBRStudioGeneratedMaterial(ExistingManagedInstance))
 	{
-		if (IsPBRStudioGeneratedMaterial(ExistingInstance))
-		{
-			Result.Instance = ExistingInstance;
-			Result.Message = FString::Printf(TEXT("当前槽位已使用现有 PBRStudio 材质实例参数：%s"), *ExistingInstance->GetName());
-			return Result;
-		}
+		ExistingManagedInstance = nullptr;
 	}
 
 	FPBRSceneMaterialCandidate Candidate;
@@ -4646,6 +4656,39 @@ FPBRSceneEditableMaterialResult FPBRSceneMaterialReplacer::EnsureEditableMateria
 	Settings.bSaveGeneratedAssets = false;
 	Settings.bBakeComplexMaterialChannels = Options.bBakeComplexMaterialChannels;
 	Settings.bGenerateCompanionTextures = Options.bGenerateCompanionTextures;
+
+	if (ExistingManagedInstance)
+	{
+		const FScopedTransaction Transaction(NSLOCTEXT("PBRStudio", "PBRAuditSelectedMaterial", "PBRStudio Audit Selected Material Channels"));
+		ExistingManagedInstance->Modify();
+		bool bChanged = SyncSceneTextureUsageSwitches(ExistingManagedInstance, Candidate.bLooksEmissive);
+		FString CompanionMessage;
+		const bool bGenerated = Options.bGenerateCompanionTextures && ApplySceneBPRCompanionTexturesIfNeeded(
+			ExistingManagedInstance,
+			Candidate,
+			ExistingManagedInstance->GetName(),
+			Settings,
+			ExistingManagedInstance->GetOutermost()->GetName(),
+			CompanionMessage);
+		bChanged |= SyncSceneTextureUsageSwitches(ExistingManagedInstance, Candidate.bLooksEmissive);
+		if (bChanged || bGenerated)
+		{
+			ExistingManagedInstance->PostEditChange();
+			ExistingManagedInstance->MarkPackageDirty();
+			RefreshPrimitiveAfterMaterialChange(Component, true);
+		}
+
+		Result.Instance = ExistingManagedInstance;
+		Result.bCreatedOrUpdatedInstance = bChanged || bGenerated;
+		Result.Message = bGenerated
+			? FString::Printf(TEXT("已检查并补齐现有 PBRStudio 材质通道：%s"), *ExistingManagedInstance->GetName())
+			: FString::Printf(TEXT("已检查现有 PBRStudio 材质通道：%s"), *ExistingManagedInstance->GetName());
+		if (!CompanionMessage.IsEmpty())
+		{
+			Result.Message += TEXT("；") + CompanionMessage;
+		}
+		return Result;
+	}
 
 	FString ConvertMessage;
 	UMaterialInstanceConstant* Instance = nullptr;
@@ -5396,32 +5439,32 @@ bool FPBRSceneMaterialReplacer::GeneratePBRSetFromTexture(UTexture2D* BaseColorT
 	if (bHasBaseColorTexture)
 	{
 		OutSet.Channels.Add(FPBRChannels::BaseColor.ToString(), BaseColorPath);
-		AddOriginalTextureChannel(OutSet, FPBRChannels::BaseColor, Candidate.BaseColorTexture.Get());
+		AddOriginalTextureChannel(OutSet, FPBRChannels::BaseColor, FPBRMaterialParameters::BaseColorTexture, Candidate.BaseColorTexture.Get());
 	}
 	if (Settings.bGenerateNormal)
 	{
 		OutSet.Channels.Add(FPBRChannels::NormalDX.ToString(), NormalPath);
-		AddOriginalTextureChannel(OutSet, FPBRChannels::NormalDX, Candidate.NormalTexture.Get());
+		AddOriginalTextureChannel(OutSet, FPBRChannels::NormalDX, FPBRMaterialParameters::NormalTexture, Candidate.NormalTexture.Get());
 	}
 	if (Settings.bGenerateRoughness)
 	{
 		OutSet.Channels.Add(FPBRChannels::Roughness.ToString(), RoughnessPath);
-		AddOriginalTextureChannel(OutSet, FPBRChannels::Roughness, Candidate.RoughnessTexture.Get());
+		AddOriginalTextureChannel(OutSet, FPBRChannels::Roughness, FPBRMaterialParameters::RoughnessTexture, Candidate.RoughnessTexture.Get());
 	}
 	if (Settings.bGenerateMetallic)
 	{
 		OutSet.Channels.Add(FPBRChannels::Metallic.ToString(), MetallicPath);
-		AddOriginalTextureChannel(OutSet, FPBRChannels::Metallic, Candidate.MetallicTexture.Get());
+		AddOriginalTextureChannel(OutSet, FPBRChannels::Metallic, FPBRMaterialParameters::MetallicTexture, Candidate.MetallicTexture.Get());
 	}
 	if (Settings.bGenerateAO)
 	{
 		OutSet.Channels.Add(FPBRChannels::AO.ToString(), AOPath);
-		AddOriginalTextureChannel(OutSet, FPBRChannels::AO, Candidate.AOTexture.Get());
+		AddOriginalTextureChannel(OutSet, FPBRChannels::AO, FPBRMaterialParameters::AOTexture, Candidate.AOTexture.Get());
 	}
 	if (Settings.bGenerateHeight)
 	{
 		OutSet.Channels.Add(FPBRChannels::Height.ToString(), HeightPath);
-		AddOriginalTextureChannel(OutSet, FPBRChannels::Height, Candidate.HeightTexture.Get());
+		AddOriginalTextureChannel(OutSet, FPBRChannels::Height, FPBRMaterialParameters::HeightTexture, Candidate.HeightTexture.Get());
 	}
 	if (Settings.bGenerateORM)
 	{
@@ -5430,25 +5473,25 @@ bool FPBRSceneMaterialReplacer::GeneratePBRSetFromTexture(UTexture2D* BaseColorT
 	if (Settings.bGenerateSpecular)
 	{
 		OutSet.Channels.Add(FPBRChannels::Specular.ToString(), SpecularPath);
-		AddOriginalTextureChannel(OutSet, FPBRChannels::Specular, Candidate.SpecularTexture.Get());
+		AddOriginalTextureChannel(OutSet, FPBRChannels::Specular, FPBRMaterialParameters::SpecularTexture, Candidate.SpecularTexture.Get());
 	}
 	if (Settings.bGenerateOpacity)
 	{
 		OutSet.Channels.Add(FPBRChannels::Opacity.ToString(), OpacityPath);
-		AddOriginalTextureChannel(OutSet, FPBRChannels::Opacity, Candidate.OpacityTexture.Get());
+		AddOriginalTextureChannel(OutSet, FPBRChannels::Opacity, FPBRMaterialParameters::OpacityTexture, Candidate.OpacityTexture.Get());
 	}
 	else
 	{
-		AddOriginalTextureChannel(OutSet, FPBRChannels::Opacity, Candidate.OpacityTexture.Get());
+		AddOriginalTextureChannel(OutSet, FPBRChannels::Opacity, FPBRMaterialParameters::OpacityTexture, Candidate.OpacityTexture.Get());
 	}
 	if (Settings.bGenerateEmissive && bLooksEmissive)
 	{
 		OutSet.Channels.Add(FPBRChannels::Emissive.ToString(), EmissivePath);
-		AddOriginalTextureChannel(OutSet, FPBRChannels::Emissive, Candidate.EmissiveTexture.Get());
+		AddOriginalTextureChannel(OutSet, FPBRChannels::Emissive, FPBRMaterialParameters::EmissiveTexture, Candidate.EmissiveTexture.Get());
 	}
 	else if (bLooksEmissive)
 	{
-		AddOriginalTextureChannel(OutSet, FPBRChannels::Emissive, Candidate.EmissiveTexture.Get());
+		AddOriginalTextureChannel(OutSet, FPBRChannels::Emissive, FPBRMaterialParameters::EmissiveTexture, Candidate.EmissiveTexture.Get());
 	}
 	OutMessage = TEXT("已生成 PBR 套图");
 	return true;

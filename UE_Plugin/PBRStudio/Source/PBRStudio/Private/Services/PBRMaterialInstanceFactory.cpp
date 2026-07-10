@@ -4,6 +4,7 @@
 #include "EditorAssetLibrary.h"
 #include "FileHelpers.h"
 #include "Factories/TextureFactory.h"
+#include "EditorReimportHandler.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "MaterialEditingLibrary.h"
@@ -381,6 +382,21 @@ UTexture2D* FPBRMaterialInstanceFactory::ImportTextureToAsset(const FString& Fil
 	if (UObject* Existing = UEditorAssetLibrary::LoadAsset(FullPackagePath))
 	{
 		UTexture2D* ExistingTexture = Cast<UTexture2D>(Existing);
+		if (ExistingTexture)
+		{
+			// Generated files deliberately reuse stable asset names. Force a reimport so the
+			// texture pixels cannot remain from an older conversion with the same name.
+			FReimportManager::Instance()->Reimport(
+				ExistingTexture,
+				false,
+				false,
+				FilePath,
+				nullptr,
+				INDEX_NONE,
+				true,
+				true,
+				false);
+		}
 		ConfigureTextureForChannel(ExistingTexture, Channel);
 		if (ExistingTexture)
 		{
