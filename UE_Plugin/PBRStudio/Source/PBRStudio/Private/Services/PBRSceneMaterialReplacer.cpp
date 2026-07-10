@@ -2703,7 +2703,11 @@ static void ApplySceneGeneratedTextureChannel(
 		return;
 	}
 
-	const FString TextureName = TEXT("T_") + CleanName + TEXT("_Auto_") + Channel;
+	const FString CleanChannel = FPBRMaterialInstanceFactory::SanitizeAssetName(Channel);
+	const FString RequiredSuffix = TEXT("_Auto_") + CleanChannel;
+	constexpr int32 MaxAssetNameLength = 80;
+	const int32 MaxMaterialPartLength = FMath::Max(1, MaxAssetNameLength - 2 - RequiredSuffix.Len());
+	const FString TextureName = TEXT("T_") + CleanName.Left(MaxMaterialPartLength) + RequiredSuffix;
 	if (UTexture2D* Texture = FPBRMaterialInstanceFactory::ImportTextureToAsset(*FilePath, PackagePath, TextureName, Channel))
 	{
 		if (ShouldRejectSceneTextureForTargetChannel(Texture, TextureParameterName, MaxBakeTextureSize))
