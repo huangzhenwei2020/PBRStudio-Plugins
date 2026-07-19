@@ -369,7 +369,7 @@ UMaterialInterface* FPBRMaterialInstanceFactory::FindExistingMaterialInstance(
 	return Cast<UMaterialInterface>(Existing);
 }
 
-UTexture2D* FPBRMaterialInstanceFactory::ImportTextureToAsset(const FString& FilePath, const FString& PackagePath, const FString& AssetName, const FString& Channel)
+UTexture2D* FPBRMaterialInstanceFactory::ImportTextureToAsset(const FString& FilePath, const FString& PackagePath, const FString& AssetName, const FString& Channel, bool bSaveImmediately)
 {
 	if (!FPaths::FileExists(FilePath))
 	{
@@ -398,7 +398,7 @@ UTexture2D* FPBRMaterialInstanceFactory::ImportTextureToAsset(const FString& Fil
 				false);
 		}
 		ConfigureTextureForChannel(ExistingTexture, Channel);
-		if (ExistingTexture)
+		if (ExistingTexture && bSaveImmediately)
 		{
 			SavePackages({ ExistingTexture->GetPackage() });
 		}
@@ -436,7 +436,10 @@ UTexture2D* FPBRMaterialInstanceFactory::ImportTextureToAsset(const FString& Fil
 		FAssetRegistryModule::AssetCreated(Texture);
 		Package->SetDirtyFlag(true);
 		Texture->PostEditChange();
-		SavePackages({ Package });
+		if (bSaveImmediately)
+		{
+			SavePackages({ Package });
+		}
 	}
 	return Texture;
 }

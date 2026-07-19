@@ -2686,6 +2686,7 @@ static void ApplySceneGeneratedTextureChannel(
 	const FString& PackagePath,
 	const FString& CleanName,
 	int32 MaxBakeTextureSize,
+	bool bSaveGeneratedAssets,
 	const TFunction<void(UPackage*)>& GeneratedPackageCallback)
 {
 	if (!Instance || !GeneratedSet.Channels.Contains(Channel))
@@ -2708,7 +2709,7 @@ static void ApplySceneGeneratedTextureChannel(
 	constexpr int32 MaxAssetNameLength = 80;
 	const int32 MaxMaterialPartLength = FMath::Max(1, MaxAssetNameLength - 2 - RequiredSuffix.Len());
 	const FString TextureName = TEXT("T_") + CleanName.Left(MaxMaterialPartLength) + RequiredSuffix;
-	if (UTexture2D* Texture = FPBRMaterialInstanceFactory::ImportTextureToAsset(*FilePath, PackagePath, TextureName, Channel))
+	if (UTexture2D* Texture = FPBRMaterialInstanceFactory::ImportTextureToAsset(*FilePath, PackagePath, TextureName, Channel, bSaveGeneratedAssets))
 	{
 		if (ShouldRejectSceneTextureForTargetChannel(Texture, TextureParameterName, MaxBakeTextureSize))
 		{
@@ -2762,17 +2763,17 @@ static bool ApplySceneBPRCompanionTexturesIfNeeded(
 
 	const FString CleanName = FPBRMaterialInstanceFactory::SanitizeAssetName(OutputName);
 	const FString PackagePath = FPackageName::GetLongPackagePath(InstancePackagePath);
-	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::NormalDX.ToString(), FPBRMaterialParameters::NormalTexture, FPBRMaterialParameters::UseNormalTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.GeneratedPackageCallback);
-	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Roughness.ToString(), FPBRMaterialParameters::RoughnessTexture, FPBRMaterialParameters::UseRoughnessTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.GeneratedPackageCallback);
-	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Metallic.ToString(), FPBRMaterialParameters::MetallicTexture, FPBRMaterialParameters::UseMetallicTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.GeneratedPackageCallback);
-	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::AO.ToString(), FPBRMaterialParameters::AOTexture, FPBRMaterialParameters::UseAOTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.GeneratedPackageCallback);
+	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::NormalDX.ToString(), FPBRMaterialParameters::NormalTexture, FPBRMaterialParameters::UseNormalTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.bSaveGeneratedAssets, Settings.GeneratedPackageCallback);
+	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Roughness.ToString(), FPBRMaterialParameters::RoughnessTexture, FPBRMaterialParameters::UseRoughnessTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.bSaveGeneratedAssets, Settings.GeneratedPackageCallback);
+	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Metallic.ToString(), FPBRMaterialParameters::MetallicTexture, FPBRMaterialParameters::UseMetallicTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.bSaveGeneratedAssets, Settings.GeneratedPackageCallback);
+	ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::AO.ToString(), FPBRMaterialParameters::AOTexture, FPBRMaterialParameters::UseAOTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.bSaveGeneratedAssets, Settings.GeneratedPackageCallback);
 	if (Settings.bGenerateSpecular)
 	{
-		ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Specular.ToString(), FPBRMaterialParameters::SpecularTexture, FPBRMaterialParameters::UseSpecularTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.GeneratedPackageCallback);
+		ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Specular.ToString(), FPBRMaterialParameters::SpecularTexture, FPBRMaterialParameters::UseSpecularTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.bSaveGeneratedAssets, Settings.GeneratedPackageCallback);
 	}
 	if (Settings.bGenerateHeight)
 	{
-		ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Height.ToString(), FPBRMaterialParameters::HeightTexture, FPBRMaterialParameters::UseHeightTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.GeneratedPackageCallback);
+		ApplySceneGeneratedTextureChannel(Instance, FPBRChannels::Height.ToString(), FPBRMaterialParameters::HeightTexture, FPBRMaterialParameters::UseHeightTexture, GeneratedSet, PackagePath, CleanName, Settings.OutputSize, Settings.bSaveGeneratedAssets, Settings.GeneratedPackageCallback);
 	}
 
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::NormalStrength, Settings.NormalStrength);

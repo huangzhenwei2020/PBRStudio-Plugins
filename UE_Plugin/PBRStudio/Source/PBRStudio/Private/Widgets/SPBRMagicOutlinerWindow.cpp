@@ -587,6 +587,8 @@ static bool PBRMagicLooksLikeInlineApiKey(const FString& Value)
 		Trimmed.Contains(TEXT("."));
 }
 
+static FString GPBRMagicSessionApiKey;
+
 static FString PBRMagicResolveAIApiKey(const FPBRMagicAIProviderSettings& Settings)
 {
 	const FString KeyField = Settings.ApiKeyOrEnvironmentVariable.TrimStartAndEnd();
@@ -599,8 +601,21 @@ static FString PBRMagicResolveAIApiKey(const FPBRMagicAIProviderSettings& Settin
 	{
 		return EnvironmentValue;
 	}
+	if (!GPBRMagicSessionApiKey.IsEmpty())
+	{
+		return GPBRMagicSessionApiKey;
+	}
 	return PBRMagicLooksLikeInlineApiKey(KeyField) ? KeyField : FString();
 }
+
+struct FPBRMagicHttpRequestState
+{
+	bool bCompleted = false;
+	bool bSucceeded = false;
+	int32 ResponseCode = 0;
+	FString ResponseBody;
+	FString Error;
+};
 
 static FString PBRMagicJsonStringField(const TSharedPtr<FJsonObject>& Object, const TCHAR* FieldName, const FString& Fallback = FString())
 {
@@ -1202,23 +1217,21 @@ static bool PBRMagicPostRemoteAIRequest(const FPBRMagicAIProviderSettings& Setti
 	}
 	Request->SetContentAsString(RequestBody);
 
-	bool bCompleted = false;
-	bool bSucceeded = false;
-	int32 ResponseCode = 0;
-	Request->OnProcessRequestComplete().BindLambda([&bCompleted, &bSucceeded, &ResponseCode, &OutResponse, &OutError](FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+	TSharedRef<FPBRMagicHttpRequestState, ESPMode::ThreadSafe> State = MakeShared<FPBRMagicHttpRequestState, ESPMode::ThreadSafe>();
+	Request->OnProcessRequestComplete().BindLambda([State](FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
 	{
-		bCompleted = true;
-		bSucceeded = bWasSuccessful && Response.IsValid();
-		ResponseCode = Response.IsValid() ? Response->GetResponseCode() : 0;
-		OutResponse = Response.IsValid() ? Response->GetContentAsString() : FString();
-		if (!bSucceeded || ResponseCode < 200 || ResponseCode >= 300)
+		State->bCompleted = true;
+		State->bSucceeded = bWasSuccessful && Response.IsValid();
+		State->ResponseCode = Response.IsValid() ? Response->GetResponseCode() : 0;
+		State->ResponseBody = Response.IsValid() ? Response->GetContentAsString() : FString();
+		if (!State->bSucceeded || State->ResponseCode < 200 || State->ResponseCode >= 300)
 		{
-			OutError = ResponseCode == 0
+			State->Error = State->ResponseCode == 0
 				? TEXT("远端 AI 请求失败：网络不可用或无法连接接口")
-				: FString::Printf(TEXT("远端 AI 请求失败：HTTP %d"), ResponseCode);
-			if (!OutResponse.IsEmpty())
+				: FString::Printf(TEXT("远端 AI 请求失败：HTTP %d"), State->ResponseCode);
+			if (!State->ResponseBody.IsEmpty())
 			{
-				OutError += FString::Printf(TEXT("，响应：%s"), *OutResponse.Left(300));
+				State->Error += FString::Printf(TEXT("，响应：%s"), *State->ResponseBody.Left(300));
 			}
 		}
 	});
@@ -1231,25 +1244,28 @@ static bool PBRMagicPostRemoteAIRequest(const FPBRMagicAIProviderSettings& Setti
 
 	const double StartTime = FPlatformTime::Seconds();
 	const double TimeoutSeconds = FMath::Clamp(static_cast<double>(Settings.RequestTimeoutSeconds), 3.0, 120.0);
-	while (!bCompleted)
+	while (!State->bCompleted)
 	{
 		FHttpModule::Get().GetHttpManager().Tick(0.05f);
 		if (FPlatformTime::Seconds() - StartTime > TimeoutSeconds)
 		{
+			Request->OnProcessRequestComplete().Unbind();
 			Request->CancelRequest();
 			OutError = FString::Printf(TEXT("远端 AI 请求超时：%.0f 秒"), TimeoutSeconds);
 			return false;
 		}
 		FPlatformProcess::Sleep(0.01f);
 	}
+	OutResponse = MoveTemp(State->ResponseBody);
+	OutError = MoveTemp(State->Error);
 
-	if (!bSucceeded || ResponseCode < 200 || ResponseCode >= 300)
+	if (!State->bSucceeded || State->ResponseCode < 200 || State->ResponseCode >= 300)
 	{
 		if (OutError.IsEmpty())
 		{
-			OutError = ResponseCode == 0
+			OutError = State->ResponseCode == 0
 				? TEXT("远端 AI 请求失败：网络不可用或无法连接接口")
-				: FString::Printf(TEXT("远端 AI 请求失败：HTTP %d"), ResponseCode);
+				: FString::Printf(TEXT("远端 AI 请求失败：HTTP %d"), State->ResponseCode);
 		}
 		return false;
 	}
@@ -1291,25 +1307,21 @@ static bool PBRMagicGetRemoteAIModels(const FPBRMagicAIProviderSettings& Setting
 		Request->SetHeader(TEXT("Authorization"), FString::Printf(TEXT("Bearer %s"), *ApiKey));
 	}
 
-	bool bCompleted = false;
-	bool bSucceeded = false;
-	int32 ResponseCode = 0;
-	FString ResponseBody;
-	FString Error;
-	Request->OnProcessRequestComplete().BindLambda([&bCompleted, &bSucceeded, &ResponseCode, &ResponseBody, &Error](FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+	TSharedRef<FPBRMagicHttpRequestState, ESPMode::ThreadSafe> State = MakeShared<FPBRMagicHttpRequestState, ESPMode::ThreadSafe>();
+	Request->OnProcessRequestComplete().BindLambda([State](FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
 	{
-		bCompleted = true;
-		bSucceeded = bWasSuccessful && Response.IsValid();
-		ResponseCode = Response.IsValid() ? Response->GetResponseCode() : 0;
-		ResponseBody = Response.IsValid() ? Response->GetContentAsString() : FString();
-		if (!bSucceeded || ResponseCode < 200 || ResponseCode >= 300)
+		State->bCompleted = true;
+		State->bSucceeded = bWasSuccessful && Response.IsValid();
+		State->ResponseCode = Response.IsValid() ? Response->GetResponseCode() : 0;
+		State->ResponseBody = Response.IsValid() ? Response->GetContentAsString() : FString();
+		if (!State->bSucceeded || State->ResponseCode < 200 || State->ResponseCode >= 300)
 		{
-			Error = ResponseCode == 0
+			State->Error = State->ResponseCode == 0
 				? TEXT("模型列表请求失败：无法连接接口")
-				: FString::Printf(TEXT("模型列表请求失败：HTTP %d"), ResponseCode);
-			if (!ResponseBody.IsEmpty())
+				: FString::Printf(TEXT("模型列表请求失败：HTTP %d"), State->ResponseCode);
+			if (!State->ResponseBody.IsEmpty())
 			{
-				Error += FString::Printf(TEXT("，响应：%s"), *ResponseBody.Left(300));
+				State->Error += FString::Printf(TEXT("，响应：%s"), *State->ResponseBody.Left(300));
 			}
 		}
 	});
@@ -1321,11 +1333,12 @@ static bool PBRMagicGetRemoteAIModels(const FPBRMagicAIProviderSettings& Setting
 	}
 
 	const double StartTime = FPlatformTime::Seconds();
-	while (!bCompleted)
+	while (!State->bCompleted)
 	{
 		FHttpModule::Get().GetHttpManager().Tick(0.05f);
 		if (FPlatformTime::Seconds() - StartTime > 20.0)
 		{
+			Request->OnProcessRequestComplete().Unbind();
 			Request->CancelRequest();
 			OutStatus = TEXT("模型列表请求超时");
 			return false;
@@ -1333,14 +1346,14 @@ static bool PBRMagicGetRemoteAIModels(const FPBRMagicAIProviderSettings& Setting
 		FPlatformProcess::Sleep(0.01f);
 	}
 
-	if (!bSucceeded || ResponseCode < 200 || ResponseCode >= 300)
+	if (!State->bSucceeded || State->ResponseCode < 200 || State->ResponseCode >= 300)
 	{
-		OutStatus = Error.IsEmpty() ? TEXT("模型列表请求失败") : Error;
+		OutStatus = State->Error.IsEmpty() ? TEXT("模型列表请求失败") : State->Error;
 		return false;
 	}
 
 	TSharedPtr<FJsonObject> Root;
-	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseBody);
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(State->ResponseBody);
 	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
 	{
 		OutStatus = TEXT("模型列表响应不是合法 JSON");
@@ -7594,7 +7607,13 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialAISettingsContent()
 	const FString Provider = PBRMagicGetAIConfigString(TEXT("material_ai_provider"), TEXT("LocalRules"));
 	const FString Endpoint = PBRMagicGetAIConfigString(TEXT("material_ai_endpoint"), TEXT(""));
 	const FString Model = PBRMagicGetAIConfigString(TEXT("material_ai_model"), TEXT("gpt-4.1-mini"));
-	const FString ApiKey = PBRMagicGetAIConfigString(TEXT("material_ai_api_key_or_env"), TEXT("PBRSTUDIO_AI_API_KEY"));
+	FString ApiKey = PBRMagicGetAIConfigString(TEXT("material_ai_api_key_or_env"), TEXT("PBRSTUDIO_AI_API_KEY"));
+	if (PBRMagicLooksLikeInlineApiKey(ApiKey))
+	{
+		GPBRMagicSessionApiKey = ApiKey;
+		ApiKey = TEXT("PBRSTUDIO_AI_API_KEY");
+		PBRMagicSaveAIConfigString(TEXT("material_ai_api_key_or_env"), ApiKey);
+	}
 	AIModelOptions.Reset();
 	AIModelOptions.Add(MakeShared<FString>(Model));
 
@@ -7611,10 +7630,17 @@ TSharedRef<SWidget> SPBRMagicOutlinerWindow::BuildMaterialAISettingsContent()
 	auto SaveSettingsFromBoxes = [this, ReadSettingsFromBoxes]()
 	{
 		const FPBRMagicAIProviderSettings Settings = ReadSettingsFromBoxes();
+		FString StoredKeyField = Settings.ApiKeyOrEnvironmentVariable.IsEmpty() ? TEXT("PBRSTUDIO_AI_API_KEY") : Settings.ApiKeyOrEnvironmentVariable;
+		if (PBRMagicLooksLikeInlineApiKey(StoredKeyField))
+		{
+			GPBRMagicSessionApiKey = StoredKeyField;
+			StoredKeyField = TEXT("PBRSTUDIO_AI_API_KEY");
+			StatusMessage = TEXT("API Key 仅在本次 UE 会话中使用；配置文件只保存环境变量名 PBRSTUDIO_AI_API_KEY");
+		}
 		PBRMagicSaveAIConfigString(TEXT("material_ai_provider"), Settings.Provider.IsEmpty() ? TEXT("LocalRules") : Settings.Provider);
 		PBRMagicSaveAIConfigString(TEXT("material_ai_endpoint"), Settings.EndpointUrl);
 		PBRMagicSaveAIConfigString(TEXT("material_ai_model"), Settings.Model.IsEmpty() ? TEXT("gpt-4.1-mini") : Settings.Model);
-		PBRMagicSaveAIConfigString(TEXT("material_ai_api_key_or_env"), Settings.ApiKeyOrEnvironmentVariable.IsEmpty() ? TEXT("PBRSTUDIO_AI_API_KEY") : Settings.ApiKeyOrEnvironmentVariable);
+		PBRMagicSaveAIConfigString(TEXT("material_ai_api_key_or_env"), StoredKeyField);
 	};
 
 	auto FetchModelsToBox = [this, ReadSettingsFromBoxes]() -> bool

@@ -9,7 +9,7 @@ from tkinter import filedialog, messagebox, ttk
 
 
 APP_NAME = "PBRStudio 三端一键安装器"
-VERSION = "1.1.4"
+VERSION = "1.1.5"
 
 
 def app_data_dir():

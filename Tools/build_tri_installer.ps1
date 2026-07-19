@@ -1,12 +1,28 @@
+param(
+    [string]$UEPackageDir = ""
+)
+
 $ErrorActionPreference = "Stop"
 
-$Version = "1.1.4"
+$Version = "1.1.5"
 $Root = Split-Path -Parent $PSScriptRoot
 $ReleaseDir = Join-Path $Root "Releases"
 $BuildDir = Join-Path $Root "build"
 $MzpStage = Join-Path $BuildDir "mzp_stage"
 $PyWork = Join-Path $BuildDir "pyinstaller"
 $PySpec = Join-Path $BuildDir "pyinstaller_spec"
+$UEStageRoot = Join-Path $BuildDir "ue_release_stage"
+$UEReleaseDir = Join-Path $UEStageRoot "PBRStudio"
+$UESourceDir = Join-Path $Root "UE_Plugin\PBRStudio"
+
+if ([string]::IsNullOrWhiteSpace($UEPackageDir)) {
+    $UEPayloadDir = $UESourceDir
+} else {
+    $UEPayloadDir = (Resolve-Path -LiteralPath $UEPackageDir).Path
+    if (!(Test-Path -LiteralPath (Join-Path $UEPayloadDir "PBRStudio.uplugin"))) {
+        throw "UE package directory does not contain PBRStudio.uplugin: $UEPayloadDir"
+    }
+}
 
 New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
@@ -25,6 +41,12 @@ function New-ZipFromPath($SourcePath, $DestinationPath) {
 }
 
 Write-Host "==> Building release packages v$Version"
+
+Remove-IfExists $UEStageRoot
+New-Item -ItemType Directory -Force -Path $UEReleaseDir | Out-Null
+Copy-Item -Path (Join-Path $UEPayloadDir "*") -Destination $UEReleaseDir -Recurse -Force
+Remove-IfExists (Join-Path $UEReleaseDir "Intermediate")
+Get-ChildItem -LiteralPath $UEReleaseDir -Recurse -File -Filter "*.pdb" | Remove-Item -Force
 
 Remove-IfExists $MzpStage
 New-Item -ItemType Directory -Force -Path $MzpStage | Out-Null
@@ -45,7 +67,7 @@ New-ZipFromPath (Join-Path $Root "Chrome_Extension\chrome_extension\*") $ChromeZ
 Write-Host "    $ChromeZip"
 
 $UEZip = Join-Path $ReleaseDir "PBRStudio_UE_Plugin_v$Version.zip"
-New-ZipFromPath (Join-Path $Root "UE_Plugin\PBRStudio") $UEZip
+New-ZipFromPath $UEReleaseDir $UEZip
 Write-Host "    $UEZip"
 
 Write-Host "==> Building installer EXE"
@@ -56,7 +78,7 @@ $MaxMain = Join-Path $Root "InteriorSceneStudioPro_v95_topbar_width_collapse_cle
 $MaxUtils = Join-Path $Root "_pbr_clean_utils.py"
 $MaxIcon = Join-Path $Root "PBRStudio.bmp"
 $ChromeDir = Join-Path $Root "Chrome_Extension\chrome_extension"
-$UEDir = Join-Path $Root "UE_Plugin\PBRStudio"
+$UEDir = $UEReleaseDir
 $InstallMs = Join-Path $Root "install.ms"
 
 $PyInstallerArgs = @(

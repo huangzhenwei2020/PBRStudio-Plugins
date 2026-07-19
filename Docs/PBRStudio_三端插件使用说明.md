@@ -1,7 +1,9 @@
 # PBRStudio 三端插件使用说明
 
-版本：1.1.4  
-更新日期：2026-07-02
+版本：1.1.5
+
+完整的 `1.1.5` 预编译 UE 包和三端一键安装器请从 [GitHub Releases](https://github.com/huangzhenwei2020/PBRStudio-Plugins/releases/tag/v1.1.5) 下载。大文件不直接存入 Git 历史。
+更新日期：2026-07-19
 
 本说明覆盖 UE 插件、Chrome 扩展、3ds Max 插件和三端一键安装器。
 
@@ -9,10 +11,10 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `Releases/PBRStudio_Tri_Plugin_Installer_v1.1.4.exe` | 三端一键安装器 |
-| `Releases/PBRStudio_UE_Plugin_v1.1.4.zip` | UE 插件单独发布包 |
-| `Releases/PBRStudio_Chrome_Extension_v1.1.4.zip` | Chrome 扩展单独发布包 |
-| `Releases/PBRStudio_3dsMax_v1.1.4.mzp` | 3ds Max 一键安装包 |
+| `Releases/PBRStudio_Tri_Plugin_Installer_v1.1.5.exe` | 三端一键安装器 |
+| `Releases/PBRStudio_UE_Plugin_v1.1.5.zip` | UE 插件单独发布包 |
+| `Releases/PBRStudio_Chrome_Extension_v1.1.5.zip` | Chrome 扩展单独发布包 |
+| `Releases/PBRStudio_3dsMax_v1.1.5.mzp` | 3ds Max 一键安装包 |
 
 默认通信端口：
 
@@ -22,7 +24,7 @@
 ## 2. 一键安装
 
 1. 关闭 Unreal Editor、3ds Max 和 Chrome 扩展管理页。
-2. 运行 `PBRStudio_Tri_Plugin_Installer_v1.1.4.exe`。
+2. 运行 `PBRStudio_Tri_Plugin_Installer_v1.1.5.exe`。
 3. 按提示选择安装 UE、Chrome、3ds Max 中的一个或多个端。
 4. UE 项目级安装时，目标应是项目目录或项目下的 `Plugins` 目录。
 5. 安装后按下面各端说明检查一次。
@@ -156,7 +158,7 @@ UE 插件自带 `Content`，统一母材质和材质函数位于 `/PBRStudio/Tem
 
 ### 安装
 
-1. 解压 `PBRStudio_Chrome_Extension_v1.1.4.zip`。
+1. 解压 `PBRStudio_Chrome_Extension_v1.1.5.zip`。
 2. 打开 Chrome。
 3. 进入 `chrome://extensions/`。
 4. 打开 `开发者模式`。
@@ -184,7 +186,7 @@ Chrome_Extension/chrome_extension
 ### MZP 安装
 
 1. 打开 3ds Max。
-2. 将 `PBRStudio_3dsMax_v1.1.4.mzp` 拖入 Max 视口。
+2. 将 `PBRStudio_3dsMax_v1.1.5.mzp` 拖入 Max 视口。
 3. 按提示完成安装。
 4. 重启 3ds Max。
 5. 在 `自定义` - `自定义用户界面` 中找到 `PBR Studio` 分类。

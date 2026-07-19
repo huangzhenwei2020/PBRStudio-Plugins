@@ -37,7 +37,6 @@ Thumbs.db
 Desktop.ini
 
 # ===== Releases (keep packages, unfiltered) =====
-
 # ===== Archive (ignore loose archives, keep Releases zips) =====
 # Only ignore archives outside Releases/
 *.zip
@@ -47,3 +46,8 @@ Desktop.ini
 *.rar
 !Releases/*.zip
 !Releases/*.mzp
+
+# Precompiled UE and installer binaries exceed GitHub's regular 100 MB Git limit.
+# Publish these as GitHub Release assets instead.
+Releases/PBRStudio_UE_Plugin_v*.zip
+Releases/PBRStudio_Tri_Plugin_Installer_v*.exe

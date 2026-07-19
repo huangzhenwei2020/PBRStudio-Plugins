@@ -1,7 +1,7 @@
 {
   "FileVersion": 3,
-  "Version": 114,
-  "VersionName": "1.1.4",
+  "Version": 115,
+  "VersionName": "1.1.5",
   "FriendlyName": "建筑可视化工作台",
   "Description": "AR Studio tools for architectural visualization, material libraries, texture workflows, and Unreal Engine scene setup.",
   "Category": "Material",

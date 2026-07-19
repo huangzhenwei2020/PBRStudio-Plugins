@@ -605,7 +605,7 @@ async function independentAiChat(config, messages) {
       if (!resp.ok) throw new Error(chatErrorText(retryData, resp.status));
       const retryText = String((retryData.choices && retryData.choices[0] && retryData.choices[0].message && retryData.choices[0].message.content) || "");
       const retryExtracted = extractImagesFromText(retryText);
-      return { ok: true, text: retryExtracted.text || "AI娌℃湁杩斿洖鍐呭", images: retryExtracted.images };
+      return { ok: true, text: retryExtracted.text || "AI没有返回内容", images: retryExtracted.images };
     }
     if (!resp.ok) {
       const detail = data.error && data.error.message ? data.error.message : ("HTTP " + resp.status);

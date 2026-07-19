@@ -1,6 +1,6 @@
 # PBRStudio 三端插件使用说明
 
-版本：1.1.4  
+版本：1.1.5
 适用对象：Unreal Engine 编辑器、Chrome 浏览器、3ds Max  
 项目地址：https://github.com/huangzhenwei2020/PBRStudio-Plugins
 
@@ -8,13 +8,15 @@ PBRStudio 是一套面向建筑可视化、室内设计和 PBR 材质整理流�
 
 ## 一分钟上手
 
-推荐使用 `Releases/PBRStudio_Tri_Plugin_Installer_v1.1.4.exe` 作为入口。如果公司安全策略拦截 exe，也可以分别安装三个端：
+推荐使用 `Releases/PBRStudio_Tri_Plugin_Installer_v1.1.5.exe` 作为入口。如果公司安全策略拦截 exe，也可以分别安装三个端：
+
+完整的 `1.1.5` 预编译 UE 包和一键安装器体积超过 GitHub 普通文件限制，请从 [GitHub Releases](https://github.com/huangzhenwei2020/PBRStudio-Plugins/releases/tag/v1.1.5) 下载；仓库内的 `Releases` 目录保留小型安装包与历史版本。
 
 | 端 | 推荐文件 | 作用 |
 | --- | --- | --- |
-| UE | `Releases/PBRStudio_UE_Plugin_v1.1.4.zip` 或 `UE_Plugin/PBRStudio` | UE 里创建材质、下载素材、转换场景材质、管理魔法大纲 |
-| Chrome | `Releases/PBRStudio_Chrome_Extension_v1.1.4.zip` 或 `Chrome_Extension/chrome_extension` | 从素材网站把下载链接推送到 UE 或 3ds Max |
-| 3ds Max | `Releases/PBRStudio_3dsMax_v1.1.4.mzp` | 整理 Max 场景、批量修复、PBR 贴图套件、下载库 |
+| UE | `Releases/PBRStudio_UE_Plugin_v1.1.5.zip` 或 `UE_Plugin/PBRStudio` | UE 里创建材质、下载素材、转换场景材质、管理魔法大纲 |
+| Chrome | `Releases/PBRStudio_Chrome_Extension_v1.1.5.zip` 或 `Chrome_Extension/chrome_extension` | 从素材网站把下载链接推送到 UE 或 3ds Max |
+| 3ds Max | `Releases/PBRStudio_3dsMax_v1.1.5.mzp` | 整理 Max 场景、批量修复、PBR 贴图套件、下载库 |
 
 默认本地通信端口：
 
@@ -41,7 +43,7 @@ PBRStudio-Plugins/
 ## 一键安装
 
 1. 关闭 Unreal Editor、3ds Max 和 Chrome 扩展管理页。
-2. 运行 `Releases/PBRStudio_Tri_Plugin_Installer_v1.1.4.exe`。
+2. 运行 `Releases/PBRStudio_Tri_Plugin_Installer_v1.1.5.exe`。
 3. 按安装器提示选择需要安装的端。
 4. UE 项目级安装时，目标目录应是你的项目目录或项目下的 `Plugins` 目录。
 5. 安装完成后按下面对应端的说明检查一次。
@@ -181,7 +183,7 @@ UE 插件本身包含 `Content`，母材质和材质函数挂载在 `/PBRStudio/
 
 ### 5. 魔法大纲里的直接材质调整
 
-这是 UE 端 1.1.4 的重点功能。
+这是 UE 端 1.1.5 的重点功能。
 
 使用步骤：
 
@@ -241,7 +243,7 @@ UE 插件本身包含 `Content`，母材质和材质函数挂载在 `/PBRStudio/
 
 ### 从 zip 安装
 
-1. 解压 `Releases/PBRStudio_Chrome_Extension_v1.1.4.zip`。
+1. 解压 `Releases/PBRStudio_Chrome_Extension_v1.1.5.zip`。
 2. 打开 Chrome。
 3. 地址栏输入 `chrome://extensions/`。
 4. 打开右上角 `开发者模式`。
@@ -273,7 +275,7 @@ Chrome_Extension/chrome_extension
 ### MZP 一键安装
 
 1. 打开 3ds Max。
-2. 将 `Releases/PBRStudio_3dsMax_v1.1.4.mzp` 拖入 Max 视口。
+2. 将 `Releases/PBRStudio_3dsMax_v1.1.5.mzp` 拖入 Max 视口。
 3. 按提示完成安装。
 4. 重启 3ds Max。
 5. 进入 `自定义` - `自定义用户界面`。
@@ -322,10 +324,10 @@ InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py
 
 | 文件 | 用途 |
 | --- | --- |
-| `PBRStudio_Tri_Plugin_Installer_v1.1.4.exe` | 三端一键安装器 |
-| `PBRStudio_UE_Plugin_v1.1.4.zip` | UE 插件发布包 |
-| `PBRStudio_Chrome_Extension_v1.1.4.zip` | Chrome 扩展发布包 |
-| `PBRStudio_3dsMax_v1.1.4.mzp` | 3ds Max 一键安装包 |
+| `PBRStudio_Tri_Plugin_Installer_v1.1.5.exe` | 三端一键安装器 |
+| `PBRStudio_UE_Plugin_v1.1.5.zip` | UE 插件发布包 |
+| `PBRStudio_Chrome_Extension_v1.1.5.zip` | Chrome 扩展发布包 |
+| `PBRStudio_3dsMax_v1.1.5.mzp` | 3ds Max 一键安装包 |
 
 ## 常见问题
 
@@ -367,7 +369,21 @@ UE 编译示例：
 Tools/build_tri_installer.ps1
 ```
 
+如需生成可直接安装到同版本 UE 的预编译包，先用 `RunUAT BuildPlugin` 生成插件目录，再传入：
+
+```powershell
+Tools/build_tri_installer.ps1 -UEPackageDir "C:\PBRStudioPackage\PBRStudio_UE57_1.1.5"
+```
+
 ## 版本记录
+
+### 1.1.5
+
+- UE AI 请求修复超时回调生命周期问题，API Key 改为仅保留在当前会话或环境变量中。
+- 下载队列增加并发和文件大小上限，并校验下载地址与服务端文件名。
+- 场景材质批量转换减少逐贴图同步保存，降低大场景转换卡顿。
+- Chrome 自定义 AI 接口改为按需申请域名权限，API Key 不再写入持久存储。
+- 统一源码、安装器、使用说明和发布包版本，并增加发布一致性检查。
 
 ### 1.1.4
 

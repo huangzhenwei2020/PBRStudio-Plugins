@@ -49,6 +49,7 @@ public:
 	FOnDownloadComplete OnComplete;
 
 private:
+	void StartPendingDownloads();
 	void UpdateDownloadProgress(FHttpRequestPtr Request, uint64 BytesSent, uint64 BytesReceived, FString URL);
 	void OnDownloadFinished(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded, FString URL);
 	int32 FindQueueIndexByURL(const FString& URL) const;
@@ -67,6 +68,9 @@ private:
 	TArray<FPBRDownloadEntry> Queue;
 	TArray<FPBRDownloadSite> Sites;
 	TArray<TSharedPtr<IHttpRequest>> ActiveRequests;
+	TSet<FString> RejectedOversizeUrls;
 	FString MaterialLibraryDir;
 	bool bDeleteNonImageFilesAfterExtract = true;
+	int32 MaxConcurrentDownloads = 3;
+	uint64 MaxDownloadBytes = 2ull * 1024ull * 1024ull * 1024ull;
 };

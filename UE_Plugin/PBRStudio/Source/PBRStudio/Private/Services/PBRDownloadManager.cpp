@@ -47,24 +47,31 @@ void FPBRDownloadManager::SetDeleteNonImageFilesAfterExtract(bool bInDelete)
 
 int32 FPBRDownloadManager::AddToQueue(const FString& URL, const FString& Name, const FString& Source)
 {
+	const FString TrimmedURL = URL.TrimStartAndEnd();
+	if (!TrimmedURL.StartsWith(TEXT("https://"), ESearchCase::IgnoreCase) &&
+		!TrimmedURL.StartsWith(TEXT("http://"), ESearchCase::IgnoreCase))
+	{
+		return INDEX_NONE;
+	}
+
 	for (const FPBRDownloadEntry& E : Queue)
 	{
-		if (E.URL == URL)
+		if (E.URL == TrimmedURL)
 		{
 			return INDEX_NONE;
 		}
 	}
 
 	FPBRDownloadEntry Entry;
-	Entry.URL = URL;
-	Entry.Name = Name.IsEmpty() ? FPaths::GetCleanFilename(URL) : Name;
+	Entry.URL = TrimmedURL;
+	Entry.Name = Name.IsEmpty() ? FPaths::GetCleanFilename(TrimmedURL) : Name;
 	Entry.Source = Source;
 	Entry.TargetDirectory = MaterialLibraryDir;
 	Entry.Status = TEXT("等待");
 	Entry.DetailStatus = TEXT("等待下载");
 	Entry.Progress = 0.0f;
 
-	const FString Lower = URL.ToLower();
+	const FString Lower = TrimmedURL.ToLower();
 	if (Lower.EndsWith(TEXT(".zip")) || Lower.EndsWith(TEXT(".rar")) || Lower.EndsWith(TEXT(".7z")) ||
 		Lower.EndsWith(TEXT(".png")) || Lower.EndsWith(TEXT(".jpg")) || Lower.EndsWith(TEXT(".jpeg")) ||
 		Lower.EndsWith(TEXT(".exr")) || Lower.EndsWith(TEXT(".hdr")) || Lower.EndsWith(TEXT(".fbx")))
@@ -151,6 +158,21 @@ void FPBRDownloadManager::DownloadEntry(int32 Index)
 	}
 
 	FPBRDownloadEntry& Entry = Queue[Index];
+	if (!Entry.URL.StartsWith(TEXT("https://"), ESearchCase::IgnoreCase) &&
+		!Entry.URL.StartsWith(TEXT("http://"), ESearchCase::IgnoreCase))
+	{
+		Entry.Status = TEXT("失败");
+		Entry.DetailStatus = TEXT("只允许 HTTP 或 HTTPS 下载地址");
+		OnQueueChanged.ExecuteIfBound();
+		return;
+	}
+	if (ActiveRequests.Num() >= MaxConcurrentDownloads)
+	{
+		Entry.Status = TEXT("等待");
+		Entry.DetailStatus = TEXT("等待空闲下载槽位");
+		OnQueueChanged.ExecuteIfBound();
+		return;
+	}
 	Entry.Status = TEXT("下载中");
 	Entry.DetailStatus = TEXT("正在连接");
 	Entry.Progress = 0.0f;
@@ -165,12 +187,24 @@ void FPBRDownloadManager::DownloadEntry(int32 Index)
 	Request->OnRequestProgress64().BindRaw(this, &FPBRDownloadManager::UpdateDownloadProgress, EntryURL);
 	Request->OnProcessRequestComplete().BindRaw(this, &FPBRDownloadManager::OnDownloadFinished, EntryURL);
 	ActiveRequests.Add(Request);
-	Request->ProcessRequest();
+	if (!Request->ProcessRequest())
+	{
+		ActiveRequests.Remove(Request);
+		Entry.Status = TEXT("失败");
+		Entry.DetailStatus = TEXT("无法启动下载请求");
+		OnQueueChanged.ExecuteIfBound();
+		OnComplete.ExecuteIfBound(Index);
+	}
 }
 
 void FPBRDownloadManager::DownloadAllPending()
 {
-	for (int32 i = 0; i < Queue.Num(); ++i)
+	StartPendingDownloads();
+}
+
+void FPBRDownloadManager::StartPendingDownloads()
+{
+	for (int32 i = 0; i < Queue.Num() && ActiveRequests.Num() < MaxConcurrentDownloads; ++i)
 	{
 		if (Queue[i].Status == TEXT("等待"))
 		{
@@ -232,6 +266,18 @@ void FPBRDownloadManager::UpdateDownloadProgress(FHttpRequestPtr Request, uint64
 	}
 
 	FPBRDownloadEntry& Entry = Queue[Index];
+	if (BytesReceived > MaxDownloadBytes)
+	{
+		RejectedOversizeUrls.Add(URL);
+		Entry.Status = TEXT("失败");
+		Entry.DetailStatus = TEXT("文件超过 2 GB 下载上限");
+		if (Request.IsValid())
+		{
+			Request->CancelRequest();
+		}
+		OnQueueChanged.ExecuteIfBound();
+		return;
+	}
 	int64 ContentLength = 0;
 	if (Request.IsValid() && Request->GetResponse().IsValid())
 	{
@@ -336,12 +382,19 @@ void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpRespo
 	}
 
 	FPBRDownloadEntry& Entry = Queue[Index];
+	if (RejectedOversizeUrls.Remove(URL) > 0)
+	{
+		OnComplete.ExecuteIfBound(Index);
+		StartPendingDownloads();
+		return;
+	}
 	if (!bSucceeded || !Response.IsValid())
 	{
 		Entry.Status = TEXT("失败");
 		Entry.DetailStatus = TEXT("网络错误");
 		OnQueueChanged.ExecuteIfBound();
 		OnComplete.ExecuteIfBound(Index);
+		StartPendingDownloads();
 		return;
 	}
 
@@ -352,6 +405,18 @@ void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpRespo
 		Entry.DetailStatus = FString::Printf(TEXT("HTTP %d"), Code);
 		OnQueueChanged.ExecuteIfBound();
 		OnComplete.ExecuteIfBound(Index);
+		StartPendingDownloads();
+		return;
+	}
+	const FString ContentLengthText = Response->GetHeader(TEXT("Content-Length"));
+	const int64 ContentLength = FCString::Atoi64(*ContentLengthText);
+	if (ContentLength > 0 && static_cast<uint64>(ContentLength) > MaxDownloadBytes)
+	{
+		Entry.Status = TEXT("失败");
+		Entry.DetailStatus = TEXT("文件超过 2 GB 下载上限");
+		OnQueueChanged.ExecuteIfBound();
+		OnComplete.ExecuteIfBound(Index);
+		StartPendingDownloads();
 		return;
 	}
 
@@ -373,6 +438,16 @@ void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpRespo
 	{
 		Filename = TEXT("download");
 	}
+	Filename = FPaths::GetCleanFilename(FGenericPlatformHttp::UrlDecode(Filename));
+	const TCHAR* InvalidFilenameChars = TEXT("\\/:*?\"<>|");
+	for (int32 CharIndex = 0; InvalidFilenameChars[CharIndex] != 0; ++CharIndex)
+	{
+		Filename.ReplaceCharInline(InvalidFilenameChars[CharIndex], TEXT('_'));
+	}
+	if (Filename.IsEmpty() || Filename == TEXT(".") || Filename == TEXT(".."))
+	{
+		Filename = TEXT("download");
+	}
 
 	const bool bArchiveDownload = IsArchiveFile(Filename);
 	FString SaveDirectory = Entry.TargetDirectory;
@@ -384,7 +459,17 @@ void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpRespo
 		IFileManager::Get().MakeDirectory(*SaveDirectory, true);
 	}
 
-	const FString TargetPath = FPaths::Combine(SaveDirectory, Filename);
+	const FString TargetPath = FPaths::ConvertRelativePathToFull(FPaths::Combine(SaveDirectory, Filename));
+	const FString FullSaveDirectory = FPaths::ConvertRelativePathToFull(SaveDirectory);
+	if (!FPaths::IsUnderDirectory(TargetPath, FullSaveDirectory))
+	{
+		Entry.Status = TEXT("失败");
+		Entry.DetailStatus = TEXT("下载文件名包含无效路径");
+		OnQueueChanged.ExecuteIfBound();
+		OnComplete.ExecuteIfBound(Index);
+		StartPendingDownloads();
+		return;
+	}
 	const TArray<uint8>& Data = Response->GetContent();
 	if (!FFileHelper::SaveArrayToFile(Data, *TargetPath))
 	{
@@ -392,6 +477,7 @@ void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpRespo
 		Entry.DetailStatus = TEXT("保存文件失败");
 		OnQueueChanged.ExecuteIfBound();
 		OnComplete.ExecuteIfBound(Index);
+		StartPendingDownloads();
 		return;
 	}
 
@@ -406,6 +492,7 @@ void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpRespo
 	RunPBRAnalysis(Index);
 	PublishLibraryPathToTextureSuite();
 	OnComplete.ExecuteIfBound(Index);
+	StartPendingDownloads();
 }
 
 void FPBRDownloadManager::ExtractZipIfNeeded(int32 Index)
