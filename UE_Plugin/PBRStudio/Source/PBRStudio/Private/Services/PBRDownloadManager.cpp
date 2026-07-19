@@ -21,6 +21,7 @@ FPBRDownloadManager::~FPBRDownloadManager()
 	{
 		if (Req.IsValid())
 		{
+			Req->OnRequestProgress64().Unbind();
 			Req->OnProcessRequestComplete().Unbind();
 			Req->CancelRequest();
 		}
@@ -39,26 +40,38 @@ FString FPBRDownloadManager::GetMaterialLibraryDir() const
 	return MaterialLibraryDir;
 }
 
+void FPBRDownloadManager::SetDeleteNonImageFilesAfterExtract(bool bInDelete)
+{
+	bDeleteNonImageFilesAfterExtract = bInDelete;
+}
+
 int32 FPBRDownloadManager::AddToQueue(const FString& URL, const FString& Name, const FString& Source)
 {
+	const FString TrimmedURL = URL.TrimStartAndEnd();
+	if (!TrimmedURL.StartsWith(TEXT("https://"), ESearchCase::IgnoreCase) &&
+		!TrimmedURL.StartsWith(TEXT("http://"), ESearchCase::IgnoreCase))
+	{
+		return INDEX_NONE;
+	}
+
 	for (const FPBRDownloadEntry& E : Queue)
 	{
-		if (E.URL == URL)
+		if (E.URL == TrimmedURL)
 		{
 			return INDEX_NONE;
 		}
 	}
 
 	FPBRDownloadEntry Entry;
-	Entry.URL = URL;
-	Entry.Name = Name.IsEmpty() ? FPaths::GetCleanFilename(URL) : Name;
+	Entry.URL = TrimmedURL;
+	Entry.Name = Name.IsEmpty() ? FPaths::GetCleanFilename(TrimmedURL) : Name;
 	Entry.Source = Source;
 	Entry.TargetDirectory = MaterialLibraryDir;
 	Entry.Status = TEXT("等待");
 	Entry.DetailStatus = TEXT("等待下载");
 	Entry.Progress = 0.0f;
 
-	const FString Lower = URL.ToLower();
+	const FString Lower = TrimmedURL.ToLower();
 	if (Lower.EndsWith(TEXT(".zip")) || Lower.EndsWith(TEXT(".rar")) || Lower.EndsWith(TEXT(".7z")) ||
 		Lower.EndsWith(TEXT(".png")) || Lower.EndsWith(TEXT(".jpg")) || Lower.EndsWith(TEXT(".jpeg")) ||
 		Lower.EndsWith(TEXT(".exr")) || Lower.EndsWith(TEXT(".hdr")) || Lower.EndsWith(TEXT(".fbx")))
@@ -80,6 +93,57 @@ void FPBRDownloadManager::RemoveFromQueue(int32 Index)
 	}
 }
 
+bool FPBRDownloadManager::RenameQueueEntry(int32 Index, const FString& NewName, FString& OutMessage)
+{
+	if (Index < 0 || Index >= Queue.Num())
+	{
+		OutMessage = TEXT("没有选中下载项");
+		return false;
+	}
+
+	FString CleanName = NewName.TrimStartAndEnd();
+	const TCHAR* InvalidChars = TEXT("\\/:*?\"<>|");
+	for (int32 i = 0; InvalidChars[i] != 0; ++i)
+	{
+		CleanName.ReplaceCharInline(InvalidChars[i], TEXT('_'));
+	}
+	if (CleanName.IsEmpty())
+	{
+		OutMessage = TEXT("名称不能为空");
+		return false;
+	}
+
+	FPBRDownloadEntry& Entry = Queue[Index];
+	const FString OldDirectory = Entry.TargetDirectory;
+	Entry.Name = CleanName;
+
+	if (!OldDirectory.IsEmpty() && FPaths::DirectoryExists(OldDirectory) && FPaths::IsUnderDirectory(OldDirectory, MaterialLibraryDir))
+	{
+		const FString NewDirectory = MakeMaterialFolderFromName(CleanName);
+		if (!NewDirectory.Equals(OldDirectory, ESearchCase::IgnoreCase))
+		{
+			if (IFileManager::Get().Move(*NewDirectory, *OldDirectory, false, true))
+			{
+				Entry.TargetDirectory = NewDirectory;
+				if (!Entry.DownloadedFile.IsEmpty() && FPaths::IsUnderDirectory(Entry.DownloadedFile, OldDirectory))
+				{
+					Entry.DownloadedFile = Entry.DownloadedFile.Replace(*OldDirectory, *NewDirectory, ESearchCase::IgnoreCase);
+				}
+			}
+			else
+			{
+				OutMessage = TEXT("重命名文件夹失败，已只更新队列名称");
+				OnQueueChanged.ExecuteIfBound();
+				return false;
+			}
+		}
+	}
+
+	OutMessage = TEXT("已重命名");
+	OnQueueChanged.ExecuteIfBound();
+	return true;
+}
+
 void FPBRDownloadManager::ClearQueue()
 {
 	Queue.Empty();
@@ -94,6 +158,21 @@ void FPBRDownloadManager::DownloadEntry(int32 Index)
 	}
 
 	FPBRDownloadEntry& Entry = Queue[Index];
+	if (!Entry.URL.StartsWith(TEXT("https://"), ESearchCase::IgnoreCase) &&
+		!Entry.URL.StartsWith(TEXT("http://"), ESearchCase::IgnoreCase))
+	{
+		Entry.Status = TEXT("失败");
+		Entry.DetailStatus = TEXT("只允许 HTTP 或 HTTPS 下载地址");
+		OnQueueChanged.ExecuteIfBound();
+		return;
+	}
+	if (ActiveRequests.Num() >= MaxConcurrentDownloads)
+	{
+		Entry.Status = TEXT("等待");
+		Entry.DetailStatus = TEXT("等待空闲下载槽位");
+		OnQueueChanged.ExecuteIfBound();
+		return;
+	}
 	Entry.Status = TEXT("下载中");
 	Entry.DetailStatus = TEXT("正在连接");
 	Entry.Progress = 0.0f;
@@ -104,15 +183,28 @@ void FPBRDownloadManager::DownloadEntry(int32 Index)
 	Request->SetVerb(TEXT("GET"));
 	Request->SetHeader(TEXT("User-Agent"), TEXT("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"));
 	Request->SetHeader(TEXT("Accept"), TEXT("*/*"));
-	Request->OnRequestProgress64().BindRaw(this, &FPBRDownloadManager::UpdateDownloadProgress, Index);
-	Request->OnProcessRequestComplete().BindRaw(this, &FPBRDownloadManager::OnDownloadFinished, Index);
+	const FString EntryURL = Entry.URL;
+	Request->OnRequestProgress64().BindRaw(this, &FPBRDownloadManager::UpdateDownloadProgress, EntryURL);
+	Request->OnProcessRequestComplete().BindRaw(this, &FPBRDownloadManager::OnDownloadFinished, EntryURL);
 	ActiveRequests.Add(Request);
-	Request->ProcessRequest();
+	if (!Request->ProcessRequest())
+	{
+		ActiveRequests.Remove(Request);
+		Entry.Status = TEXT("失败");
+		Entry.DetailStatus = TEXT("无法启动下载请求");
+		OnQueueChanged.ExecuteIfBound();
+		OnComplete.ExecuteIfBound(Index);
+	}
 }
 
 void FPBRDownloadManager::DownloadAllPending()
 {
-	for (int32 i = 0; i < Queue.Num(); ++i)
+	StartPendingDownloads();
+}
+
+void FPBRDownloadManager::StartPendingDownloads()
+{
+	for (int32 i = 0; i < Queue.Num() && ActiveRequests.Num() < MaxConcurrentDownloads; ++i)
 	{
 		if (Queue[i].Status == TEXT("等待"))
 		{
@@ -127,6 +219,8 @@ void FPBRDownloadManager::CancelAll()
 	{
 		if (Req.IsValid())
 		{
+			Req->OnRequestProgress64().Unbind();
+			Req->OnProcessRequestComplete().Unbind();
 			Req->CancelRequest();
 		}
 	}
@@ -142,14 +236,48 @@ void FPBRDownloadManager::CancelAll()
 	OnQueueChanged.ExecuteIfBound();
 }
 
-void FPBRDownloadManager::UpdateDownloadProgress(FHttpRequestPtr Request, uint64 BytesSent, uint64 BytesReceived, int32 Index)
+int32 FPBRDownloadManager::FindQueueIndexByURL(const FString& URL) const
 {
+	for (int32 Index = 0; Index < Queue.Num(); ++Index)
+	{
+		if (Queue[Index].URL == URL)
+		{
+			return Index;
+		}
+	}
+	return INDEX_NONE;
+}
+
+void FPBRDownloadManager::RemoveActiveRequest(FHttpRequestPtr Request)
+{
+	const IHttpRequest* RawRequest = Request.Get();
+	ActiveRequests.RemoveAll([RawRequest](const TSharedPtr<IHttpRequest>& ActiveRequest)
+	{
+		return ActiveRequest.Get() == RawRequest;
+	});
+}
+
+void FPBRDownloadManager::UpdateDownloadProgress(FHttpRequestPtr Request, uint64 BytesSent, uint64 BytesReceived, FString URL)
+{
+	const int32 Index = FindQueueIndexByURL(URL);
 	if (Index < 0 || Index >= Queue.Num())
 	{
 		return;
 	}
 
 	FPBRDownloadEntry& Entry = Queue[Index];
+	if (BytesReceived > MaxDownloadBytes)
+	{
+		RejectedOversizeUrls.Add(URL);
+		Entry.Status = TEXT("失败");
+		Entry.DetailStatus = TEXT("文件超过 2 GB 下载上限");
+		if (Request.IsValid())
+		{
+			Request->CancelRequest();
+		}
+		OnQueueChanged.ExecuteIfBound();
+		return;
+	}
 	int64 ContentLength = 0;
 	if (Request.IsValid() && Request->GetResponse().IsValid())
 	{
@@ -243,20 +371,30 @@ static FString FilenameFromUrlQuery(const FString& URL)
 	return FString();
 }
 
-void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded, int32 Index)
+void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded, FString URL)
 {
+	RemoveActiveRequest(Request);
+
+	const int32 Index = FindQueueIndexByURL(URL);
 	if (Index < 0 || Index >= Queue.Num())
 	{
 		return;
 	}
 
 	FPBRDownloadEntry& Entry = Queue[Index];
+	if (RejectedOversizeUrls.Remove(URL) > 0)
+	{
+		OnComplete.ExecuteIfBound(Index);
+		StartPendingDownloads();
+		return;
+	}
 	if (!bSucceeded || !Response.IsValid())
 	{
 		Entry.Status = TEXT("失败");
 		Entry.DetailStatus = TEXT("网络错误");
 		OnQueueChanged.ExecuteIfBound();
 		OnComplete.ExecuteIfBound(Index);
+		StartPendingDownloads();
 		return;
 	}
 
@@ -267,6 +405,18 @@ void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpRespo
 		Entry.DetailStatus = FString::Printf(TEXT("HTTP %d"), Code);
 		OnQueueChanged.ExecuteIfBound();
 		OnComplete.ExecuteIfBound(Index);
+		StartPendingDownloads();
+		return;
+	}
+	const FString ContentLengthText = Response->GetHeader(TEXT("Content-Length"));
+	const int64 ContentLength = FCString::Atoi64(*ContentLengthText);
+	if (ContentLength > 0 && static_cast<uint64>(ContentLength) > MaxDownloadBytes)
+	{
+		Entry.Status = TEXT("失败");
+		Entry.DetailStatus = TEXT("文件超过 2 GB 下载上限");
+		OnQueueChanged.ExecuteIfBound();
+		OnComplete.ExecuteIfBound(Index);
+		StartPendingDownloads();
 		return;
 	}
 
@@ -288,6 +438,16 @@ void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpRespo
 	{
 		Filename = TEXT("download");
 	}
+	Filename = FPaths::GetCleanFilename(FGenericPlatformHttp::UrlDecode(Filename));
+	const TCHAR* InvalidFilenameChars = TEXT("\\/:*?\"<>|");
+	for (int32 CharIndex = 0; InvalidFilenameChars[CharIndex] != 0; ++CharIndex)
+	{
+		Filename.ReplaceCharInline(InvalidFilenameChars[CharIndex], TEXT('_'));
+	}
+	if (Filename.IsEmpty() || Filename == TEXT(".") || Filename == TEXT(".."))
+	{
+		Filename = TEXT("download");
+	}
 
 	const bool bArchiveDownload = IsArchiveFile(Filename);
 	FString SaveDirectory = Entry.TargetDirectory;
@@ -299,14 +459,25 @@ void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpRespo
 		IFileManager::Get().MakeDirectory(*SaveDirectory, true);
 	}
 
-	const FString TargetPath = FPaths::Combine(SaveDirectory, Filename);
-	const TArray<uint8> Data = Response->GetContent();
+	const FString TargetPath = FPaths::ConvertRelativePathToFull(FPaths::Combine(SaveDirectory, Filename));
+	const FString FullSaveDirectory = FPaths::ConvertRelativePathToFull(SaveDirectory);
+	if (!FPaths::IsUnderDirectory(TargetPath, FullSaveDirectory))
+	{
+		Entry.Status = TEXT("失败");
+		Entry.DetailStatus = TEXT("下载文件名包含无效路径");
+		OnQueueChanged.ExecuteIfBound();
+		OnComplete.ExecuteIfBound(Index);
+		StartPendingDownloads();
+		return;
+	}
+	const TArray<uint8>& Data = Response->GetContent();
 	if (!FFileHelper::SaveArrayToFile(Data, *TargetPath))
 	{
 		Entry.Status = TEXT("失败");
 		Entry.DetailStatus = TEXT("保存文件失败");
 		OnQueueChanged.ExecuteIfBound();
 		OnComplete.ExecuteIfBound(Index);
+		StartPendingDownloads();
 		return;
 	}
 
@@ -321,6 +492,7 @@ void FPBRDownloadManager::OnDownloadFinished(FHttpRequestPtr Request, FHttpRespo
 	RunPBRAnalysis(Index);
 	PublishLibraryPathToTextureSuite();
 	OnComplete.ExecuteIfBound(Index);
+	StartPendingDownloads();
 }
 
 void FPBRDownloadManager::ExtractZipIfNeeded(int32 Index)
@@ -349,20 +521,13 @@ void FPBRDownloadManager::ExtractZipIfNeeded(int32 Index)
 	if (bExtracted)
 	{
 		NormalizeExtractedMaterialFolder(Entry.TargetDirectory, Message);
-		Entry.Name = FPaths::GetCleanFilename(Entry.TargetDirectory);
+		CleanupExtractedMaterialFolder(Entry.TargetDirectory, Message);
 		Entry.Status = TEXT("已解压");
 		Entry.DetailStatus = Message;
 		if (FPaths::FileExists(Entry.DownloadedFile))
 		{
 			IFileManager::Get().Delete(*Entry.DownloadedFile, false, true);
 			Entry.DownloadedFile.Empty();
-		}
-		RemoveSourceFolder(Index);
-		if (bCleanNonImage)
-		{
-			CleanNonImageContent(Entry.TargetDirectory);
-			Message += TEXT(" | 已清理非图片文件");
-			Entry.DetailStatus = Message;
 		}
 	}
 	else
@@ -512,6 +677,15 @@ static void DeleteKnownJunkExtractFiles(const FString& Folder)
 	}
 }
 
+static bool IsPBRImageFile(const FString& FilePath)
+{
+	const FString Ext = FPaths::GetExtension(FilePath, true).ToLower();
+	return Ext == TEXT(".png") || Ext == TEXT(".jpg") || Ext == TEXT(".jpeg") ||
+		Ext == TEXT(".tga") || Ext == TEXT(".exr") || Ext == TEXT(".hdr") ||
+		Ext == TEXT(".tif") || Ext == TEXT(".tiff") || Ext == TEXT(".bmp") ||
+		Ext == TEXT(".webp");
+}
+
 void FPBRDownloadManager::NormalizeExtractedMaterialFolder(const FString& Folder, FString& InOutMessage) const
 {
 	if (!FPaths::DirectoryExists(Folder))
@@ -578,6 +752,45 @@ void FPBRDownloadManager::NormalizeExtractedMaterialFolder(const FString& Folder
 	if (bFlattened)
 	{
 		InOutMessage += TEXT(" | Normalized nested folders");
+	}
+}
+
+void FPBRDownloadManager::CleanupExtractedMaterialFolder(const FString& Folder, FString& InOutMessage) const
+{
+	const FString SourceFolder = FPaths::Combine(Folder, TEXT("_source"));
+	if (FPaths::DirectoryExists(SourceFolder))
+	{
+		IFileManager::Get().DeleteDirectory(*SourceFolder, false, true);
+		InOutMessage += TEXT(" | 已删除_source");
+	}
+
+	if (!bDeleteNonImageFilesAfterExtract)
+	{
+		return;
+	}
+
+	int32 DeletedNonImages = 0;
+	TArray<FString> Files;
+	IFileManager::Get().FindFilesRecursive(Files, *Folder, TEXT("*.*"), true, false);
+	for (const FString& File : Files)
+	{
+		if (IsPBRImageFile(File))
+		{
+			continue;
+		}
+		if (FPaths::IsUnderDirectory(File, SourceFolder))
+		{
+			continue;
+		}
+		if (IFileManager::Get().Delete(*File, false, true))
+		{
+			++DeletedNonImages;
+		}
+	}
+
+	if (DeletedNonImages > 0)
+	{
+		InOutMessage += FString::Printf(TEXT(" | 已删除%d个非图片文件"), DeletedNonImages);
 	}
 }
 
@@ -713,59 +926,6 @@ bool FPBRDownloadManager::ImportLocalArchiveToLibrary(const FString& ArchivePath
 	OutMessage = Queue[Index].DetailStatus;
 	OnQueueChanged.ExecuteIfBound();
 	return true;
-}
-
-void FPBRDownloadManager::RenameEntry(int32 Index, const FString& NewName)
-{
-	if (Index < 0 || Index >= Queue.Num() || NewName.IsEmpty()) return;
-
-	FPBRDownloadEntry& Entry = Queue[Index];
-	const FString OldName = Entry.Name;
-	Entry.Name = NewName;
-
-	// Rename folder on disk if TargetDirectory exists and its basename matches the old name
-	const FString OldDir = Entry.TargetDirectory;
-	if (FPaths::DirectoryExists(OldDir) && FPaths::GetCleanFilename(OldDir) == OldName)
-	{
-		const FString ParentDir = FPaths::GetPath(OldDir);
-		const FString NewDir = FPaths::Combine(ParentDir, NewName);
-		if (!FPaths::DirectoryExists(NewDir))
-		{
-			IFileManager::Get().Move(*NewDir, *OldDir, true, true);
-			Entry.TargetDirectory = NewDir;
-		}
-	}
-
-	OnQueueChanged.ExecuteIfBound();
-}
-
-void FPBRDownloadManager::RemoveSourceFolder(int32 Index)
-{
-	if (Index < 0 || Index >= Queue.Num()) return;
-	const FString SourceDir = FPaths::Combine(Queue[Index].TargetDirectory, TEXT("_source"));
-	if (FPaths::DirectoryExists(SourceDir))
-	{
-		IFileManager::Get().DeleteDirectory(*SourceDir, false, true);
-	}
-}
-
-void FPBRDownloadManager::CleanNonImageContent(const FString& TargetDir)
-{
-	if (!FPaths::DirectoryExists(TargetDir)) return;
-
-	TArray<FString> Files;
-	IFileManager::Get().FindFilesRecursive(Files, *TargetDir, TEXT("*.*"), true, false);
-	for (const FString& File : Files)
-	{
-		const FString Ext = FPaths::GetExtension(File, true).ToLower();
-		if (Ext != TEXT(".png") && Ext != TEXT(".jpg") && Ext != TEXT(".jpeg") &&
-			Ext != TEXT(".tga") && Ext != TEXT(".exr") && Ext != TEXT(".tif") &&
-			Ext != TEXT(".tiff") && Ext != TEXT(".bmp") && Ext != TEXT(".hdr") &&
-			Ext != TEXT(".webp"))
-		{
-			IFileManager::Get().Delete(*File, false, true);
-		}
-	}
 }
 
 void FPBRDownloadManager::LoadSites()

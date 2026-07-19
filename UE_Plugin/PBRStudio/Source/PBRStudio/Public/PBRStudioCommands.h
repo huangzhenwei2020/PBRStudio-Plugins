@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Framework/Commands/Commands.h"
@@ -9,7 +9,7 @@ public:
 	FPBRStudioCommands()
 		: TCommands<FPBRStudioCommands>(
 			TEXT("PBRStudio"),
-			NSLOCTEXT("Contexts", "PBRStudio", "PBR 工作室插件"),
+			NSLOCTEXT("Contexts", "PBRStudio", "建筑可视化工作台插件"),
 			NAME_None,
 			FAppStyle::GetAppStyleSetName())
 	{}

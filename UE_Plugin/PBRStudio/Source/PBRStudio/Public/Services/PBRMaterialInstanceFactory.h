@@ -17,7 +17,7 @@ public:
 
 	static UMaterialInterface* FindExistingMaterialInstance(const FPBRMaterialSet& Set, const FPBRMaterialCreateOptions& Options, FString& OutInstancePath);
 	static UTexture2D* ImportTextureToAsset(const FString& FilePath, const FString& PackagePath, const FString& AssetName);
-	static UTexture2D* ImportTextureToAsset(const FString& FilePath, const FString& PackagePath, const FString& AssetName, const FString& Channel);
+	static UTexture2D* ImportTextureToAsset(const FString& FilePath, const FString& PackagePath, const FString& AssetName, const FString& Channel, bool bSaveImmediately = true);
 	static FString SanitizeAssetName(const FString& InName);
 
 private:

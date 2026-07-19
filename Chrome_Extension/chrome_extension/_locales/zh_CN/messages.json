@@ -2,8 +2,8 @@
   "extName": { "message": "PBR Studio — 推送到 Max / UE" },
   "extDescription": { "message": "识别网页中的 PBR 材质下载链接，一键推送到 3ds Max 或 Unreal Engine 的 PBR 工作流。" },
   "actionTitle": { "message": "PBR 推送到 Max / UE" },
-  "menuPushLink": { "message": "推送到 PBR 下载队列" },
-  "menuPushPageLinks": { "message": "推送本页下载链接" },
+  "menuPushLink": { "message": "下载到 3ds Max PBR 库" },
+  "menuPushPageLinks": { "message": "下载本页链接到 3ds Max" },
   "notificationTitle": { "message": "PBR Studio" },
   "popupTitle": { "message": "PBR 推送 — Max / UE" },
   "checking": { "message": "正在检查..." },
@@ -44,7 +44,7 @@
   "portReservedError": { "message": "不要使用 80、443、3306 或 3389。" },
   "noActiveTab": { "message": "当前没有可扫描的活动标签页。" },
   "noDownloadableLinksOnPage": { "message": "当前页面没有识别到可下载链接。" },
-  "capturedBrowserDownload": { "message": "已捕获浏览器下载链接，已加入队列。" },
+  "capturedBrowserDownload": { "message": "已捕获浏览器下载链接，并尝试立即下载。" },
   "capturedBrowserDownloadCount": {
     "message": "已捕获 $COUNT$ 条浏览器下载链接，已加入队列。",
     "placeholders": { "count": { "content": "$1" } }

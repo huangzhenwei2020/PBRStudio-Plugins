@@ -17,10 +17,12 @@ public:
 
 	void SetMaterialLibraryDir(const FString& Dir);
 	FString GetMaterialLibraryDir() const;
+	void SetDeleteNonImageFilesAfterExtract(bool bInDelete);
 
 	// Queue management
 	int32 AddToQueue(const FString& URL, const FString& Name, const FString& Source);
 	void RemoveFromQueue(int32 Index);
+	bool RenameQueueEntry(int32 Index, const FString& NewName, FString& OutMessage);
 	void ClearQueue();
 	TArray<FPBRDownloadEntry>& GetQueue() { return Queue; }
 
@@ -42,22 +44,16 @@ public:
 	void AddSite(const FPBRDownloadSite& Site);
 	void RemoveSite(int32 Index);
 
-	// Rename an entry's display name and its folder on disk
-	void RenameEntry(int32 Index, const FString& NewName);
-
-	// Cleanup options
-	bool bCleanNonImage = false;
-
-	void RemoveSourceFolder(int32 Index);
-	void CleanNonImageContent(const FString& TargetDir);
-
 	FOnDownloadQueueChanged OnQueueChanged;
 	FOnDownloadProgress OnProgress;
 	FOnDownloadComplete OnComplete;
 
 private:
-	void UpdateDownloadProgress(FHttpRequestPtr Request, uint64 BytesSent, uint64 BytesReceived, int32 Index);
-	void OnDownloadFinished(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded, int32 Index);
+	void StartPendingDownloads();
+	void UpdateDownloadProgress(FHttpRequestPtr Request, uint64 BytesSent, uint64 BytesReceived, FString URL);
+	void OnDownloadFinished(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded, FString URL);
+	int32 FindQueueIndexByURL(const FString& URL) const;
+	void RemoveActiveRequest(FHttpRequestPtr Request);
 	void ExtractZipIfNeeded(int32 Index);
 	void RunPBRAnalysis(int32 Index);
 
@@ -65,11 +61,16 @@ private:
 	FString MakeMaterialFolderFromName(const FString& RawName) const;
 	FString MakeMaterialFolderFromArchive(const FString& ArchivePath) const;
 	void NormalizeExtractedMaterialFolder(const FString& Folder, FString& InOutMessage) const;
+	void CleanupExtractedMaterialFolder(const FString& Folder, FString& InOutMessage) const;
 	bool ExtractZipWithPowerShell(const FString& ArchivePath, const FString& DestinationDir, FString& OutMessage) const;
 	bool ExtractArchiveWithExternalTool(const FString& ArchivePath, const FString& DestinationDir, FString& OutMessage) const;
 
 	TArray<FPBRDownloadEntry> Queue;
 	TArray<FPBRDownloadSite> Sites;
 	TArray<TSharedPtr<IHttpRequest>> ActiveRequests;
+	TSet<FString> RejectedOversizeUrls;
 	FString MaterialLibraryDir;
+	bool bDeleteNonImageFilesAfterExtract = true;
+	int32 MaxConcurrentDownloads = 3;
+	uint64 MaxDownloadBytes = 2ull * 1024ull * 1024ull * 1024ull;
 };

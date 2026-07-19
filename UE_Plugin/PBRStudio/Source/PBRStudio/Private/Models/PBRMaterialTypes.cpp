@@ -46,6 +46,8 @@ const FName FPBRMaterialParameters::EmissiveTexture(TEXT("自发光贴图"));
 const FName FPBRMaterialParameters::UseEmissiveTexture(TEXT("使用自发光贴图"));
 const FName FPBRMaterialParameters::EmissiveColor(TEXT("自发光颜色"));
 const FName FPBRMaterialParameters::EmissiveIntensity(TEXT("自发光强度"));
+const FName FPBRMaterialParameters::UseEmissiveTemperature(TEXT("使用自发光色温"));
+const FName FPBRMaterialParameters::EmissiveTemperatureKelvin(TEXT("自发光色温"));
 const FName FPBRMaterialParameters::SpecularTexture(TEXT("高光贴图"));
 const FName FPBRMaterialParameters::UseSpecularTexture(TEXT("使用高光贴图"));
 const FName FPBRMaterialParameters::SpecularLevel(TEXT("高光强度"));
@@ -63,11 +65,41 @@ const FName FPBRMaterialParameters::Anisotropy(TEXT("各向异性"));
 const FName FPBRMaterialParameters::FabricFuzzColor(TEXT("织物绒毛颜色"));
 const FName FPBRMaterialParameters::FabricFuzzStrength(TEXT("织物绒毛强度"));
 const FName FPBRMaterialParameters::RefractionAmount(TEXT("折射强度"));
+const FName FPBRMaterialParameters::GlassOpacityFresnelStrength(TEXT("透明菲涅尔强度"));
+const FName FPBRMaterialParameters::GlassFresnelBaseReflection(TEXT("菲涅尔基础反射"));
+const FName FPBRMaterialParameters::GlassFresnelExp(TEXT("菲涅尔指数"));
+const FName FPBRMaterialParameters::GlassFrostedStrength(TEXT("毛玻璃强度"));
+const FName FPBRMaterialParameters::GlassAbsorptionColor(TEXT("玻璃吸收颜色"));
+const FName FPBRMaterialParameters::GlassAbsorptionStrength(TEXT("玻璃吸收强度"));
+const FName FPBRMaterialParameters::GlassEdgeTintStrength(TEXT("玻璃边缘染色"));
+const FName FPBRMaterialParameters::GlassDirtColor(TEXT("玻璃污渍颜色"));
+const FName FPBRMaterialParameters::GlassDirtTexture(TEXT("玻璃污渍贴图"));
+const FName FPBRMaterialParameters::UseGlassDirtTexture(TEXT("使用玻璃污渍贴图"));
+const FName FPBRMaterialParameters::GlassDirtIntensity(TEXT("玻璃污渍强度"));
+const FName FPBRMaterialParameters::GlassDirtOpacity(TEXT("玻璃污渍透明度"));
+const FName FPBRMaterialParameters::GlassDirtRoughness(TEXT("玻璃污渍粗糙度"));
+const FName FPBRMaterialParameters::GlassDistortionTexture(TEXT("玻璃扭曲贴图"));
+const FName FPBRMaterialParameters::UseGlassDistortionTexture(TEXT("使用玻璃扭曲贴图"));
+const FName FPBRMaterialParameters::GlassDistortionIntensity(TEXT("玻璃扭曲强度"));
+const FName FPBRMaterialParameters::GlassDistortionIORIntensity(TEXT("玻璃 IOR 扭曲强度"));
+const FName FPBRMaterialParameters::GlassFrostedTexture(TEXT("玻璃磨砂贴图"));
+const FName FPBRMaterialParameters::UseGlassFrostedTexture(TEXT("使用玻璃磨砂贴图"));
+const FName FPBRMaterialParameters::GlassShadowOpacity(TEXT("玻璃投影强度"));
+const FName FPBRMaterialParameters::GlassShadowHighlightClamp(TEXT("玻璃阴影高光裁剪"));
+const FName FPBRMaterialParameters::GlassShadowNormalIntensity(TEXT("玻璃阴影法线强度"));
+const FName FPBRMaterialParameters::GlassCausticsIntensity(TEXT("玻璃焦散强度"));
+const FName FPBRMaterialParameters::GlassCausticsScale(TEXT("玻璃焦散大小"));
+const FName FPBRMaterialParameters::GlassCausticsSpeed(TEXT("玻璃焦散速度"));
+const FName FPBRMaterialParameters::GlassRTOpacity(TEXT("光追玻璃透明度"));
+const FName FPBRMaterialParameters::GlassRTRefractionAmount(TEXT("光追玻璃折射"));
+const FName FPBRMaterialParameters::GlassRTFrostedStrength(TEXT("光追毛玻璃强度"));
 const FName FPBRMaterialParameters::WaterColor(TEXT("水体颜色"));
 const FName FPBRMaterialParameters::WaterFlowSpeedU(TEXT("水流 U 速度"));
 const FName FPBRMaterialParameters::WaterFlowSpeedV(TEXT("水流 V 速度"));
 const FName FPBRMaterialParameters::WaterRippleScale(TEXT("水波缩放"));
 const FName FPBRMaterialParameters::WaterRippleStrength(TEXT("水波强度"));
+const FName FPBRMaterialParameters::WaterRippleTexture(TEXT("水纹贴图"));
+const FName FPBRMaterialParameters::UseWaterRippleTexture(TEXT("使用水纹贴图"));
 const FName FPBRMaterialParameters::UVTiling(TEXT("UV 平铺"));
 const FName FPBRMaterialParameters::UVOffset(TEXT("UV 偏移"));
 const FName FPBRMaterialParameters::UVUTiling(TEXT("U 平铺"));
@@ -75,3 +107,26 @@ const FName FPBRMaterialParameters::UVVTiling(TEXT("V 平铺"));
 const FName FPBRMaterialParameters::UVUOffset(TEXT("U 偏移"));
 const FName FPBRMaterialParameters::UVVOffset(TEXT("V 偏移"));
 const FName FPBRMaterialParameters::UVRotationDegrees(TEXT("UV 旋转角度"));
+const FName FPBRMaterialParameters::DynamicSpeedU(TEXT("动态 U 速度"));
+const FName FPBRMaterialParameters::DynamicSpeedV(TEXT("动态 V 速度"));
+const FName FPBRMaterialParameters::DynamicScale(TEXT("动态缩放"));
+const FName FPBRMaterialParameters::DynamicIntensity(TEXT("动态强度"));
+const FName FPBRMaterialParameters::DistortionStrength(TEXT("扭曲强度"));
+const FName FPBRMaterialParameters::EdgeGlowStrength(TEXT("边缘光强度"));
+const FName FPBRMaterialParameters::MaskThreshold(TEXT("遮罩阈值"));
+const FName FPBRMaterialParameters::ScanlineStrength(TEXT("扫描线强度"));
+const FName FPBRMaterialParameters::FlakeScale(TEXT("金属 flakes 缩放"));
+const FName FPBRMaterialParameters::FlakeIntensity(TEXT("金属 flakes 强度"));
+
+FPBRChannelUVParameterNames FPBRMaterialParameters::GetChannelUVNames(const FName& ChannelName)
+{
+	const FString Prefix = ChannelName.IsNone() ? TEXT("通道") : ChannelName.ToString();
+	return {
+		FName(*(Prefix + TEXT(" 使用独立 UV"))),
+		FName(*(Prefix + TEXT(" U 平铺"))),
+		FName(*(Prefix + TEXT(" V 平铺"))),
+		FName(*(Prefix + TEXT(" U 偏移"))),
+		FName(*(Prefix + TEXT(" V 偏移"))),
+		FName(*(Prefix + TEXT(" UV 旋转角度")))
+	};
+}

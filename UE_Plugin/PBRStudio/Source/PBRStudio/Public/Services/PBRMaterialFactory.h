@@ -24,7 +24,6 @@ public:
 		FString& OutNotes);
 
 	static EPBRMaterialType ResolveMaterialTypeForSet(const FPBRMaterialSet& Set, const FString& MaterialTypeMode);
-	static FString MaterialTypeToDisplayName(EPBRMaterialType Type);
 	static void GetUnusedChannelsForMaterialType(
 		const FPBRMaterialSet& Set,
 		EPBRMaterialType MaterialType,

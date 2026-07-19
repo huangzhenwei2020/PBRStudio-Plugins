@@ -35,13 +35,14 @@
     margin-bottom: 10px;
   }
   .target button.active { background: #2563eb; color: #fff; }
-  input[type="number"] {
-    width: 96px;
+  input[type="number"], input[type="text"] {
     padding: 6px 8px;
     border: 1px solid #c6d0da;
     border-radius: 6px;
     background: #fff;
   }
+  input[type="number"] { width: 96px; }
+  input[type="text"] { flex: 1; min-width: 0; }
   button {
     flex: 1;
     min-width: 76px;
@@ -96,18 +97,22 @@
     <button id="btn-save-port">保存</button>
     <button id="btn-check-port" class="primary">连接</button>
   </div>
-  <div class="hint" id="port-hint">Max 默认 19527，UE 默认 19528。点击「连接」后扩展开始工作。</div>
+  <div class="row">
+    <label for="token-input">Token</label>
+    <input id="token-input" type="text" spellcheck="false" autocomplete="off" />
+  </div>
+  <div class="hint" id="port-hint">Max 默认 19527，UE 默认 19528。Token 请从对应插件的本地桥接服务区域复制。</div>
 </div>
 
 <div class="page-info" id="page-info">正在扫描页面链接...</div>
 <div id="pending-box" class="pending-box empty">没有待发送链接</div>
 
 <div class="row">
-  <button id="btn-push-page" class="primary">推送本页链接</button>
+  <button id="btn-push-page" class="primary">下载本页到当前目标</button>
   <button id="btn-retry">重试队列</button>
 </div>
 <div class="row">
-  <button id="btn-push-page-ue" class="good">推送本页到 UE</button>
+  <button id="btn-push-page-ue" class="good">下载本页到 UE</button>
   <button id="btn-clear" class="danger">清空队列</button>
 </div>
 <div class="row">

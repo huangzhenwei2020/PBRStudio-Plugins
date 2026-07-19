@@ -34,7 +34,7 @@ const TMap<FString, TArray<FString>> FPBRTextureScanner::ChannelTokens = {
 	{ TEXT("ClearCoatRoughness"), { TEXT("clearcoatroughness"), TEXT("clear_coat_roughness"), TEXT("coatroughness"), TEXT("coat_roughness") } },
 	{ TEXT("Anisotropy"),   { TEXT("anisotropy"), TEXT("anisotropic"), TEXT("aniso") } },
 	{ TEXT("Thickness"),    { TEXT("thickness"), TEXT("transmission"), TEXT("translucency") } },
-	{ TEXT("ORM"),          { TEXT("orm"), TEXT("rma"), TEXT("mro"), TEXT("occlusionroughnessmetallic"), TEXT("occlusion_roughness_metallic") } },
+	{ TEXT("ORM"),          { TEXT("orm"), TEXT("rma"), TEXT("rmo"), TEXT("mra"), TEXT("mro"), TEXT("occlusionroughnessmetallic"), TEXT("occlusion_roughness_metallic") } },
 	{ TEXT("ARM"),          { TEXT("arm"), TEXT("ambientroughnessmetallic"), TEXT("ambient_roughness_metallic") } },
 };
 
@@ -73,10 +73,13 @@ void FPBRTextureScanner::SplitTextureNameTokens(const FString& Path, FString& Ou
 
 	FString Lower = WithUnderscores.ToLower();
 
-	// Also normalize hyphens to underscores for tokenization
 	Lower.ReplaceInline(TEXT("-"), TEXT("_"));
+	Lower.ReplaceInline(TEXT("."), TEXT("_"));
+	Lower.ReplaceInline(TEXT(" "), TEXT("_"));
+	Lower.ReplaceInline(TEXT("+"), TEXT("_"));
+	Lower.ReplaceInline(TEXT("~"), TEXT("_"));
 
-	// Tokenize on underscore
+	// Tokenize on common separators used by online PBR libraries
 	TArray<FString> Parts;
 	Lower.ParseIntoArray(Parts, TEXT("_"), true);
 
@@ -121,28 +124,41 @@ FString FPBRTextureScanner::DetectPBRChannelFromFilename(const FString& Path)
 	{
 		return Compact.Contains(TEXT("ambientroughnessmetallic")) ? TEXT("ARM") : TEXT("ORM");
 	}
+	if (Compact.Contains(TEXT("roughnessmetallicao")) || Compact.Contains(TEXT("roughnessmetallicambient")) ||
+		Compact.Contains(TEXT("metallicroughnessao")) || Compact.Contains(TEXT("metallicroughnessambient")))
+	{
+		return TEXT("ORM");
+	}
 	if (TokenSet.Contains(TEXT("arm")))
 	{
 		return TEXT("ARM");
 	}
-	if (TokenSet.Contains(TEXT("orm")) || TokenSet.Contains(TEXT("rma")))
+	if (TokenSet.Contains(TEXT("orm")) || TokenSet.Contains(TEXT("rma")) || TokenSet.Contains(TEXT("rmo")) ||
+		TokenSet.Contains(TEXT("mra")) || TokenSet.Contains(TEXT("mro")))
 	{
 		return TEXT("ORM");
 	}
 
 	// Combined words take priority
 	if (Compact.Contains(TEXT("basecolor")) || Compact.Contains(TEXT("basecolour"))) return TEXT("BaseColor");
+	if (Compact.Contains(TEXT("basecol"))) return TEXT("BaseColor");
 	if (Compact.Contains(TEXT("diffusecolor"))) return TEXT("BaseColor");
+	if (Compact.Contains(TEXT("albedo"))) return TEXT("BaseColor");
 	if (Compact.Contains(TEXT("ambientocclusion"))) return TEXT("AO");
 	if (Compact.Contains(TEXT("normaldx")) || Compact.Contains(TEXT("directx"))) return TEXT("NormalDX");
 	if (Compact.Contains(TEXT("normalgl")) || Compact.Contains(TEXT("opengl"))) return TEXT("NormalGL");
 	if (Compact.Contains(TEXT("normalmap"))) return TEXT("Normal");
 	if (Compact.Contains(TEXT("metalness"))) return TEXT("Metallic");
+	if (Compact.Contains(TEXT("metallic"))) return TEXT("Metallic");
 	if (Compact.Contains(TEXT("roughness"))) return TEXT("Roughness");
 	if (Compact.Contains(TEXT("glossiness"))) return TEXT("Glossiness");
 	if (Compact.Contains(TEXT("smoothness"))) return TEXT("Glossiness");
 	if (Compact.Contains(TEXT("displacement"))) return TEXT("Displacement");
+	if (Compact.Contains(TEXT("displace"))) return TEXT("Displacement");
 	if (Compact.Contains(TEXT("heightmap")) || Compact.Contains(TEXT("depthmap"))) return TEXT("Height");
+	if (Compact.Contains(TEXT("opacity")) || Compact.Contains(TEXT("alphamap"))) return TEXT("Opacity");
+	if (Compact.Contains(TEXT("emissive")) || Compact.Contains(TEXT("emission"))) return TEXT("Emissive");
+	if (Compact.Contains(TEXT("specular"))) return TEXT("Specular");
 	if (Compact.Contains(TEXT("clearcoatroughness"))) return TEXT("ClearCoatRoughness");
 	if (Compact.Contains(TEXT("clearcoat"))) return TEXT("ClearCoat");
 	if (Compact.Contains(TEXT("anisotropy")) || Compact.Contains(TEXT("anisotropic"))) return TEXT("Anisotropy");
@@ -221,14 +237,18 @@ bool FPBRTextureScanner::IsProbablePBRPreviewImage(const FString& Path)
 		}
 	}
 
-	// Has channel tokens → let channel detection handle it
-	if (DetectPBRChannelFromFilename(Path) != TEXT("Unknown"))
+	// If the filename has no known channel tokens at all, and matches folder name,
+	// it's likely a preview image
+	bool bHasKnownChannel = false;
+	for (const auto& Pair : ChannelTokens)
 	{
-		return false;
+		for (const FString& Key : Pair.Value)
+		{
+			if (TokenSet.Contains(Key)) { bHasKnownChannel = true; break; }
+		}
+		if (bHasKnownChannel) break;
 	}
-
-	// No channel tokens — treat as preview
-	return true;
+	return !bHasKnownChannel;
 }
 
 FString FPBRTextureScanner::ChooseBetterMap(const FString& Existing, const FString& Candidate)

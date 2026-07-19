@@ -39,6 +39,82 @@ TSharedRef<FSlateStyleSet> FPBRStudioStyle::Create()
 		Style->RootToContentDir(TEXT("PBRStudioIcon_128"), TEXT(".png")),
 		FVector2D(40.0f, 40.0f)));
 
+	Style->Set("PBRStudio.OpenMainWindow.Small", new FSlateImageBrush(
+		Style->RootToContentDir(TEXT("PBRStudioIcon_40"), TEXT(".png")),
+		FVector2D(20.0f, 20.0f)));
+
+	Style->Set("PBRStudio.OpenMainWindow.Toolbar", new FSlateImageBrush(
+		Style->RootToContentDir(TEXT("PBRStudioIcon_40"), TEXT(".png")),
+		FVector2D(24.0f, 24.0f)));
+
+	Style->Set("PBRStudio.MagicOutliner", new FSlateImageBrush(
+		Style->RootToContentDir(TEXT("PBRMagicOutliner_128"), TEXT(".png")),
+		FVector2D(40.0f, 40.0f)));
+
+	Style->Set("PBRStudio.MagicOutliner.Small", new FSlateImageBrush(
+		Style->RootToContentDir(TEXT("PBRMagicOutliner_40"), TEXT(".png")),
+		FVector2D(20.0f, 20.0f)));
+
+	Style->Set("PBRStudio.MagicOutliner.Toolbar", new FSlateImageBrush(
+		Style->RootToContentDir(TEXT("PBRMagicOutliner_40"), TEXT(".png")),
+		FVector2D(24.0f, 24.0f)));
+
+	Style->Set("PBRStudio.Icon.MagicOutliner", new FSlateVectorImageBrush(
+		Style->RootToContentDir(TEXT("Icons/magic-outliner"), TEXT(".svg")),
+		FVector2D(30.0f, 30.0f)));
+
+	Style->Set("PBRStudio.Icon.MaterialVault", new FSlateVectorImageBrush(
+		Style->RootToContentDir(TEXT("Icons/material-vault"), TEXT(".svg")),
+		FVector2D(30.0f, 30.0f)));
+
+	Style->Set("PBRStudio.Icon.CameraPost", new FSlateVectorImageBrush(
+		Style->RootToContentDir(TEXT("Icons/camera-post"), TEXT(".svg")),
+		FVector2D(30.0f, 30.0f)));
+
+	Style->Set("PBRStudio.Icon.TextureSuite", new FSlateVectorImageBrush(
+		Style->RootToContentDir(TEXT("Icons/texture-suite"), TEXT(".svg")),
+		FVector2D(30.0f, 30.0f)));
+
+	Style->Set("PBRStudio.Icon.BatchAdjust", new FSlateVectorImageBrush(
+		Style->RootToContentDir(TEXT("Icons/batch-adjust"), TEXT(".svg")),
+		FVector2D(30.0f, 30.0f)));
+
+	Style->Set("PBRStudio.Toolbar.Refresh", new FSlateVectorImageBrush(
+		Style->RootToContentDir(TEXT("Icons/toolbar-refresh"), TEXT(".svg")),
+		FVector2D(18.0f, 18.0f)));
+
+	Style->Set("PBRStudio.Toolbar.Select", new FSlateVectorImageBrush(
+		Style->RootToContentDir(TEXT("Icons/toolbar-select"), TEXT(".svg")),
+		FVector2D(18.0f, 18.0f)));
+
+	Style->Set("PBRStudio.Toolbar.Add", new FSlateVectorImageBrush(
+		Style->RootToContentDir(TEXT("Icons/toolbar-add"), TEXT(".svg")),
+		FVector2D(18.0f, 18.0f)));
+
+	Style->Set("PBRStudio.Toolbar.Show", new FSlateVectorImageBrush(
+		Style->RootToContentDir(TEXT("Icons/toolbar-show"), TEXT(".svg")),
+		FVector2D(18.0f, 18.0f)));
+
+	Style->Set("PBRStudio.Toolbar.Hide", new FSlateVectorImageBrush(
+		Style->RootToContentDir(TEXT("Icons/toolbar-hide"), TEXT(".svg")),
+		FVector2D(18.0f, 18.0f)));
+
+	Style->Set("PBRStudio.Toolbar.Settings", new FSlateVectorImageBrush(
+		Style->RootToContentDir(TEXT("Icons/toolbar-settings"), TEXT(".svg")),
+		FVector2D(18.0f, 18.0f)));
+
+	Style->Set("PBRStudio.Toolbar.Filter", new FSlateVectorImageBrush(
+		Style->RootToContentDir(TEXT("Icons/toolbar-filter"), TEXT(".svg")),
+		FVector2D(18.0f, 18.0f)));
+
+	Style->Set("PBRStudio.Toolbar.Clear", new FSlateVectorImageBrush(
+		Style->RootToContentDir(TEXT("Icons/toolbar-clear"), TEXT(".svg")),
+		FVector2D(18.0f, 18.0f)));
+
+	Style->Set("PBRStudio.Toolbar.Open", new FSlateVectorImageBrush(
+		Style->RootToContentDir(TEXT("Icons/toolbar-open"), TEXT(".svg")),
+		FVector2D(18.0f, 18.0f)));
+
 	return Style;
 }
 

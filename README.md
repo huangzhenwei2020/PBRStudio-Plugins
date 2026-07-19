@@ -1,451 +1,401 @@
-# PBRStudio — 三端 PBR 工作流插件
+# PBRStudio 三端插件使用说明
 
-[![Version](https://img.shields.io/badge/version-1.1.4-blue)](https://github.com/huangzhenwei2020/PBRStudio-Plugins)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+版本：1.1.5
+适用对象：Unreal Engine 编辑器、Chrome 浏览器、3ds Max  
+项目地址：https://github.com/huangzhenwei2020/PBRStudio-Plugins
 
-一套覆盖 **Unreal Engine / Chrome 浏览器 / 3ds Max** 三端的 PBR 材质工作流工具集，主要面向室内设计、建筑可视化的 UE 资产整理流程。
+PBRStudio 是一套面向建筑可视化、室内设计和 PBR 材质整理流程的三端工具。它把网页素材下载、3ds Max 场景整理、UE 材质创建和场景材质转换串到一个工作流里。
 
----
+## 一分钟上手
 
-## 目录
+推荐使用 `Releases/PBRStudio_Tri_Plugin_Installer_v1.1.5.exe` 作为入口。如果公司安全策略拦截 exe，也可以分别安装三个端：
 
-- [快速开始](#快速开始)
-- [项目结构](#项目结构)
-- [3ds Max 脚本](#3ds-max-脚本)
-  - [一键安装 (MZP)](#一键安装-mzp)
-  - [手动安装](#手动安装)
-  - [功能详解](#max-功能详解)
-- [Chrome 浏览器插件](#chrome-浏览器插件)
-  - [安装方法](#chrome-插件安装)
-  - [使用说明](#chrome-插件使用)
-- [UE 插件 (PBRStudio)](#ue-插件-pbrstudio)
-  - [安装方法](#ue-插件安装)
-  - [功能介绍](#ue-插件功能)
-- [三端协作流程](#三端协作流程)
-- [常见问题](#常见问题)
-- [技术栈](#技术栈)
-- [版本历史](#版本历史)
-- [许可证](#许可证)
+完整的 `1.1.5` 预编译 UE 包和一键安装器体积超过 GitHub 普通文件限制，请从 [GitHub Releases](https://github.com/huangzhenwei2020/PBRStudio-Plugins/releases/tag/v1.1.5) 下载；仓库内的 `Releases` 目录保留小型安装包与历史版本。
 
----
+| 端 | 推荐文件 | 作用 |
+| --- | --- | --- |
+| UE | `Releases/PBRStudio_UE_Plugin_v1.1.5.zip` 或 `UE_Plugin/PBRStudio` | UE 里创建材质、下载素材、转换场景材质、管理魔法大纲 |
+| Chrome | `Releases/PBRStudio_Chrome_Extension_v1.1.5.zip` 或 `Chrome_Extension/chrome_extension` | 从素材网站把下载链接推送到 UE 或 3ds Max |
+| 3ds Max | `Releases/PBRStudio_3dsMax_v1.1.5.mzp` | 整理 Max 场景、批量修复、PBR 贴图套件、下载库 |
 
-## 快速开始
+默认本地通信端口：
 
-| 你要做什么 | 用哪个 | 怎么装 |
-|-----------|--------|--------|
-| 在 3ds Max 里整理场景 | **3ds Max 脚本** | 拖 `PBRStudio_3dsMax_v*.mzp` 进 Max 视口 |
-| 在浏览器里推送素材链接 | **Chrome 扩展** | Chrome 扩展管理页加载 `Chrome_Extension/chrome_extension/` |
-| 在 UE 里创建 PBR 材质 | **UE 插件** | 复制 `UE_Plugin/PBRStudio/` 到项目 `Plugins/` 目录 |
-
----
+| 目标 | 端口 |
+| --- | --- |
+| Chrome 推送到 3ds Max | `19527` |
+| Chrome 推送到 UE | `19528` |
 
 ## 项目结构
 
-```
+```text
 PBRStudio-Plugins/
-├── install.ms                    # 3ds Max MZP 安装入口脚本
-├── InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py  # 3ds Max 主脚本（约 20,000 行）
-├── _pbr_clean_utils.py           # 3ds Max 独立工具函数模块
-│
-├── Chrome_Extension/chrome_extension/  # Chrome 浏览器扩展
-│   ├── popup.html / popup.js     # 弹出窗口（推送控制面板）
-│   ├── ai_panel.html / ai_panel.js    # AI 助手面板
-│   ├── background.js             # Service Worker（后台服务）
-│   ├── content.js                # 内容脚本（页面链接提取 & 快捷按钮）
-│   ├── manifest.json             # Chrome 扩展清单 (Manifest V3)
-│   ├── _locales/zh_CN/           # 中文本地化
-│   ├── icon16.png / icon48.png / icon128.png  # 扩展图标
-│   └── vendor/katex/             # KaTeX 数学公式渲染
-│
-├── UE_Plugin/PBRStudio/          # Unreal Engine 编辑器插件
-│   ├── Source/PBRStudio/         # C++ 源码
-│   │   ├── Public/               # 头文件
-│   │   │   ├── Models/           # 数据模型（材质条目、下载站点等）
-│   │   │   ├── Services/         # 服务层（HTTP、下载、材质工厂等）
-│   │   │   └── Widgets/          # Slate UI 组件
-│   │   └── Private/              # 实现文件
-│   ├── Resources/                # 插件资源（图标、示例纹理）
-│   ├── Config/                   # 插件配置
-│   └── PBRStudio.uplugin         # UE 插件描述文件
-│
-├── Docs/                         # 使用文档
-│   ├── PBRStudio_三端插件使用说明.md
-│   ├── PBRStudio_三端插件使用说明.html
-│   └── PBRStudio_三端插件使用说明.pdf
-│
-├── Releases/                     # 打包发布文件
-│   ├── PBRStudio_3dsMax_v*.mzp          # 3ds Max 一键安装包
-│   ├── PBRStudio_Chrome_Extension_v*.zip # Chrome 扩展打包
-│   └── PBRStudio_UE_Plugin_v*.zip       # UE 插件打包
-│
-├── README.md
-└── LICENSE
+  Chrome_Extension/chrome_extension/       Chrome Manifest V3 扩展
+  Docs/                                    离线使用说明
+  Releases/                                发布包、安装包
+  Tools/                                   三端安装器构建工具
+  UE_Plugin/PBRStudio/                     Unreal Engine 编辑器插件源码
+  InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py
+                                           3ds Max 主脚本
+  install.ms                               3ds Max MZP 安装入口
+  _pbr_clean_utils.py                      3ds Max 辅助工具
 ```
 
----
+## 一键安装
 
-## 3ds Max 脚本
+1. 关闭 Unreal Editor、3ds Max 和 Chrome 扩展管理页。
+2. 运行 `Releases/PBRStudio_Tri_Plugin_Installer_v1.1.5.exe`。
+3. 按安装器提示选择需要安装的端。
+4. UE 项目级安装时，目标目录应是你的项目目录或项目下的 `Plugins` 目录。
+5. 安装完成后按下面对应端的说明检查一次。
 
-**文件名**: `InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py`
+如果一键安装器不能运行，使用下面的手动安装方式。
 
-面向室内设计 UE 导入前的场景整理工具，基于 `pymxs`（3ds Max Python API）和 `PySide2/6`（Qt UI）。
+## UE 插件安装
 
-### 一键安装 (MZP)
+### 手动复制
 
-> 推荐方式，双击或拖拽即可完成安装。
+1. 关闭 Unreal Editor。
+2. 打开你的 UE 项目目录。
+3. 如果没有 `Plugins` 文件夹，新建一个。
+4. 把 `UE_Plugin/PBRStudio` 整个文件夹复制到：
 
-1. 打开 3ds Max 2024（也支持 2020-2025）
-2. 将 `Releases/PBRStudio_3dsMax_v*.mzp` **拖入 3ds Max 视口**
-3. 弹出 "PBRStudio 安装成功" 对话框
-4. 重启 3ds Max（或通过 **自定义 → 自定义用户界面** 加载）
-5. 在 **自定义 → 自定义用户界面 → 工具栏** 中，类别选择 **"PBR Studio"**
-6. 将 **"Interior Scene Studio Pro"** 按钮拖入任意工具栏
-7. 点击按钮即可打开插件主界面
-
-> **安装做了什么？**
-> - 将 `.py` 脚本文件复制到 `%LOCALAPPDATA%\Autodesk\3dsMax\20xx - 64bit\ENU\scripts\`
-> - 在 `usermacros\` 目录注册宏脚本 `.mcr`，使按钮出现在自定义界面中
-
-### 手动安装
-
-如果不使用 MZP，也可以手动运行：
-
-1. 打开 3ds Max
-2. 菜单栏: **脚本** → **运行脚本**
-3. 选择 `InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py`（确保 `install.ms` 和 `_pbr_clean_utils.py` 在同目录下）
-4. 确保 `_pbr_clean_utils.py` 在同一目录下
-
-### Max 功能详解
-
-#### 1. 模型管理
-| 操作 | 说明 |
-|------|------|
-| 对象修复 | 批量修复：无材质补默认材质、缩放异常自动 Reset XForm + 转 Editable Poly、轴心归底居中 |
-| 跳过冻结对象 | 修复时可选择跳过已冻结对象，保护参考模型 |
-| 进度条 | 批量操作显示进度，可随时强制停止并恢复视口刷新 |
-| 列表视图 | 完整对象列表，显示名称、类型、材质、层级等属性，支持排序 |
-| 筛选与搜索 | 按名称/类型/问题/材质搜索；支持快捷键过滤 |
-| 勾选工具 | 只勾选中 / 只勾未选中 / 全选 / 取消 / 反转 |
-| 右键菜单 | 选中对象、隐藏、冻结、孤立编辑、删除、导出选中等 |
-
-#### 2. 组管理
-- 组列表（含嵌套组），展开/折叠组头
-- 组的打开/关闭、选中组成员、解组
-- 自动同步场景中的组变化
-
-#### 3. 灯光管理
-- 灯光列表，显示类型、强度、色温、阴影状态
-- 按类型筛选（点光源、面光源、聚光灯、IES 等）
-- 批量开关阴影、调整强度/颜色
-- 选中/隔离/删除灯光
-
-#### 4. 相机管理
-- 相机列表，显示类型、焦距、FOV
-- 快速切换相机视角
-- 批量调整相机参数
-
-#### 5. 材质管理
-- 完整材质列表，显示名称、类型、使用次数
-- 查找未使用材质、关联材质到对象
-- 材质编辑器集成（双击打开 Slate Material Editor）
-- 材质分类（Standard、VRay、Corona、Physical 等）
-
-#### 6. 材质标准化（PBR 转换）
-- 将传统材质批量转换为 Physical Material（PBR 标准）
-- 支持 Standard → Physical、VRayMtl → Physical
-- 预览转换计划，确认后执行
-- 完整的撤销支持
-
-#### 7. PBR 贴图套装
-- 智能识别 PBR 贴图通道（BaseColor、Roughness、Metallic、Normal、AO、Height、Displacement、Opacity 等）
-- 支持 DirectX 和 OpenGL 法线格式识别
-- 自动匹配预览图
-- 一键创建标准 PBR 材质（Physical Material + PBR 贴图连接）
-- 支持 Metal/Roughness 和 Specular/Glossiness 两种工作流
-- 批量导入、命名自动匹配
-
-#### 8. PBR 下载库
-- 内置多个免费 PBR 素材站点（AmbientCG、Poly Haven、ShareTextures 等）
-- 网页链接下载 → 自动解压（支持 ZIP/RAR/7Z）
-- 解压后自动整理到贴图套装对应目录
-- 接收 Chrome 扩展推送（端口 19527）
-- 路径持久化，重开插件自动恢复
-- 关键词搜索、站点分类浏览
-
-#### 9. 场景体检
-- 一键扫描全场景问题：
-  - 孤立顶点、零面积面、重叠面
-  - 非均匀缩放对象、缺少 UV 的对象
-  - 缺少材质的对象、材质贴图路径异常
-  - 重名对象、空组、空层
-- 问题列表，点击定位到问题对象
-- 导出体检报告
-
-#### 10. 重命名工具
-- 批量重命名，支持：前缀/后缀、查找替换、序号、正则表达式
-- 重命名前预览确认（显示旧名 → 新名对照表）
-- 一键撤销上次重命名操作
-- 命名规则可保存/加载配置
-
-#### 11. UE 贴图流送
-- 将场景贴图路径流式发送到 UE（本地 HTTP）
-- 支持选择范围（选中对象 / 全部材质 / 指定材质）
-- 实时进度显示，可随时停止
-
-#### 12. AI 小助手
-- 内置 AI 对话面板（基于 Web 引擎）
-- 室内设计相关问答
-- 支持深色/浅色主题跟随
-
-#### 13. 其他功能
-- **11 种 UI 皮肤**：暖木暗色、曜石蓝黑、石材灰、奶油浅色、米兰岩板、莫兰迪绿、铜黑展厅、日式原木、包豪斯白、经典灰、高对比深色
-- **字号调节**：A- / A+ 按钮，9px ~ 18px 可调
-- **窗口置顶**：可开关，默认关闭避免遮挡 Max 系统对话框
-- **Excel / CSV 导出**：场景信息、材质列表、贴图清单
-- **操作日志**：记录关键操作，方便回溯
-- **配置文件导入/导出**：保存重命名规则、PBR 设置等
-
----
-
-## Chrome 浏览器插件
-
-**版本**: 1.1.3 | **清单版本**: Manifest V3
-
-### Chrome 插件安装
-
-1. 打开 Chrome，地址栏输入 `chrome://extensions/` 回车
-2. 打开右上角 **开发者模式** 开关
-3. 点击 **加载已解压的扩展程序**
-4. 选择 `Chrome_Extension/chrome_extension` 文件夹
-5. 扩展卡片出现在列表中，安装完成
-
-> **更新方法**: 修改插件文件后，在扩展管理页点击刷新按钮即可重新加载。
-
-### Chrome 插件使用
-
-#### 弹出窗口（点击扩展图标）
-
-| 功能 | 说明 |
-|------|------|
-| 目标切换 | 选择推送到 **Max**（3ds Max，端口 19527）或 **UE**（Unreal Engine，端口 19528） |
-| 端口配置 | Max 和 UE 端口独立配置，互不干扰 |
-| 手动检测 | 点击检测按钮验证目标端是否在线（不会自动检测，避免性能消耗） |
-| 推送本页链接 | 将当前网页 URL 推送到目标端（Max 或 UE） |
-| 重试队列 | 一键重试之前发送失败的所有链接 |
-| 打开 AI 面板 | 启动室内场景 AI 助手（独立面板） |
-
-#### 页面快捷按钮（Content Script）
-
-浏览支持的素材网站时，页面右下角会出现两个快捷按钮：
-- **Max** — 推送到 3ds Max 下载库（端口 19527）
-- **UE** — 推送到 Unreal Engine 下载库（端口 19528）
-
-支持的素材网站包括：AmbientCG、Poly Haven、ShareTextures、3DTextures.me、CG Bookcase 等。
-
-#### AI 助手面板
-- 室内设计 AI 对话助手
-- 支持深色/浅色主题切换
-- KaTeX 数学公式渲染
-- 独立可拖拽面板窗口
-
----
-
-## UE 插件 (PBRStudio)
-
-**版本**: 1.1.3 | **模块类型**: Editor | **加载阶段**: PostEngineInit
-
-### UE 插件安装
-
-#### 第一步：复制插件
-
-1. 关闭 Unreal Editor
-2. 将 `UE_Plugin/PBRStudio` 文件夹复制到你的 UE 项目目录下：
-
-```
-你的项目/Plugins/PBRStudio/
-├── Source/PBRStudio/
-├── Resources/
-├── Config/
-└── PBRStudio.uplugin
+```text
+你的项目/Plugins/PBRStudio
 ```
 
-> 如果项目没有 `Plugins` 文件夹，手动创建一个。
+5. 重新打开项目。
+6. 如果 UE 提示需要编译插件，点击确认。
+7. 编译完成后，在 UE 工具栏或菜单中打开 `PBR Studio`。
 
-#### 第二步：编译（如需要）
+### 编译要求
 
-3. 重新打开项目，如果 UE 提示插件需要编译，点击 **确认**
-4. 编译完成后，在 UE 菜单栏找到 **PBR Studio** 工具窗口
+这是 UE 编辑器 C++ 插件。不同 UE 版本、不同引擎安装路径或非 C++ 项目可能需要重新编译。
 
-> **非 C++ 项目**: 本仓库仅包含源码，首次使用需要在 Visual Studio 环境下编译一次。安装 Visual Studio 2022 + UE C++ 工具链，将项目临时转为 C++ 项目（添加一个空 `.cpp` 文件即可）。
+推荐环境：
 
-### UE 插件功能
+- Unreal Engine 5.x
+- Visual Studio 2022
+- Windows 10/11 SDK
+- UE C++ 编译工具链
 
-插件主窗口包含以下标签页：
+非 C++ 项目如果无法编译，可以给项目添加一个空 C++ 类，让 UE 生成工程文件后再编译。
 
-#### 贴图套件 — PBR 纹理扫描与材质创建
+### UE 插件自带母材质
 
-| 步骤 | 操作 |
-|------|------|
-| 1. 选择文件夹 | 选择包含 PBR 贴图的文件夹 |
-| 2. 扫描贴图 | 自动识别 PBR 通道：BaseColor、Roughness、Metallic、Normal、AO、Height 等 |
-| 3. 选择材质类型 | Standard、Metal、Glass、Fabric、Leather、Wood、Stone、Tile、Plastic、Emissive、Water |
-| 4. 选择法线模式 | DirectX（默认）或 OpenGL |
-| 5. 批量创建 | 一键创建材质实例，自动连接贴图参数 |
+UE 插件本身包含 `Content`，母材质和材质函数挂载在 `/PBRStudio/Templates`、`/PBRStudio/Functions`。创建 PBR 材质、材质转换和魔法大纲调参会优先使用插件自带母材质；转换出来的材质实例仍默认保存到项目 `/Game/PBRStudio/SceneReplaced`，方便每个项目单独管理。
 
-#### 下载库 — 网络资源下载与整理
+维护发布包时可用命令行重建内置母材质：`UnrealEditor-Cmd.exe <项目.uproject> -run=PBRStudioBuildContent -nop4 -unattended -nullrhi -NoSound`。
 
-| 功能 | 说明 |
-|------|------|
-| 接收推送 | 通过本地 HTTP 服务（端口 19528）接收 Chrome 插件推送的下载链接 |
-| 手动下载 | 粘贴 URL 直接下载 |
-| 自动解压 | 支持 `.zip`（PowerShell）、`.rar` / `.7z`（需安装 7-Zip 或 WinRAR） |
-| 智能命名 | 自动从 Content-Disposition、URL 参数提取文件名 |
-| 材质库管理 | 解压后自动整理到材质库，与贴图套件共享路径 |
-| 路径持久化 | 重开插件后自动恢复上次选择的路径 |
-| 站点浏览 | 内置素材站点目录，分类浏览 |
+## UE 插件主要功能
 
-#### Chrome 推送服务
+### 1. 贴图套件
 
-- 本地 HTTP 服务器，默认端口 `19528`
-- 接收 Chrome 插件推送的下载 URL
-- 在 UE 内部直接触发下载和解压流程
+用于把一组本地 PBR 贴图创建成 UE 材质实例。
 
----
+使用步骤：
 
-## 三端协作流程
+1. 打开 `PBR Studio`。
+2. 进入 `贴图套件`。
+3. 选择贴图文件夹。
+4. 点击扫描。
+5. 检查识别出的通道。
+6. 选择材质类型，例如标准、木材、石材、瓷砖、布料、皮革、塑料、金属、半透明、玻璃、水、自发光。
+7. 选择法线模式，DirectX 或 OpenGL。
+8. 点击创建材质。
 
-推荐的完整 PBR 资产工作流：
+支持识别的常见通道：
 
+- BaseColor / Albedo / Diffuse
+- Normal / NormalDX / NormalGL
+- Roughness / Glossiness
+- Metallic
+- Specular
+- AO
+- Height / Displacement
+- Opacity
+- Emissive
+- ORM / ARM
+
+### 2. 下载库
+
+用于接收 Chrome 推送或手动粘贴下载链接，并整理素材包。
+
+使用步骤：
+
+1. 进入 `下载库`。
+2. 设置材质库目录。
+3. 启动 Chrome 推送服务。
+4. 默认监听端口是 `19528`。
+5. 从 Chrome 插件推送链接，或在 UE 内手动粘贴 URL。
+6. 下载完成后会自动解压并整理到材质库。
+7. 切到 `贴图套件` 扫描并创建材质。
+
+压缩包支持：
+
+- `.zip`：使用系统 PowerShell 解压。
+- `.rar` / `.7z`：优先调用本机 7-Zip 或 WinRAR。
+
+下载文件名优先级：
+
+1. HTTP `Content-Disposition`
+2. URL 参数中的 `file`、`filename`、`name`、`download`、`dl`、`path`
+3. URL 路径文件名
+4. 默认 `download`
+
+### 3. 材质转换
+
+用于把场景里已有材质转换为 PBRStudio 的统一母材质体系。
+
+使用步骤：
+
+1. 打开 `材质转换`。
+2. 扫描当前关卡材质。
+3. 检查列表里的材质类型判断和贴图识别。
+4. 设置输出目录，默认是 `/Game/PBRStudio/SceneReplaced`。
+5. 勾选要转换的材质。
+6. 执行转换。
+
+转换逻辑会尽量继承原材质的：
+
+- 基础色贴图或基础色参数
+- 法线贴图
+- 粗糙度贴图或粗糙度值
+- 金属度贴图或金属度值
+- AO、Specular、Height、Opacity、Emissive 等通道
+
+玻璃、半透明、自发光会分别走对应的 PBRStudio 母材质，不再简单全部按普通不透明材质处理。玻璃会进入独立 `M_PBR_Glass` 母材质，并调用 PBRStudio 自带的玻璃光学函数，包含透明、折射、菲涅尔、吸收、污渍、扭曲、磨砂、阴影、焦散和光追相关参数。
+
+### 4. 魔法大纲
+
+魔法大纲是 UE 端的场景管理窗口，用于按模型、材质、灯光、相机、蓝图、关卡等维度查看和操作场景对象。
+
+常用能力：
+
+- 场景对象分类查看。
+- 按 Actor 展示模型，并显示 Actor 下的网格体。
+- 支持多选、勾选、反选、隔离和显示隐藏。
+- 选中场景物体时，材质列表会自动聚焦对应材质。
+- 模型批量重命名。
+- 批量移动到文件夹。
+- 可选择把所选模型挂到新 Actor 下。
+- 灯光强度、色温、颜色批量调节。
+- 相机与后期参数辅助调节。
+
+### 5. 魔法大纲里的直接材质调整
+
+这是 UE 端 1.1.5 的重点功能。
+
+使用步骤：
+
+1. 在 UE 场景里选中一个或多个物体。
+2. 打开 `魔法大纲`。
+3. 切到材质分类或材质视图。
+4. 右侧 `被选择的材质` 会显示当前选中物体使用的材质。
+5. 点击某一行或某个槽位的 `调参`。
+6. 如果该槽位已经是材质实例，插件会直接读取它；如果是普通材质，插件会创建可编辑实例。
+7. 弹出 `材质参数调节` 窗口。
+8. 弹窗会读取当前材质实例真实存在的全部参数，可直接修改标量、颜色/向量、贴图和静态开关。
+9. 也可以切换材质类型；切换后会自动套用该类型的默认参数。
+
+参数窗口会按材质实例的参数分组显示完整参数。标量可直接输入数字或用微调控件调整；颜色点色块可打开 UE 颜色拾取器；贴图参数使用 `使用贴图` 勾选控制启用，并通过资产框选择、浏览或清空贴图。
+
+独立 UV 参数会跟随对应贴图通道显示，例如基础色、法线、粗糙度等通道各自的 `使用独立 UV`。未启用独立 UV 时，只显示开关；启用后才显示该通道的 U/V 平铺、偏移和旋转。
+
+可切换类型：
+
+- 标准
+- 木材
+- 石材
+- 瓷砖
+- 布料
+- 皮革
+- 塑料
+- 金属
+- 半透明
+- 玻璃
+- 水
+- 自发光
+
+常见参数组：
+
+- 通用：基础色、基础色强度、粗糙度、高光、法线、AO、UV。
+- 金属：金属度、金属度强度、各向异性、金属颗粒。
+- 布料：织物绒毛颜色和强度。
+- 皮革：清漆强度和清漆粗糙度。
+- 半透明：透明度、透明贴图、折射率。
+- 玻璃：透明度、折射率、透明菲涅尔、菲涅尔基础反射、菲涅尔指数、毛玻璃、吸收颜色、吸收强度、边缘染色、污渍、扭曲、阴影、焦散和光追参数。
+- 水：水体颜色、水流速度、水波缩放和强度。
+- 自发光：自发光颜色、贴图开关、色温、自发光强度。
+
+接管后的材质实例默认生成到：
+
+```text
+/Game/PBRStudio/SelectedMaterials
 ```
-┌──────────────────┐                     ┌──────────────────┐
-│   Chrome 插件     │                     │   素材网站        │
-│   (弹出窗口)      │                     │   (AmbientCG,    │
-│                   │                     │    Poly Haven…)  │
-└────────┬─────────┘                     └────────┬─────────┘
-         │                                        │
-         │  点击推送 / 页面快捷按钮                  │
-         │                                        │
-         ▼                                        ▼
-┌──────────────────┐                     ┌──────────────────┐
-│  本地 HTTP 推送   │ ─────────────────→  │  Max 或 UE       │
-│  (localhost)     │   端口 19527/19528   │  (接收下载 URL)   │
-└──────────────────┘                     └────────┬─────────┘
-                                                  │
-                                         自动下载 & 解压
-                                                  │
-                                                  ▼
-                                         ┌──────────────────┐
-                                         │  贴图套件         │
-                                         │  扫描 → 识别通道  │
-                                         │  → 创建材质实例    │
-                                         └──────────────────┘
+
+注意：
+
+- `调参` 从具体组件的具体材质槽进入；如果槽位引用的是共享材质实例，参数修改会作用到该实例的所有引用。普通材质会先创建可编辑实例再调。
+- 如果你想替换所有使用同一旧材质的槽，使用材质列表拖拽替换或 `材质转换`。
+- 如果场景来自 Datasmith，移动 Actor 层级或替换材质可能影响后续 Datasmith 重新同步时的覆盖结果。建议重要项目先复制关卡或保存版本。
+
+## Chrome 扩展安装
+
+### 从 zip 安装
+
+1. 解压 `Releases/PBRStudio_Chrome_Extension_v1.1.5.zip`。
+2. 打开 Chrome。
+3. 地址栏输入 `chrome://extensions/`。
+4. 打开右上角 `开发者模式`。
+5. 点击 `加载已解压的扩展程序`。
+6. 选择解压后的 `chrome_extension` 文件夹。
+
+### 从源码安装
+
+直接加载：
+
+```text
+Chrome_Extension/chrome_extension
 ```
 
-**详细步骤**：
+### Chrome 使用流程
 
-1. **启动接收端**: UE → PBRStudio → 下载库 → 启动 Chrome 推送服务（端口 19528），或 Max 端自动监听（端口 19527）
-2. **验证连接**: Chrome 插件选择对应目标，点击"手动检测"确认连接成功
-3. **浏览 & 推送**: 在素材网站找到需要的 PBR 材质，点击页面上的 `UE` 或 `Max` 快捷按钮
-4. **自动下载**: 接收端自动下载 ZIP 并解压到材质库目录
-5. **创建材质**: 切换到贴图套件页，扫描文件夹 → 选择材质类型 → 批量创建材质实例
-6. **应用到场景**: 将材质拖拽应用到 UE 场景对象，或通过 3ds Max 的材质标准化功能
+1. 打开 UE 下载库并启动推送服务，或打开 Max 端下载库。
+2. 点击 Chrome 扩展图标。
+3. 选择目标：`UE` 或 `Max`。
+4. 检查端口：UE 默认 `19528`，Max 默认 `19527`。
+5. 点击手动检测。
+6. 在素材网站页面点击 `UE` 或 `Max` 快捷按钮。
+7. 目标端收到链接后开始下载。
 
----
+支持常见素材站，例如 AmbientCG、Poly Haven、ShareTextures、CGBookcase、3DTextures 等。
+
+## 3ds Max 插件安装
+
+### MZP 一键安装
+
+1. 打开 3ds Max。
+2. 将 `Releases/PBRStudio_3dsMax_v1.1.5.mzp` 拖入 Max 视口。
+3. 按提示完成安装。
+4. 重启 3ds Max。
+5. 进入 `自定义` - `自定义用户界面`。
+6. 在类别中找到 `PBR Studio`。
+7. 把 `Interior Scene Studio Pro` 按钮拖到工具栏。
+8. 点击按钮打开界面。
+
+### 手动运行
+
+如果不使用 MZP：
+
+1. 打开 3ds Max。
+2. 菜单进入 `脚本` - `运行脚本`。
+3. 选择：
+
+```text
+InteriorSceneStudioPro_v95_topbar_width_collapse_clean.py
+```
+
+4. 确保 `_pbr_clean_utils.py` 和主脚本在同一目录。
+
+### 3ds Max 主要功能
+
+- 模型列表、搜索、筛选、选中、隐藏、冻结、孤立。
+- 批量修复无材质、异常缩放、轴心位置等问题。
+- 场景体检，检查重名、空层、缺 UV、贴图路径异常等问题。
+- 材质列表和材质标准化。
+- PBR 贴图套件扫描与材质创建。
+- 下载库接收 Chrome 推送，默认端口 `19527`。
+- 批量重命名和导出。
+- 多主题 UI、字号调节、操作日志。
+
+## 推荐三端工作流
+
+1. 在 UE 或 Max 中设置材质库目录。
+2. 在目标端启动本地推送服务。
+3. Chrome 扩展选择目标端并手动检测。
+4. 浏览素材网站。
+5. 点击页面里的 `UE` 或 `Max` 按钮推送下载链接。
+6. 目标端下载并解压素材包。
+7. 使用贴图套件扫描贴图。
+8. 创建材质实例。
+9. 在 UE 里使用魔法大纲或材质转换整理场景材质。
+
+## 发布包说明
+
+| 文件 | 用途 |
+| --- | --- |
+| `PBRStudio_Tri_Plugin_Installer_v1.1.5.exe` | 三端一键安装器 |
+| `PBRStudio_UE_Plugin_v1.1.5.zip` | UE 插件发布包 |
+| `PBRStudio_Chrome_Extension_v1.1.5.zip` | Chrome 扩展发布包 |
+| `PBRStudio_3dsMax_v1.1.5.mzp` | 3ds Max 一键安装包 |
 
 ## 常见问题
 
-### 3ds Max 相关
+### UE 提示插件无法编译
 
-**Q: 拖入 MZP 没有反应？**
-A: 确认使用 v1.1.4 或更高版本的 MZP。如果之前装过旧版，重启 Max 后重新拖入即可覆盖。
+确认安装了 Visual Studio 2022、Windows SDK 和 UE C++ 工具链。非 C++ 项目可以先添加一个空 C++ 类，再重新打开项目编译。
 
-**Q: 点击按钮提示"未找到脚本文件"？**
-A: 重新拖入 MZP 安装即可。安装程序会自动将脚本复制到正确的用户脚本目录。
+### Chrome 推送失败
 
-**Q: Python 脚本执行报错？**
-A: v1.1.4 已修复 `ModuleNotFoundError: No module named '_pbr_clean_utils'` 导入错误。确保使用最新版 MZP。
+检查目标端是否启动服务、端口是否正确、防火墙是否拦截 localhost。UE 默认 `19528`，Max 默认 `19527`。
 
-**Q: 界面显示异常（太大/太小/模糊）？**
-A: 脚本已启用高 DPI 适配。如果仍有问题，可在面板顶部通过 A- / A+ 按钮调整字号，或切换不同的 UI 皮肤。
+### 页面没有出现 UE/Max 快捷按钮
 
-**Q: 窗口一闪而过？**
-A: v1.1.4 已修复。如果仍有问题，请通过 MZP 安装后的工具栏按钮启动，不要直接 "运行脚本" 执行 .py 文件。
+确认当前站点是否在支持列表中。也可以打开扩展弹窗，使用 `推送本页链接`。
 
-### Chrome 推送相关
+### RAR 或 7Z 不能自动解压
 
-**Q: Chrome 推送失败？**
-- 确认目标端（Max/UE）的推送服务已启动
-- 在 Chrome 插件弹窗中点击"手动检测"验证连通性
-- 检查防火墙是否阻止了本地端口通信（19527/19528）
-- 确认 Chrome 插件中选择的目标（Max/UE）与实际监听的端口一致
+安装 7-Zip 或 WinRAR 后重试。
 
-**Q: 页面没有出现快捷按钮？**
-A: 检查是否在支持的素材网站上。如需添加新站点，可在 `content.js` 中扩展 `SUPPORTED_SITES` 配置。
+### Datasmith 重新同步会不会覆盖修改
 
-### UE 插件相关
+可能会。材质替换、Actor 层级调整、移动到新 Actor 等操作如果作用在 Datasmith 导入对象上，后续重新同步可能被 Datasmith 规则覆盖。正式项目建议先备份关卡或复制一份测试关卡。
 
-**Q: 非 C++ 项目无法打开插件？**
-- 本仓库仅包含源码，需在 Visual Studio 环境下编译一次
-- 安装 Visual Studio 2022 + UE 所需的 C++ 工具链
-- 将项目临时转为 C++ 项目（添加一个空 .cpp 文件即可编译）
+### 魔法大纲调参会不会改到所有同材质对象
 
-**Q: RAR / 7Z 无法自动解压？**
-- 安装 [7-Zip](https://www.7-zip.org/) 或 [WinRAR](https://www.win-rar.com/) 后重试
-- ZIP 格式使用系统 PowerShell 解压，无需额外软件
+不会直接无提示全局修改。`调参` 面板接管的是当前组件的当前材质槽，会创建或复用 PBRStudio 可编辑实例。如果需要全局替换，使用材质行拖拽替换或 `材质转换`。
 
-**Q: 新增下载站点没有出现？**
-- 插件会自动合并内置站点配置
-- 删除项目 `Saved/PBRStudio/PBRDownloadSites.json` 后重开 UE 即可恢复默认列表
+## 开发与打包
 
----
+UE 编译示例：
 
-## 功能矩阵
+```powershell
+& "D:\Program Files\Epic Games\UE_5.7\Engine\Build\BatchFiles\Build.bat" test_cheshiEditor Win64 Development -Project="H:\UE_OFFICE\test_cheshi\test_cheshi.uproject" -WaitMutex -NoHotReloadFromIDE -NoUBA
+```
 
-| 功能 | UE 插件 | Chrome 扩展 | 3ds Max 脚本 |
-|------|:-------:|:-----------:|:------------:|
-| PBR 贴图通道自动识别 | ✅ | — | ✅ |
-| 材质实例自动创建 | ✅ | — | ✅ |
-| 母材质模板管理 | ✅ | — | — |
-| 网络资源下载 & 解压 | ✅ | — | ✅ |
-| 网页链接推送 | 接收 | 发送 | 接收 |
-| AI 场景助手 | — | ✅ | ✅ |
-| 对象批量修复 | — | — | ✅ |
-| 场景问题检测 | — | — | ✅ |
-| 批量重命名（可撤销） | — | — | ✅ |
-| 材质标准化 (PBR 转换) | — | — | ✅ |
-| 多皮肤 UI | — | ✅ | ✅ |
-| 场景信息导出 (CSV) | — | — | ✅ |
-| 贴图流送到 UE | — | — | ✅ |
+三端安装器构建脚本：
 
----
+```powershell
+Tools/build_tri_installer.ps1
+```
 
-## 技术栈
+如需生成可直接安装到同版本 UE 的预编译包，先用 `RunUAT BuildPlugin` 生成插件目录，再传入：
 
-| 组件 | 技术 |
-|------|------|
-| UE 插件 | C++ / Unreal Engine Slate UI |
-| Chrome 扩展 | JavaScript (Manifest V3) / HTML / CSS |
-| 3ds Max 脚本 | Python (pymxs) / PySide2/6 Qt |
-| 通信协议 | HTTP (localhost) |
-| 压缩处理 | PowerShell (ZIP) / 7-Zip / WinRAR |
-| 公式渲染 | KaTeX |
+```powershell
+Tools/build_tri_installer.ps1 -UEPackageDir "C:\PBRStudioPackage\PBRStudio_UE57_1.1.5"
+```
 
----
+## 版本记录
 
-## 版本历史
+### 1.1.5
 
-| 版本 | 日期 | 说明 |
-|------|------|------|
-| 1.1.4 | 2026-05-05 | 修复 3ds Max MZP 安装后的 `ModuleNotFoundError` 导入错误；修复窗口闪退；MZP 安装覆盖可靠性改进 |
-| 1.1.3 | 2026-05-03 | 三端功能完善，MZP 一键安装 |
-| 1.0.0 | — | 初始版本 |
+- UE AI 请求修复超时回调生命周期问题，API Key 改为仅保留在当前会话或环境变量中。
+- 下载队列增加并发和文件大小上限，并校验下载地址与服务端文件名。
+- 场景材质批量转换减少逐贴图同步保存，降低大场景转换卡顿。
+- Chrome 自定义 AI 接口改为按需申请域名权限，API Key 不再写入持久存储。
+- 统一源码、安装器、使用说明和发布包版本，并增加发布一致性检查。
 
----
+### 1.1.4
+
+- 增加三端一键安装器发布包。
+- UE 贴图套件通道识别修复。
+- UE 材质转换切换到 PBRStudio 统一母材质体系。
+- UE 材质转换贴图开关、玻璃材质和自发光过亮问题修复。
+- UE 魔法大纲支持选中物体后直接接管并调整材质。
+- UE 魔法大纲支持切换材质类型。
+- Chrome 扩展推送能力增强。
+- 3ds Max MZP 安装与脚本加载稳定性改进。
 
 ## 许可证
 
-MIT License — 详见 [LICENSE](LICENSE) 文件。
-
----
-
-*Made with PBRStudio Team*
+MIT License。详见 `LICENSE`。

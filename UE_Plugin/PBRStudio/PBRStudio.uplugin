@@ -1,9 +1,9 @@
 {
   "FileVersion": 3,
-  "Version": 3,
-  "VersionName": "1.1.3",
-  "FriendlyName": "PBR Studio",
-  "Description": "Editor tools for PBR texture sets, resource download libraries, and Unreal Engine texture workflows.",
+  "Version": 115,
+  "VersionName": "1.1.5",
+  "FriendlyName": "建筑可视化工作台",
+  "Description": "AR Studio tools for architectural visualization, material libraries, texture workflows, and Unreal Engine scene setup.",
   "Category": "Material",
   "CreatedBy": "PBRStudio Team",
   "CanContainContent": true,
@@ -12,13 +12,17 @@
     {
       "Name": "EditorScriptingUtilities",
       "Enabled": true
+    },
+    {
+      "Name": "DatasmithContent",
+      "Enabled": true
     }
   ],
   "Modules": [
     {
       "Name": "PBRStudio",
       "Type": "Editor",
-      "LoadingPhase": "PostEngineInit"
+      "LoadingPhase": "Default"
     }
   ]
 }

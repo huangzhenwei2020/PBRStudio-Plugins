@@ -4,21 +4,32 @@
 #include "EditorAssetLibrary.h"
 #include "FileHelpers.h"
 #include "Factories/TextureFactory.h"
+#include "EditorReimportHandler.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceConstant.h"
+#include "MaterialEditingLibrary.h"
 #include "Engine/Texture2D.h"
 #include "Factories/MaterialInstanceConstantFactoryNew.h"
+#include "IImageWrapper.h"
+#include "IImageWrapperModule.h"
+#include "Misc/FileHelper.h"
+#include "Modules/ModuleManager.h"
 #include "Services/PBRMaterialTemplateManager.h"
 
 FString FPBRMaterialInstanceFactory::SanitizeAssetName(const FString& InName)
 {
-	FString Out = InName;
-	const FString Invalid = TEXT("\\/:*?\"<>|.,;'");
+	FString Out = InName.TrimStartAndEnd();
+	const FString Invalid = TEXT("\\/:*?\"<>|' ,.&!~\n\r\t@#(){}[]=;^%$`");
 	for (int32 i = 0; i < Invalid.Len(); ++i)
 	{
 		Out.ReplaceInline(*FString::Chr(Invalid[i]), TEXT("_"));
 	}
-	Out.ReplaceInline(TEXT(" "), TEXT("_"));
+	while (Out.Contains(TEXT("__")))
+	{
+		Out.ReplaceInline(TEXT("__"), TEXT("_"));
+	}
+	Out.RemoveFromStart(TEXT("_"));
+	Out.RemoveFromEnd(TEXT("_"));
 	if (Out.Len() > 80)
 	{
 		Out = Out.Left(80);
@@ -130,6 +141,215 @@ static bool IsLinearTextureChannel(const FString& Channel)
 		Channel == FPBRChannels::Thickness.ToString();
 }
 
+enum class EPBRSourceColorChannel : uint8
+{
+	R,
+	G,
+	B,
+	A
+};
+
+struct FPBRPackedTextureChannelMapping
+{
+	FString TargetChannel;
+	EPBRSourceColorChannel SourceChannel = EPBRSourceColorChannel::R;
+};
+
+static bool IsPackedMaskChannel(const FString& Channel)
+{
+	return Channel == FPBRChannels::ORM.ToString() || Channel == FPBRChannels::ARM.ToString();
+}
+
+static FString GetPackedLayoutToken(const FString& Channel, const FString& FilePath)
+{
+	FString CompactName;
+	const FString BaseName = FPaths::GetBaseFilename(FilePath).ToLower();
+	for (const TCHAR Char : BaseName)
+	{
+		if (FChar::IsAlnum(Char))
+		{
+			CompactName.AppendChar(Char);
+		}
+	}
+
+	if (CompactName.Contains(TEXT("rma")) || CompactName.Contains(TEXT("rmo")))
+	{
+		return TEXT("RMA");
+	}
+	if (CompactName.Contains(TEXT("mra")) || CompactName.Contains(TEXT("mro")))
+	{
+		return TEXT("MRA");
+	}
+	if (Channel == FPBRChannels::ARM.ToString() || CompactName.Contains(TEXT("arm")) || CompactName.Contains(TEXT("ambientroughnessmetallic")))
+	{
+		return TEXT("ARM");
+	}
+	return TEXT("ORM");
+}
+
+static TArray<FPBRPackedTextureChannelMapping> GetPackedTextureMappings(const FString& Channel, const FString& FilePath)
+{
+	const FString Layout = GetPackedLayoutToken(Channel, FilePath);
+	TArray<FPBRPackedTextureChannelMapping> Mappings;
+
+	if (Layout == TEXT("RMA"))
+	{
+		Mappings.Add({ FPBRChannels::Roughness.ToString(), EPBRSourceColorChannel::R });
+		Mappings.Add({ FPBRChannels::Metallic.ToString(), EPBRSourceColorChannel::G });
+		Mappings.Add({ FPBRChannels::AO.ToString(), EPBRSourceColorChannel::B });
+		return Mappings;
+	}
+
+	if (Layout == TEXT("MRA"))
+	{
+		Mappings.Add({ FPBRChannels::Metallic.ToString(), EPBRSourceColorChannel::R });
+		Mappings.Add({ FPBRChannels::Roughness.ToString(), EPBRSourceColorChannel::G });
+		Mappings.Add({ FPBRChannels::AO.ToString(), EPBRSourceColorChannel::B });
+		return Mappings;
+	}
+
+	// Standard ORM/ARM: R = Ambient Occlusion, G = Roughness, B = Metallic.
+	Mappings.Add({ FPBRChannels::AO.ToString(), EPBRSourceColorChannel::R });
+	Mappings.Add({ FPBRChannels::Roughness.ToString(), EPBRSourceColorChannel::G });
+	Mappings.Add({ FPBRChannels::Metallic.ToString(), EPBRSourceColorChannel::B });
+	return Mappings;
+}
+
+static int32 GetBGRAIndexForSourceChannel(EPBRSourceColorChannel SourceChannel)
+{
+	switch (SourceChannel)
+	{
+	case EPBRSourceColorChannel::R:
+		return 2;
+	case EPBRSourceColorChannel::G:
+		return 1;
+	case EPBRSourceColorChannel::B:
+		return 0;
+	case EPBRSourceColorChannel::A:
+		return 3;
+	default:
+		return 2;
+	}
+}
+
+static bool LoadBGRA8Image(const FString& FilePath, TArray<uint8>& OutPixels, int32& OutWidth, int32& OutHeight)
+{
+	OutPixels.Reset();
+	OutWidth = 0;
+	OutHeight = 0;
+
+	TArray<uint8> FileData;
+	if (!FFileHelper::LoadFileToArray(FileData, *FilePath) || FileData.Num() == 0)
+	{
+		return false;
+	}
+
+	IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+	const EImageFormat ImageFormat = ImageWrapperModule.DetectImageFormat(FileData.GetData(), FileData.Num());
+	if (ImageFormat == EImageFormat::Invalid)
+	{
+		return false;
+	}
+
+	TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(ImageFormat);
+	if (!ImageWrapper.IsValid() || !ImageWrapper->SetCompressed(FileData.GetData(), FileData.Num()))
+	{
+		return false;
+	}
+
+	if (!ImageWrapper->GetRaw(ERGBFormat::BGRA, 8, OutPixels))
+	{
+		return false;
+	}
+
+	OutWidth = ImageWrapper->GetWidth();
+	OutHeight = ImageWrapper->GetHeight();
+	return OutWidth > 0 && OutHeight > 0 && OutPixels.Num() >= OutWidth * OutHeight * 4;
+}
+
+static void ConfigureMaskTextureAsset(UTexture2D* Texture)
+{
+	if (!Texture)
+	{
+		return;
+	}
+
+	Texture->SRGB = false;
+	Texture->CompressionSettings = TextureCompressionSettings::TC_Masks;
+	Texture->bFlipGreenChannel = false;
+	Texture->PostEditChange();
+	Texture->MarkPackageDirty();
+}
+
+static UTexture2D* CreateSingleChannelTextureAsset(
+	const FString& FilePath,
+	const FString& PackagePath,
+	const FString& AssetName,
+	EPBRSourceColorChannel SourceChannel,
+	bool bInvert)
+{
+	if (!FPaths::FileExists(FilePath))
+	{
+		return nullptr;
+	}
+
+	const FString CleanAssetName = FPBRMaterialInstanceFactory::SanitizeAssetName(AssetName);
+	const FString FullPackagePath = PackagePath / TEXT("Textures") / CleanAssetName;
+
+	if (UObject* Existing = UEditorAssetLibrary::LoadAsset(FullPackagePath))
+	{
+		UTexture2D* ExistingTexture = Cast<UTexture2D>(Existing);
+		ConfigureMaskTextureAsset(ExistingTexture);
+		if (ExistingTexture)
+		{
+			UEditorLoadingAndSavingUtils::SavePackages({ ExistingTexture->GetPackage() }, true);
+		}
+		return ExistingTexture;
+	}
+
+	TArray<uint8> SourcePixels;
+	int32 Width = 0;
+	int32 Height = 0;
+	if (!LoadBGRA8Image(FilePath, SourcePixels, Width, Height))
+	{
+		return nullptr;
+	}
+
+	UPackage* Package = CreatePackage(*FullPackagePath);
+	if (!Package)
+	{
+		return nullptr;
+	}
+
+	UTexture2D* Texture = NewObject<UTexture2D>(Package, FName(*CleanAssetName), RF_Public | RF_Standalone);
+	if (!Texture)
+	{
+		return nullptr;
+	}
+
+	Texture->Source.Init(Width, Height, 1, 1, TSF_G8);
+	uint8* DestPixels = Texture->Source.LockMip(0);
+	if (!DestPixels)
+	{
+		return nullptr;
+	}
+
+	const int32 SourceIndex = GetBGRAIndexForSourceChannel(SourceChannel);
+	for (int32 PixelIndex = 0; PixelIndex < Width * Height; ++PixelIndex)
+	{
+		const uint8 SourceValue = SourcePixels[PixelIndex * 4 + SourceIndex];
+		DestPixels[PixelIndex] = bInvert ? static_cast<uint8>(255 - SourceValue) : SourceValue;
+	}
+	Texture->Source.UnlockMip(0);
+
+	ConfigureMaskTextureAsset(Texture);
+	FAssetRegistryModule::AssetCreated(Texture);
+	Package->SetDirtyFlag(true);
+	Texture->PostEditChange();
+	UEditorLoadingAndSavingUtils::SavePackages({ Package }, true);
+	return Texture;
+}
+
 UTexture2D* FPBRMaterialInstanceFactory::ImportTextureToAsset(const FString& FilePath, const FString& PackagePath, const FString& AssetName)
 {
 	return ImportTextureToAsset(FilePath, PackagePath, AssetName, FString());
@@ -149,7 +369,7 @@ UMaterialInterface* FPBRMaterialInstanceFactory::FindExistingMaterialInstance(
 	return Cast<UMaterialInterface>(Existing);
 }
 
-UTexture2D* FPBRMaterialInstanceFactory::ImportTextureToAsset(const FString& FilePath, const FString& PackagePath, const FString& AssetName, const FString& Channel)
+UTexture2D* FPBRMaterialInstanceFactory::ImportTextureToAsset(const FString& FilePath, const FString& PackagePath, const FString& AssetName, const FString& Channel, bool bSaveImmediately)
 {
 	if (!FPaths::FileExists(FilePath))
 	{
@@ -162,8 +382,23 @@ UTexture2D* FPBRMaterialInstanceFactory::ImportTextureToAsset(const FString& Fil
 	if (UObject* Existing = UEditorAssetLibrary::LoadAsset(FullPackagePath))
 	{
 		UTexture2D* ExistingTexture = Cast<UTexture2D>(Existing);
-		ConfigureTextureForChannel(ExistingTexture, Channel);
 		if (ExistingTexture)
+		{
+			// Generated files deliberately reuse stable asset names. Force a reimport so the
+			// texture pixels cannot remain from an older conversion with the same name.
+			FReimportManager::Instance()->Reimport(
+				ExistingTexture,
+				false,
+				false,
+				FilePath,
+				nullptr,
+				INDEX_NONE,
+				true,
+				true,
+				false);
+		}
+		ConfigureTextureForChannel(ExistingTexture, Channel);
+		if (ExistingTexture && bSaveImmediately)
 		{
 			SavePackages({ ExistingTexture->GetPackage() });
 		}
@@ -201,7 +436,10 @@ UTexture2D* FPBRMaterialInstanceFactory::ImportTextureToAsset(const FString& Fil
 		FAssetRegistryModule::AssetCreated(Texture);
 		Package->SetDirtyFlag(true);
 		Texture->PostEditChange();
-		SavePackages({ Package });
+		if (bSaveImmediately)
+		{
+			SavePackages({ Package });
+		}
 	}
 	return Texture;
 }
@@ -317,6 +555,11 @@ static bool HasAnyImportedTextureChannel(const TMap<FString, UTexture2D*>& Textu
 	return false;
 }
 
+static constexpr float PBRARMDefaultWaterFlowSpeedU = 0.18f;
+static constexpr float PBRARMDefaultWaterFlowSpeedV = 0.09f;
+static constexpr float PBRARMDefaultWaterRippleScale = 18.0f;
+static constexpr float PBRARMDefaultWaterRippleStrength = 0.8f;
+
 static float GetDefaultRoughnessMultiplier(EPBRMaterialType MaterialType, bool bHasRoughnessTexture)
 {
 	if (bHasRoughnessTexture)
@@ -360,7 +603,7 @@ static float GetDefaultOpacity(EPBRMaterialType MaterialType, bool bHasOpacityTe
 	case EPBRMaterialType::Glass:
 		return 0.35f;
 	case EPBRMaterialType::Water:
-		return 0.55f;
+		return 0.65f;
 	case EPBRMaterialType::Transparent:
 		return 0.75f;
 	case EPBRMaterialType::Fabric:
@@ -392,34 +635,7 @@ static bool MaterialNameSuggestsStrongDisplacement(const FString& Text)
 
 static float GetDefaultHeightStrength(EPBRMaterialType MaterialType, const FPBRMaterialSet* SourceSet, bool bHasHeightTexture)
 {
-	if (!bHasHeightTexture)
-	{
-		return 0.0f;
-	}
-
-	const FString DetectionText = SourceSet
-		? (SourceSet->Name + TEXT(" ") + SourceSet->Folder).ToLower()
-		: FString();
-	if (MaterialNameSuggestsStrongDisplacement(DetectionText))
-	{
-		return 1.0f;
-	}
-
-	switch (MaterialType)
-	{
-	case EPBRMaterialType::Stone:
-	case EPBRMaterialType::Tile:
-		return 1.0f;
-	case EPBRMaterialType::Wood:
-		return DetectionText.Contains(TEXT("bark")) || DetectionText.Contains(TEXT("树皮")) ? 1.0f : 0.35f;
-	case EPBRMaterialType::Leather:
-	case EPBRMaterialType::Fabric:
-		return 0.18f;
-	case EPBRMaterialType::Standard:
-		return 0.5f;
-	default:
-		return 0.05f;
-	}
+	return 0.0f;
 }
 
 void FPBRMaterialInstanceFactory::ApplyTextureParameters(UMaterialInstanceConstant* Instance, const TMap<FString, UTexture2D*>& Textures, EPBRMaterialType MaterialType, const FPBRMaterialSet* SourceSet)
@@ -459,6 +675,10 @@ void FPBRMaterialInstanceFactory::ApplyTextureParameters(UMaterialInstanceConsta
 	Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseHeightTexture), bHasHeightTexture);
 	Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseClearCoatTexture), bHasClearCoatTexture);
 	Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseClearCoatRoughnessTexture), bHasClearCoatRoughnessTexture);
+	if (MaterialType == EPBRMaterialType::Water)
+	{
+		Instance->SetStaticSwitchParameterValueEditorOnly(FMaterialParameterInfo(FPBRMaterialParameters::UseWaterRippleTexture), false);
+	}
 
 	Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::BaseColorTint, FLinearColor::White);
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::BaseColorIntensity, 1.0f);
@@ -497,12 +717,12 @@ void FPBRMaterialInstanceFactory::ApplyTextureParameters(UMaterialInstanceConsta
 	}
 	else if (MaterialType == EPBRMaterialType::Water)
 	{
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.333f);
-		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::WaterColor, FLinearColor(0.12f, 0.42f, 0.52f));
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedU, 0.12f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedV, 0.06f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleScale, 1.0f);
-		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleStrength, 0.75f);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::RefractionAmount, 1.33f);
+		Instance->SetVectorParameterValueEditorOnly(FPBRMaterialParameters::WaterColor, FLinearColor(0.12f, 0.42f, 0.72f));
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedU, PBRARMDefaultWaterFlowSpeedU);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterFlowSpeedV, PBRARMDefaultWaterFlowSpeedV);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleScale, PBRARMDefaultWaterRippleScale);
+		Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::WaterRippleStrength, PBRARMDefaultWaterRippleStrength);
 	}
 	else if (MaterialType == EPBRMaterialType::Transparent)
 	{
@@ -513,6 +733,8 @@ void FPBRMaterialInstanceFactory::ApplyTextureParameters(UMaterialInstanceConsta
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::UVUOffset, 0.0f);
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::UVVOffset, 0.0f);
 	Instance->SetScalarParameterValueEditorOnly(FPBRMaterialParameters::UVRotationDegrees, 0.0f);
+	Instance->InitStaticPermutation();
+	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
 	Instance->PostEditChange();
 }
 
@@ -524,14 +746,22 @@ bool FPBRMaterialInstanceFactory::CreateInstanceFromSet(
 	OutResult = FPBRMaterialCreateResult();
 
 	FString TemplateMessage;
-	UMaterial* ParentMaterial = FPBRMaterialTemplateManager::EnsureTemplateMaterial(Options.MaterialType, TemplateMessage);
+	UMaterialInterface* ParentMaterialInterface = Options.ParentMaterialOverride.LoadSynchronous();
+	UMaterial* ParentMaterial = Cast<UMaterial>(ParentMaterialInterface);
+	if (!ParentMaterial)
+	{
+		ParentMaterial = FPBRMaterialTemplateManager::EnsureTemplateMaterial(Options.MaterialType, TemplateMessage);
+	}
 	if (!ParentMaterial)
 	{
 		OutResult.Message = TemplateMessage;
 		return false;
 	}
-	FString ExampleMessage;
-	FPBRMaterialTemplateManager::EnsureExampleMaterialInstance(Options.MaterialType, ExampleMessage);
+	if (Options.bEnsureExampleMaterial)
+	{
+		FString ExampleMessage;
+		FPBRMaterialTemplateManager::EnsureExampleMaterialInstance(Options.MaterialType, ExampleMessage);
+	}
 	OutResult.ParentMaterial = ParentMaterial;
 
 	const FString SetPackagePath = BuildSetPackagePath(Set, Options);
@@ -545,7 +775,7 @@ bool FPBRMaterialInstanceFactory::CreateInstanceFromSet(
 	{
 		OutResult.MaterialInstance = ExistingInstance;
 		OutResult.bSkippedBecauseExists = true;
-		OutResult.Message = TEXT("使用已有材质实例");
+		OutResult.Message = TEXT("已存在，直接使用已有材质实例");
 		return true;
 	}
 
@@ -561,15 +791,34 @@ bool FPBRMaterialInstanceFactory::CreateInstanceFromSet(
 				continue;
 			}
 
-			const FString TextureName = TEXT("T_") + CleanSetName + TEXT("_") + Channel;
-			if (AssetExistsAtPath(BuildTextureAssetPath(SetPackagePath, TextureName)))
+			if (IsPackedMaskChannel(Channel))
 			{
-				ExistingAssetNames.Add(TextureName);
+				for (const FPBRPackedTextureChannelMapping& Mapping : GetPackedTextureMappings(Channel, ChannelPair.Value))
+				{
+					if (ChannelsForCreation.Contains(Mapping.TargetChannel))
+					{
+						continue;
+					}
+
+					const FString TextureName = TEXT("T_") + CleanSetName + TEXT("_") + Mapping.TargetChannel;
+					if (AssetExistsAtPath(BuildTextureAssetPath(SetPackagePath, TextureName)))
+					{
+						ExistingAssetNames.Add(TextureName);
+					}
+				}
+			}
+			else
+			{
+				const FString TextureName = TEXT("T_") + CleanSetName + TEXT("_") + Channel;
+				if (AssetExistsAtPath(BuildTextureAssetPath(SetPackagePath, TextureName)))
+				{
+					ExistingAssetNames.Add(TextureName);
+				}
 			}
 		}
 	}
 
-	if (ExistingAssetNames.Num() > 0)
+	if (ExistingAssetNames.Num() > 0 && !Options.bAllowExistingAssets)
 	{
 		OutResult.bSkippedBecauseExists = true;
 		OutResult.Message = FString::Printf(
@@ -579,21 +828,81 @@ bool FPBRMaterialInstanceFactory::CreateInstanceFromSet(
 	}
 
 	TMap<FString, UTexture2D*> ImportedTextures;
+	TArray<FString> ImportWarnings;
 	if (Options.bImportTextures)
 	{
+		const FString* GlossinessSourcePath = Set.Channels.Find(FPBRChannels::Glossiness.ToString());
+		const bool bRoughnessFromGlossiness = GlossinessSourcePath && !Set.Channels.Contains(FPBRChannels::Roughness.ToString());
+
 		for (const TPair<FString, FString>& ChannelPair : ChannelsForCreation)
 		{
 			const FString& Channel = ChannelPair.Key;
-			if (Channel == TEXT("Preview") || Channel == TEXT("Unknown"))
+			if (Channel == TEXT("Preview") || Channel == TEXT("Unknown") || IsPackedMaskChannel(Channel))
 			{
 				continue;
 			}
 
 			const FString TextureName = TEXT("T_") + CleanSetName + TEXT("_") + Channel;
-			if (UTexture2D* Texture = ImportTextureToAsset(ChannelPair.Value, SetPackagePath, TextureName, Channel))
+			UTexture2D* Texture = nullptr;
+			if (bRoughnessFromGlossiness &&
+				Channel == FPBRChannels::Roughness.ToString() &&
+				GlossinessSourcePath &&
+				ChannelPair.Value == *GlossinessSourcePath)
+			{
+				Texture = CreateSingleChannelTextureAsset(
+					ChannelPair.Value,
+					SetPackagePath,
+					TextureName,
+					EPBRSourceColorChannel::R,
+					true);
+				if (!Texture)
+				{
+					ImportWarnings.Add(TEXT("Glossiness 反转为 Roughness 失败"));
+				}
+			}
+			else
+			{
+				Texture = ImportTextureToAsset(ChannelPair.Value, SetPackagePath, TextureName, Channel);
+			}
+
+			if (Texture)
 			{
 				ImportedTextures.Add(Channel, Texture);
 				OutResult.ImportedTextures.Add(Channel, Texture);
+			}
+		}
+
+		for (const TPair<FString, FString>& ChannelPair : ChannelsForCreation)
+		{
+			const FString& Channel = ChannelPair.Key;
+			if (!IsPackedMaskChannel(Channel))
+			{
+				continue;
+			}
+
+			for (const FPBRPackedTextureChannelMapping& Mapping : GetPackedTextureMappings(Channel, ChannelPair.Value))
+			{
+				if (ImportedTextures.Contains(Mapping.TargetChannel))
+				{
+					continue;
+				}
+
+				const FString TextureName = TEXT("T_") + CleanSetName + TEXT("_") + Mapping.TargetChannel;
+				UTexture2D* Texture = CreateSingleChannelTextureAsset(
+					ChannelPair.Value,
+					SetPackagePath,
+					TextureName,
+					Mapping.SourceChannel,
+					false);
+				if (Texture)
+				{
+					ImportedTextures.Add(Mapping.TargetChannel, Texture);
+					OutResult.ImportedTextures.Add(Mapping.TargetChannel, Texture);
+				}
+				else
+				{
+					ImportWarnings.Add(FString::Printf(TEXT("%s 拆分到 %s 失败"), *Channel, *Mapping.TargetChannel));
+				}
 			}
 		}
 	}
@@ -628,7 +937,9 @@ bool FPBRMaterialInstanceFactory::CreateInstanceFromSet(
 	SavePackages({ InstancePackage });
 
 	OutResult.MaterialInstance = Instance;
-	OutResult.Message = TEXT("已创建材质实例");
+	OutResult.Message = ImportWarnings.Num() > 0
+		? FString::Printf(TEXT("已创建材质实例；警告：%s"), *FString::Join(ImportWarnings, TEXT("；")))
+		: TEXT("已创建材质实例");
 	return true;
 }
 

@@ -4,14 +4,16 @@
 #include "Services/PBRHttpServer.h"
 
 #include "DesktopPlatformModule.h"
-#include "Framework/Application/SlateApplication.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "IDesktopPlatform.h"
 #include "Input/DragAndDrop.h"
+#include "Misc/Guid.h"
 #include "Styling/AppStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBorder.h"
@@ -26,11 +28,34 @@
 
 #define LOCTEXT_NAMESPACE "SPBRDownloadLibraryTab"
 
+namespace
+{
+	const TCHAR* PBRDownloadBridgeTokenConfigKey = TEXT("download_bridge_token");
+
+	FString GenerateDownloadBridgeToken()
+	{
+		return FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	}
+
+	void SaveDownloadBridgeToken(const FString& Token)
+	{
+		TSharedPtr<FJsonObject> Config;
+		if (!FPBRDataStore::LoadConfig(Config) || !Config.IsValid())
+		{
+			Config = MakeShareable(new FJsonObject);
+		}
+		Config->SetStringField(PBRDownloadBridgeTokenConfigKey, Token);
+		FPBRDataStore::SaveConfig(Config);
+	}
+}
+
 void SPBRDownloadLibraryTab::Construct(const FArguments& InArgs)
 {
 	OnLibrarySentToTextureSuite = InArgs._OnLibrarySentToTextureSuite;
+	OnLibrarySentToSpecialMaterials = InArgs._OnLibrarySentToSpecialMaterials;
 	DownloadManager = MakeShareable(new FPBRDownloadManager);
 	HttpServer = MakeShareable(new FPBRHttpServer);
+	LoadLibraryHistory();
 
 	TSharedPtr<FJsonObject> Config;
 	if (FPBRDataStore::LoadConfig(Config) && Config.IsValid())
@@ -40,6 +65,13 @@ void SPBRDownloadLibraryTab::Construct(const FArguments& InArgs)
 		{
 			DownloadManager->SetMaterialLibraryDir(LastFolder);
 		}
+		Config->TryGetStringField(PBRDownloadBridgeTokenConfigKey, BridgeToken);
+	}
+	BridgeToken = BridgeToken.TrimStartAndEnd();
+	if (BridgeToken.IsEmpty())
+	{
+		BridgeToken = GenerateDownloadBridgeToken();
+		SaveDownloadBridgeToken(BridgeToken);
 	}
 
 	HttpServer->OnPBRPush.BindLambda([this](const TArray<FString>& URLs, bool bAutoStart)
@@ -82,6 +114,16 @@ void SPBRDownloadLibraryTab::Construct(const FArguments& InArgs)
 			]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
 			[
+				SAssignNew(LibraryHistoryComboBox, SComboBox<FStringOption>)
+				.OptionsSource(&LibraryHistoryOptions)
+				.OnGenerateWidget(this, &SPBRDownloadLibraryTab::GenerateLibraryHistoryOption)
+				.OnSelectionChanged(this, &SPBRDownloadLibraryTab::OnLibraryHistorySelected)
+				[
+					SNew(STextBlock).Text(LOCTEXT("LibraryHistory", "历史"))
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
+			[
 				SNew(SButton).Text(LOCTEXT("BrowseLib", "选择"))
 				.OnClicked(this, &SPBRDownloadLibraryTab::OnBrowseLibrary)
 			]
@@ -92,8 +134,13 @@ void SPBRDownloadLibraryTab::Construct(const FArguments& InArgs)
 			]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
 			[
-				SNew(SButton).Text(LOCTEXT("ScanToSuite", "用于贴图套件"))
-				.OnClicked(this, &SPBRDownloadLibraryTab::OnScanLibraryToSuite)
+				SNew(SButton).Text(LOCTEXT("ScanToPBRSuite", "用于 PBR 套件"))
+				.OnClicked(this, &SPBRDownloadLibraryTab::OnScanLibraryToPBRSuite)
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
+			[
+				SNew(SButton).Text(LOCTEXT("ScanToSpecialMaterials", "用于特殊材质"))
+				.OnClicked(this, &SPBRDownloadLibraryTab::OnScanLibraryToSpecialMaterials)
 			]
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(8, 4)
@@ -110,6 +157,14 @@ void SPBRDownloadLibraryTab::Construct(const FArguments& InArgs)
 				.MaxValue(65535)
 				.Value(19528)
 				.MinDesiredWidth(80)
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+			[ SNew(STextBlock).Text(LOCTEXT("BridgeToken", "Token")) ]
+			+ SHorizontalBox::Slot().FillWidth(0.4f).Padding(0, 0, 8, 0)
+			[
+				SAssignNew(BridgeTokenBox, SEditableTextBox)
+				.Text(FText::FromString(BridgeToken))
+				.MinDesiredWidth(180)
 			]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
 			[
@@ -199,11 +254,6 @@ void SPBRDownloadLibraryTab::Construct(const FArguments& InArgs)
 						SNew(SButton).Text(LOCTEXT("ClearQueue", "清空"))
 						.OnClicked_Lambda([this]() { OnClearQueue(); return FReply::Handled(); })
 					]
-					+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
-					[
-						SNew(SButton).Text(LOCTEXT("DeleteSelected", "删除选中"))
-						.OnClicked_Lambda([this]() { OnDeleteSelected(); return FReply::Handled(); })
-					]
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
 				[
@@ -216,16 +266,13 @@ void SPBRDownloadLibraryTab::Construct(const FArguments& InArgs)
 					]
 					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 16, 0)
 					[
-						SAssignNew(CleanNonImageCheck, SCheckBox)
-						.IsChecked(ECheckBoxState::Unchecked)
+						SAssignNew(DeleteNonImageFilesCheck, SCheckBox)
+						.IsChecked(ECheckBoxState::Checked)
 						.OnCheckStateChanged_Lambda([this](ECheckBoxState NewState)
 						{
-							if (DownloadManager.IsValid())
-							{
-								DownloadManager->bCleanNonImage = (NewState == ECheckBoxState::Checked);
-							}
+							DownloadManager->SetDeleteNonImageFilesAfterExtract(NewState == ECheckBoxState::Checked);
 						})
-						[ SNew(STextBlock).Text(LOCTEXT("CleanNonImage", "解压后清理非图片文件")) ]
+						[ SNew(STextBlock).Text(LOCTEXT("DeleteNonImageFiles", "解压后删除图片之外的文件")) ]
 					]
 					+ SHorizontalBox::Slot().AutoWidth()
 					[ SNew(STextBlock).Text(LOCTEXT("ManualClipboardHint", "复制链接后点手动检测，不再自动闪烁检测。")) ]
@@ -235,7 +282,7 @@ void SPBRDownloadLibraryTab::Construct(const FArguments& InArgs)
 					SAssignNew(QueueTree, SListView<TSharedPtr<FPBRDownloadEntry>>)
 					.ListItemsSource(&QueueRows)
 					.OnGenerateRow(this, &SPBRDownloadLibraryTab::OnGenerateQueueRow)
-					.OnContextMenuOpening(this, &SPBRDownloadLibraryTab::OnQueueContextMenuOpening)
+					.OnContextMenuOpening(this, &SPBRDownloadLibraryTab::MakeQueueContextMenu)
 					.SelectionMode(ESelectionMode::Multi)
 					.HeaderRow(BuildQueueHeader())
 				]
@@ -314,13 +361,7 @@ FReply SPBRDownloadLibraryTab::OnBrowseLibrary()
 
 	if (bOk && !Folder.IsEmpty())
 	{
-		LibraryPathBox->SetText(FText::FromString(Folder));
-		DownloadManager->SetMaterialLibraryDir(Folder);
-		DownloadManager->PublishLibraryPathToTextureSuite();
-		if (OnLibrarySentToTextureSuite.IsBound())
-		{
-			OnLibrarySentToTextureSuite.Execute();
-		}
+		SetCurrentLibraryFolder(Folder, true);
 	}
 	return FReply::Handled();
 }
@@ -332,15 +373,120 @@ FReply SPBRDownloadLibraryTab::OnOpenLibrary()
 	return FReply::Handled();
 }
 
-FReply SPBRDownloadLibraryTab::OnScanLibraryToSuite()
+FReply SPBRDownloadLibraryTab::OnScanLibraryToPBRSuite()
 {
-	DownloadManager->SetMaterialLibraryDir(LibraryPathBox->GetText().ToString());
+	SetCurrentLibraryFolder(LibraryPathBox->GetText().ToString(), false);
 	DownloadManager->PublishLibraryPathToTextureSuite();
 	if (OnLibrarySentToTextureSuite.IsBound())
 	{
 		OnLibrarySentToTextureSuite.Execute();
 	}
 	return FReply::Handled();
+}
+
+FReply SPBRDownloadLibraryTab::OnScanLibraryToSpecialMaterials()
+{
+	SetCurrentLibraryFolder(LibraryPathBox->GetText().ToString(), false);
+	TSharedPtr<FJsonObject> Config;
+	if (!FPBRDataStore::LoadConfig(Config) || !Config.IsValid())
+	{
+		Config = MakeShareable(new FJsonObject);
+	}
+	Config->SetStringField(TEXT("special_materials_last_folder"), DownloadManager->GetMaterialLibraryDir());
+	FPBRDataStore::SaveConfig(Config);
+	if (OnLibrarySentToSpecialMaterials.IsBound())
+	{
+		OnLibrarySentToSpecialMaterials.Execute();
+	}
+	return FReply::Handled();
+}
+
+void SPBRDownloadLibraryTab::SetCurrentLibraryFolder(const FString& Folder, bool bUpdateText)
+{
+	const FString CleanFolder = Folder.TrimStartAndEnd();
+	if (CleanFolder.IsEmpty())
+	{
+		return;
+	}
+	if (bUpdateText && LibraryPathBox.IsValid())
+	{
+		LibraryPathBox->SetText(FText::FromString(CleanFolder));
+	}
+	DownloadManager->SetMaterialLibraryDir(CleanFolder);
+	SaveLibraryHistory(CleanFolder);
+}
+
+void SPBRDownloadLibraryTab::LoadLibraryHistory()
+{
+	LibraryHistoryOptions.Reset();
+	TSharedPtr<FJsonObject> Config;
+	if (FPBRDataStore::LoadConfig(Config) && Config.IsValid())
+	{
+		const TArray<TSharedPtr<FJsonValue>>* HistoryArray = nullptr;
+		if (Config->TryGetArrayField(TEXT("material_library_history"), HistoryArray))
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *HistoryArray)
+			{
+				const FString Folder = Value.IsValid() ? Value->AsString() : FString();
+				if (!Folder.IsEmpty())
+				{
+					LibraryHistoryOptions.Add(MakeShared<FString>(Folder));
+				}
+			}
+		}
+	}
+}
+
+void SPBRDownloadLibraryTab::SaveLibraryHistory(const FString& Folder)
+{
+	if (Folder.IsEmpty())
+	{
+		return;
+	}
+	LibraryHistoryOptions.RemoveAll([&Folder](const FStringOption& Option)
+	{
+		return Option.IsValid() && FPaths::IsSamePath(*Option, Folder);
+	});
+	LibraryHistoryOptions.Insert(MakeShared<FString>(Folder), 0);
+	while (LibraryHistoryOptions.Num() > 12)
+	{
+		LibraryHistoryOptions.RemoveAt(LibraryHistoryOptions.Num() - 1);
+	}
+
+	TSharedPtr<FJsonObject> Config;
+	if (!FPBRDataStore::LoadConfig(Config) || !Config.IsValid())
+	{
+		Config = MakeShareable(new FJsonObject);
+	}
+	Config->SetStringField(TEXT("texture_suite_last_folder"), Folder);
+	TArray<TSharedPtr<FJsonValue>> HistoryValues;
+	for (const FStringOption& Option : LibraryHistoryOptions)
+	{
+		if (Option.IsValid() && !Option->IsEmpty())
+		{
+			HistoryValues.Add(MakeShared<FJsonValueString>(*Option));
+		}
+	}
+	Config->SetArrayField(TEXT("material_library_history"), HistoryValues);
+	FPBRDataStore::SaveConfig(Config);
+	if (LibraryHistoryComboBox.IsValid())
+	{
+		LibraryHistoryComboBox->RefreshOptions();
+	}
+}
+
+void SPBRDownloadLibraryTab::OnLibraryHistorySelected(FStringOption Option, ESelectInfo::Type SelectInfo)
+{
+	if (Option.IsValid())
+	{
+		SetCurrentLibraryFolder(*Option, true);
+	}
+}
+
+TSharedRef<SWidget> SPBRDownloadLibraryTab::GenerateLibraryHistoryOption(FStringOption Option) const
+{
+	return SNew(STextBlock)
+		.Text(FText::FromString(Option.IsValid() ? *Option : FString()));
 }
 
 TSharedRef<SHeaderRow> SPBRDownloadLibraryTab::BuildSiteHeader()
@@ -530,7 +676,25 @@ void SPBRDownloadLibraryTab::RefreshSites()
 
 FReply SPBRDownloadLibraryTab::OnStartServer()
 {
-	HttpServer->Start(PortSpin->GetValue());
+	BridgeToken = BridgeTokenBox.IsValid() ? BridgeTokenBox->GetText().ToString().TrimStartAndEnd() : BridgeToken.TrimStartAndEnd();
+	if (BridgeToken.IsEmpty())
+	{
+		BridgeToken = GenerateDownloadBridgeToken();
+		if (BridgeTokenBox.IsValid())
+		{
+			BridgeTokenBox->SetText(FText::FromString(BridgeToken));
+		}
+	}
+	SaveDownloadBridgeToken(BridgeToken);
+	LastServerError.Empty();
+	if (HttpServer->IsRunning())
+	{
+		HttpServer->Stop();
+	}
+	if (!HttpServer->Start(PortSpin->GetValue(), BridgeToken))
+	{
+		LastServerError = TEXT("启动失败：请检查端口和 Token");
+	}
 	return FReply::Handled();
 }
 
@@ -545,6 +709,10 @@ FText SPBRDownloadLibraryTab::GetServerStatus() const
 	if (HttpServer->IsRunning())
 	{
 		return FText::Format(LOCTEXT("ServerRunning", "运行中，端口 {0}"), FText::AsNumber(HttpServer->GetPort()));
+	}
+	if (!LastServerError.IsEmpty())
+	{
+		return FText::FromString(LastServerError);
 	}
 	return LOCTEXT("ServerStopped", "已停止");
 }
@@ -640,6 +808,96 @@ void SPBRDownloadLibraryTab::OnClearQueue()
 	RefreshQueue();
 }
 
+TSharedPtr<SWidget> SPBRDownloadLibraryTab::MakeQueueContextMenu()
+{
+	FMenuBuilder MenuBuilder(true, nullptr);
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("RenameMaterial", "重命名材质"),
+		LOCTEXT("RenameMaterialTip", "修改队列名称，并重命名已经整理出来的材质文件夹"),
+		FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &SPBRDownloadLibraryTab::OnRenameSelectedQueueEntry)));
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("OpenEntryLocation", "打开文件所在位置"),
+		LOCTEXT("OpenEntryLocationTip", "打开下载或解压后的材质文件夹"),
+		FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &SPBRDownloadLibraryTab::OnOpenSelectedQueueEntryLocation)));
+	return MenuBuilder.MakeWidget();
+}
+
+void SPBRDownloadLibraryTab::OnRenameSelectedQueueEntry()
+{
+	TArray<TSharedPtr<FPBRDownloadEntry>> Selected = QueueTree->GetSelectedItems();
+	if (Selected.Num() == 0 || !Selected[0].IsValid())
+	{
+		return;
+	}
+
+	TSharedPtr<FPBRDownloadEntry> Item = Selected[0];
+	TSharedPtr<SWindow> Window = SNew(SWindow)
+		.Title(LOCTEXT("RenameMaterialWindow", "重命名材质"))
+		.ClientSize(FVector2D(360, 112))
+		.SupportsMinimize(false)
+		.SupportsMaximize(false);
+
+	TSharedPtr<SEditableTextBox> NameBox;
+	Window->SetContent(
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(12, 12, 12, 6)
+		[
+			SAssignNew(NameBox, SEditableTextBox)
+			.Text(FText::FromString(Item->Name))
+			.SelectAllTextWhenFocused(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(12, 6)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.0f)[SNew(SSpacer)]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("RenameOk", "确定"))
+				.OnClicked_Lambda([this, Window, NameBox, Item]()
+				{
+					const int32 Index = QueueRows.Find(Item);
+					FString Message;
+					if (DownloadManager->RenameQueueEntry(Index, NameBox.IsValid() ? NameBox->GetText().ToString() : FString(), Message))
+					{
+						RefreshQueue();
+					}
+					Window->RequestDestroyWindow();
+					return FReply::Handled();
+				})
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("RenameCancel", "取消"))
+				.OnClicked_Lambda([Window]() { Window->RequestDestroyWindow(); return FReply::Handled(); })
+			]
+		]);
+	FSlateApplication::Get().AddWindow(Window.ToSharedRef());
+}
+
+void SPBRDownloadLibraryTab::OnOpenSelectedQueueEntryLocation()
+{
+	TArray<TSharedPtr<FPBRDownloadEntry>> Selected = QueueTree->GetSelectedItems();
+	if (Selected.Num() == 0 || !Selected[0].IsValid())
+	{
+		return;
+	}
+
+	const FPBRDownloadEntry& Item = *Selected[0];
+	FString Folder = Item.TargetDirectory;
+	if (!Folder.IsEmpty() && !FPaths::DirectoryExists(Folder))
+	{
+		Folder = FPaths::GetPath(Item.DownloadedFile);
+	}
+	if (!Folder.IsEmpty())
+	{
+		FPlatformProcess::ExploreFolder(*Folder);
+	}
+}
+
 void SPBRDownloadLibraryTab::AddUrlsFromText(const FString& Text, const FString& Source)
 {
 	TArray<FString> Tokens;
@@ -674,144 +932,6 @@ void SPBRDownloadLibraryTab::OnAddUrlFromClipboard()
 	FPlatformApplicationMisc::ClipboardPaste(Clipboard);
 	LastClipboardText = Clipboard;
 	AddUrlsFromText(Clipboard, TEXT("剪贴板"));
-}
-
-void SPBRDownloadLibraryTab::OnDeleteSelected()
-{
-	TArray<TSharedPtr<FPBRDownloadEntry>> Selected = QueueTree->GetSelectedItems();
-	// Collect indices in reverse so removal doesn't shift earlier indices
-	TArray<int32> Indices;
-	for (const TSharedPtr<FPBRDownloadEntry>& Sel : Selected)
-	{
-		const int32 Idx = QueueRows.Find(Sel);
-		if (Idx != INDEX_NONE)
-		{
-			Indices.Add(Idx);
-		}
-	}
-	Indices.Sort([](int32 A, int32 B) { return A > B; });
-	for (int32 Idx : Indices)
-	{
-		DownloadManager->RemoveFromQueue(Idx);
-	}
-	RefreshQueue();
-}
-
-void SPBRDownloadLibraryTab::OnRenameEntry()
-{
-	TArray<TSharedPtr<FPBRDownloadEntry>> Selected = QueueTree->GetSelectedItems();
-	if (Selected.Num() == 0 || !Selected[0].IsValid())
-	{
-		return;
-	}
-
-	const FString OldName = Selected[0]->Name;
-	TSharedRef<SWindow> Window = SNew(SWindow)
-		.Title(LOCTEXT("RenameTitle", "重命名材质"))
-		.ClientSize(FVector2D(420, 140))
-		.SupportsMinimize(false)
-		.SupportsMaximize(false);
-
-	TSharedPtr<SEditableTextBox> NameBox;
-	Window->SetContent(
-		SNew(SBorder).Padding(12)
-		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
-				[ SNew(STextBlock).Text(LOCTEXT("RenameLabel", "新名称")) ]
-				+ SHorizontalBox::Slot()
-				[ SAssignNew(NameBox, SEditableTextBox).Text(FText::FromString(OldName)) ]
-			]
-			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
-				[
-					SNew(SButton).Text(LOCTEXT("RenameOK", "确定"))
-					.OnClicked_Lambda([this, Window, NameBox]()
-					{
-						FString NewName = NameBox.IsValid() ? NameBox->GetText().ToString().TrimStartAndEnd() : FString();
-						if (!NewName.IsEmpty())
-						{
-							TArray<TSharedPtr<FPBRDownloadEntry>> Sel = QueueTree->GetSelectedItems();
-							if (Sel.Num() > 0 && Sel[0].IsValid())
-							{
-								const int32 Idx = QueueRows.Find(Sel[0]);
-								if (Idx != INDEX_NONE)
-								{
-									DownloadManager->RenameEntry(Idx, NewName);
-									RefreshQueue();
-								}
-							}
-						}
-						FSlateApplication::Get().RequestDestroyWindow(Window);
-						return FReply::Handled();
-					})
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
-				[
-					SNew(SButton).Text(LOCTEXT("RenameCancel", "取消"))
-					.OnClicked_Lambda([Window]()
-					{
-						FSlateApplication::Get().RequestDestroyWindow(Window);
-						return FReply::Handled();
-					})
-				]
-			]
-		]);
-
-	FSlateApplication::Get().AddWindow(Window);
-}
-
-TSharedPtr<SWidget> SPBRDownloadLibraryTab::OnQueueContextMenuOpening()
-{
-	TArray<TSharedPtr<FPBRDownloadEntry>> Selected = QueueTree->GetSelectedItems();
-
-	FMenuBuilder Menu(true, nullptr);
-
-	// "Open Folder" — use first selected item's folder, or fall back to library root
-	FString TargetFolder;
-	if (Selected.Num() > 0 && Selected[0].IsValid())
-	{
-		TargetFolder = Selected[0]->TargetDirectory;
-		if (!FPaths::DirectoryExists(TargetFolder) && !Selected[0]->DownloadedFile.IsEmpty())
-		{
-			TargetFolder = FPaths::GetPath(Selected[0]->DownloadedFile);
-		}
-	}
-	if (!FPaths::DirectoryExists(TargetFolder))
-	{
-		TargetFolder = DownloadManager->GetMaterialLibraryDir();
-	}
-
-	Menu.AddMenuEntry(
-		LOCTEXT("OpenFolder", "打开所在文件夹"),
-		FText(),
-		FSlateIcon(),
-		FUIAction(FExecuteAction::CreateLambda([TargetFolder]()
-		{
-			FPlatformProcess::ExploreFolder(*TargetFolder);
-		})));
-	Menu.AddMenuEntry(
-		LOCTEXT("RenameEntry", "重命名"),
-		FText(),
-		FSlateIcon(),
-		FUIAction(FExecuteAction::CreateLambda([this]()
-		{
-			OnRenameEntry();
-		})));
-	Menu.AddMenuEntry(
-		LOCTEXT("DeleteEntry", "删除"),
-		FText(),
-		FSlateIcon(),
-		FUIAction(FExecuteAction::CreateLambda([this]()
-		{
-			OnDeleteSelected();
-		})));
-	return Menu.MakeWidget();
 }
 
 void SPBRDownloadLibraryTab::RefreshQueue()

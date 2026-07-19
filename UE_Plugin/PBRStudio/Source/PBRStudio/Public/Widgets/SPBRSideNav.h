@@ -17,7 +17,8 @@ public:
 	void SetActiveTab(int32 TabIndex);
 
 private:
-	TSharedRef<SWidget> MakeNavButton(const FString& Icon, const FString& Title, int32 Index);
+	TSharedRef<SWidget> MakeNavCard(const TArray<TSharedRef<SWidget>>& Items);
+	TSharedRef<SWidget> MakeNavButton(const FText& Title, const FName IconName, int32 Index);
 
 	FOnNavTabChanged OnTabChanged;
 	TArray<TSharedPtr<SButton>> NavButtons;

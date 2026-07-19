@@ -1,6 +1,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/Texture2D.h"
+#include "Materials/MaterialInterface.h"
 #include "PBRMaterialTypes.generated.h"
 
 UENUM()
@@ -43,6 +45,16 @@ struct PBRSTUDIO_API FPBRChannels
 	static const FName Thickness;
 };
 
+struct PBRSTUDIO_API FPBRChannelUVParameterNames
+{
+	FName UseIndependentUV;
+	FName UTiling;
+	FName VTiling;
+	FName UOffset;
+	FName VOffset;
+	FName RotationDegrees;
+};
+
 struct PBRSTUDIO_API FPBRMaterialParameters
 {
 	static const FName BaseColorTexture;
@@ -71,6 +83,8 @@ struct PBRSTUDIO_API FPBRMaterialParameters
 	static const FName UseEmissiveTexture;
 	static const FName EmissiveColor;
 	static const FName EmissiveIntensity;
+	static const FName UseEmissiveTemperature;
+	static const FName EmissiveTemperatureKelvin;
 	static const FName SpecularTexture;
 	static const FName UseSpecularTexture;
 	static const FName SpecularLevel;
@@ -88,11 +102,41 @@ struct PBRSTUDIO_API FPBRMaterialParameters
 	static const FName FabricFuzzColor;
 	static const FName FabricFuzzStrength;
 	static const FName RefractionAmount;
+	static const FName GlassOpacityFresnelStrength;
+	static const FName GlassFresnelBaseReflection;
+	static const FName GlassFresnelExp;
+	static const FName GlassFrostedStrength;
+	static const FName GlassAbsorptionColor;
+	static const FName GlassAbsorptionStrength;
+	static const FName GlassEdgeTintStrength;
+	static const FName GlassDirtColor;
+	static const FName GlassDirtTexture;
+	static const FName UseGlassDirtTexture;
+	static const FName GlassDirtIntensity;
+	static const FName GlassDirtOpacity;
+	static const FName GlassDirtRoughness;
+	static const FName GlassDistortionTexture;
+	static const FName UseGlassDistortionTexture;
+	static const FName GlassDistortionIntensity;
+	static const FName GlassDistortionIORIntensity;
+	static const FName GlassFrostedTexture;
+	static const FName UseGlassFrostedTexture;
+	static const FName GlassShadowOpacity;
+	static const FName GlassShadowHighlightClamp;
+	static const FName GlassShadowNormalIntensity;
+	static const FName GlassCausticsIntensity;
+	static const FName GlassCausticsScale;
+	static const FName GlassCausticsSpeed;
+	static const FName GlassRTOpacity;
+	static const FName GlassRTRefractionAmount;
+	static const FName GlassRTFrostedStrength;
 	static const FName WaterColor;
 	static const FName WaterFlowSpeedU;
 	static const FName WaterFlowSpeedV;
 	static const FName WaterRippleScale;
 	static const FName WaterRippleStrength;
+	static const FName WaterRippleTexture;
+	static const FName UseWaterRippleTexture;
 	static const FName UVTiling;
 	static const FName UVOffset;
 	static const FName UVUTiling;
@@ -100,6 +144,18 @@ struct PBRSTUDIO_API FPBRMaterialParameters
 	static const FName UVUOffset;
 	static const FName UVVOffset;
 	static const FName UVRotationDegrees;
+	static const FName DynamicSpeedU;
+	static const FName DynamicSpeedV;
+	static const FName DynamicScale;
+	static const FName DynamicIntensity;
+	static const FName DistortionStrength;
+	static const FName EdgeGlowStrength;
+	static const FName MaskThreshold;
+	static const FName ScanlineStrength;
+	static const FName FlakeScale;
+	static const FName FlakeIntensity;
+
+	static FPBRChannelUVParameterNames GetChannelUVNames(const FName& ChannelName);
 };
 
 USTRUCT()
@@ -124,6 +180,18 @@ struct PBRSTUDIO_API FPBRMaterialCreateOptions
 
 	UPROPERTY()
 	FString NormalPreference = TEXT("DirectX");
+
+	UPROPERTY()
+	TSoftObjectPtr<UMaterialInterface> ParentMaterialOverride;
+
+	UPROPERTY()
+	bool bEnsureExampleMaterial = true;
+
+	UPROPERTY()
+	bool bAllowExistingAssets = false;
+
+	UPROPERTY()
+	bool bForceTransparentWhenOpacityExists = true;
 };
 
 USTRUCT()

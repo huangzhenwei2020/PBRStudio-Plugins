@@ -226,11 +226,44 @@ const AI_TEMPLATES = [
 ];
 const STANDALONE_KEY = "aiStandaloneState";
 
+function withoutPersistedSecrets(config) {
+  const clean = { ...(config || {}) };
+  delete clean.api_key;
+  delete clean.search_api_key;
+  return clean;
+}
+
+function withoutPersistedProviderSecrets(configs) {
+  return Object.fromEntries(Object.entries(configs || {}).map(([key, value]) => [key, withoutPersistedSecrets(value)]));
+}
+
+async function ensureEndpointPermission(message) {
+  const cfg = (message && message.config) || {};
+  const rawUrl = message && message.action === "webSearch" ? cfg.search_api_url : cfg.base_url;
+  if (!rawUrl) return { ok: true };
+  let origin;
+  try {
+    const parsed = new URL(rawUrl);
+    if (!/^https?:$/.test(parsed.protocol)) return { ok: false, error: "只允许 HTTP 或 HTTPS 接口地址" };
+    origin = parsed.origin + "/*";
+  } catch (_e) {
+    return { ok: false, error: "接口地址格式不正确" };
+  }
+  const contains = await new Promise((resolve) => chrome.permissions.contains({ origins: [origin] }, resolve));
+  if (contains) return { ok: true };
+  const granted = await new Promise((resolve) => chrome.permissions.request({ origins: [origin] }, resolve));
+  return granted ? { ok: true } : { ok: false, error: "未获得该 AI 接口域名的访问权限" };
+}
+
 function serverUrl(path) {
   return "http://127.0.0.1:" + Number(currentPort || 19527) + path;
 }
 
-function sendRuntimeMessage(message, timeoutMs = 20000) {
+async function sendRuntimeMessage(message, timeoutMs = 20000) {
+  if (message && ["independentAiChat", "independentAiImage", "independentAiModels", "independentAiTest", "webSearch"].includes(message.action)) {
+    const permission = await ensureEndpointPermission(message);
+    if (!permission.ok) return permission;
+  }
   return new Promise((resolve) => {
     let done = false;
     const timer = setTimeout(() => {
@@ -1253,8 +1286,8 @@ function saveStandaloneState(options = {}) {
   const patch = {
     mode: appMode,
     default_provider: standaloneDefaultProvider,
-    config: currentConfig,
-    provider_configs: standaloneProviderConfigs,
+    config: withoutPersistedSecrets(currentConfig),
+    provider_configs: withoutPersistedProviderSecrets(standaloneProviderConfigs),
     custom_providers: customStandaloneProviders,
     messages: standaloneMessages.slice(-80),
     diagnosis: standaloneDiagnosis,
@@ -1269,11 +1302,13 @@ async function loadStandaloneState() {
   if (saved.mode === "standalone") appMode = "standalone";
   standaloneMessages = Array.isArray(saved.messages) ? saved.messages : [];
   standaloneDiagnosis = String(saved.diagnosis || "");
-  standaloneProviderConfigs = saved.provider_configs && typeof saved.provider_configs === "object" ? saved.provider_configs : {};
+  standaloneProviderConfigs = saved.provider_configs && typeof saved.provider_configs === "object" ? withoutPersistedProviderSecrets(saved.provider_configs) : {};
   customStandaloneProviders = Array.isArray(saved.custom_providers) ? saved.custom_providers : [];
   standaloneModelOptions = Array.isArray(saved.model_options) ? saved.model_options : [];
   standaloneDefaultProvider = String(saved.default_provider || (saved.config && saved.config.provider) || "");
   const savedConfig = Object.assign({}, saved.config || {});
+  delete savedConfig.api_key;
+  delete savedConfig.search_api_key;
   if (standaloneDefaultProvider) savedConfig.provider = standaloneDefaultProvider;
   enterStandaloneConfig(savedConfig);
   lastStandaloneProvider = els.provider.value;

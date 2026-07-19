@@ -5,6 +5,13 @@
 #include "Widgets/Views/SListView.h"
 #include "Widgets/Views/STileView.h"
 #include "Models/PBRMaterialSet.h"
+#include "Models/PBRMaterialTypes.h"
+
+struct FPBRManualTextureChannelItem
+{
+	FString FilePath;
+	FString Channel;
+};
 
 class SPBRTextureSuiteTab : public SCompoundWidget
 {
@@ -17,6 +24,9 @@ public:
 
 	void Construct(const FArguments& InArgs);
 	void LoadExternalLibraryFolderAndScan();
+	FReply ToggleCompactModeFromGlobal();
+	void SetCompactModeFromGlobal(bool bInCompactMode);
+	bool IsCompactMode() const { return bCompactMode; }
 
 private:
 	using FStringOption = TSharedPtr<FString>;
@@ -34,6 +44,8 @@ private:
 	FReply OnCheckListSelection();
 	FReply OnApplySelectedMaterialToSelection();
 	FReply OnCreateAllParentMaterials();
+	FReply OnOpenCurrentParentMaterial();
+	FReply OnOpenCurrentExampleMaterial();
 	FReply OnCreateSpecialMaterials();
 	FReply OnDeleteUnusedCreatedAssets();
 	FReply OnShowListView();
@@ -46,14 +58,16 @@ private:
 	void OnBoxSelectModeChanged(ECheckBoxState NewState);
 	void OnCreateMaterials(const FString& Scope);
 	void OnManualMapping();
+	FReply OnManualMappingForSet(TSharedPtr<FPBRMaterialSet> Set);
 
 	// Tree
 	TSharedRef<class SHeaderRow> BuildHeaderRow();
 	TSharedRef<class ITableRow> OnGenerateRow(TSharedPtr<FPBRMaterialSet> Item, const TSharedRef<STableViewBase>& Owner);
 	TSharedRef<class ITableRow> OnGenerateTile(TSharedPtr<FPBRMaterialSet> Item, const TSharedRef<STableViewBase>& Owner);
 	void OnSelectionChanged(TSharedPtr<FPBRMaterialSet> Item, ESelectInfo::Type SelectInfo);
-	TSharedPtr<SWidget> OnMaterialSetContextMenuOpening();
-	void OnRenameMaterialSet();
+	TSharedPtr<class SWidget> MakeMaterialSetContextMenu();
+	void OnRenameSelectedMaterialSet();
+	void OnOpenSelectedMaterialSetLocation();
 	FReply OnMaterialRowDragDetected(const FGeometry& Geometry, const FPointerEvent& MouseEvent, TSharedPtr<FPBRMaterialSet> Item);
 	void OnBoxSelectRange(const FVector2D& ScreenStart, const FVector2D& ScreenEnd);
 
@@ -68,11 +82,19 @@ private:
 	TSharedRef<class SWidget> GenerateNormalModeOption(FStringOption Option) const;
 	void OnNormalModeSelected(FStringOption Option, ESelectInfo::Type SelectInfo);
 	FText GetSelectedNormalModeText() const;
+	TSharedRef<class SWidget> GeneratePBRChannelOption(FStringOption Option) const;
+	TSharedRef<class ITableRow> GenerateManualTextureRow(TSharedPtr<FPBRManualTextureChannelItem> TextureItem, const TSharedRef<class STableViewBase>& Owner);
+	void OnPBRChannelSelected(FStringOption Option, ESelectInfo::Type SelectInfo, TSharedPtr<FPBRManualTextureChannelItem> TextureItem);
+	void ApplyManualTextureChannels(TSharedPtr<FPBRMaterialSet> Set);
+	const FSlateBrush* GetManualTextureBrush(const FString& ImagePath);
+	TSharedRef<class SWidget> BuildPreviewWidget(TSharedPtr<FPBRMaterialSet> Item, const FVector2D& Size);
+	class UMaterialInterface* GetPreviewFallbackMaterial(TSharedPtr<FPBRMaterialSet> Item) const;
 	const FSlateBrush* GetPreviewBrush(const FPBRMaterialSet& Set);
 	FVector2D GetPreviewImageSize(const FString& ImagePath) const;
 	UMaterialInterface* GetMaterialForApply(TSharedPtr<FPBRMaterialSet>& OutSourceSet) const;
 	int32 GetTargetMaterialSlot() const;
-	bool IsCompactMode() const { return bCompactMode; }
+	EPBRMaterialType ResolveCurrentTemplateType() const;
+	void SyncBrowserToAsset(const FString& AssetPath) const;
 
 	TSharedPtr<class SEditableTextBox> FolderPathBox;
 	TSharedPtr<class SCheckBox> RecursiveCheck;
@@ -86,19 +108,26 @@ private:
 	TSharedPtr<SListView<TSharedPtr<FPBRMaterialSet>>> TreeView;
 	TSharedPtr<STileView<TSharedPtr<FPBRMaterialSet>>> TileView;
 	TSharedPtr<class STextBlock> SetCountText;
+	TSharedPtr<class STextBlock> CreateProgressText;
+	TSharedPtr<class SProgressBar> CreateProgressBar;
 
 	TArray<TSharedPtr<FPBRMaterialSet>> MaterialSets;
 	TArray<FStringOption> MaterialTypeOptions;
 	TArray<FStringOption> NormalModeOptions;
+	TArray<FStringOption> PBRChannelOptions;
+	TArray<TSharedPtr<FPBRManualTextureChannelItem>> ManualTextureRows;
 	FStringOption SelectedMaterialTypeOption;
 	FStringOption SelectedNormalModeOption;
 	TMap<FString, TSharedPtr<struct FSlateDynamicImageBrush>> PreviewBrushCache;
+	TSharedPtr<class FAssetThumbnailPool> ThumbnailPool;
+	TMap<FString, TSharedPtr<class FAssetThumbnail>> MaterialThumbnailCache;
 	FString SelectedMaterialTypeMode = TEXT("自动");
 	FString SelectedNormalMode = TEXT("自动");
 	bool bBoxSelectMode = false;
 	bool bGridViewMode = false;
 	bool bCompactMode = false;
 	bool bAutoStandardWhenChannelsUnused = true;
+	float CreateProgress = 0.0f;
 	FOnCompactModeChanged OnCompactModeChanged;
 	static const FString ConfigFileName;
 	static const FString CacheFileName;

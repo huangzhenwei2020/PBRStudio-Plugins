@@ -2,8 +2,8 @@
   "extName": { "message": "PBR Studio — Push to Max / UE" },
   "extDescription": { "message": "Detects PBR material download links on web pages and pushes them to 3ds Max or Unreal Engine PBR workflow." },
   "actionTitle": { "message": "PBR Push to Max / UE" },
-  "menuPushLink": { "message": "Push to PBR Download Queue" },
-  "menuPushPageLinks": { "message": "Push Page Download Links" },
+  "menuPushLink": { "message": "Download to 3ds Max PBR Library" },
+  "menuPushPageLinks": { "message": "Download Page Links to 3ds Max" },
   "notificationTitle": { "message": "PBR Studio" },
   "popupTitle": { "message": "PBR Push — Max / UE" },
   "checking": { "message": "Checking..." },
@@ -44,7 +44,7 @@
   "portReservedError": { "message": "Do not use port 80, 443, 3306, or 3389." },
   "noActiveTab": { "message": "No active tab to scan." },
   "noDownloadableLinksOnPage": { "message": "No downloadable links found on this page." },
-  "capturedBrowserDownload": { "message": "Captured browser download link added to queue." },
+  "capturedBrowserDownload": { "message": "Captured browser download link and tried to download now." },
   "capturedBrowserDownloadCount": {
     "message": "Captured $COUNT$ browser download links added to queue.",
     "placeholders": { "count": { "content": "$1" } }
